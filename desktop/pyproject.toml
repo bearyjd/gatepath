@@ -1,0 +1,48 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "gatepath"
+version = "0.1.0"
+description = "Captive portal handler for Linux desktop (Flatpak)"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "GPL-3.0-or-later" }
+authors = [{ name = "Gatepath Contributors" }]
+keywords = ["captive-portal", "network", "gtk", "linux"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Environment :: X11 Applications :: GTK",
+  "License :: OSI Approved :: GNU General Public License v3 or later (GPLv3+)",
+  "Operating System :: POSIX :: Linux",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Internet",
+]
+
+# Core runtime has zero third-party dependencies; GUI extras are optional.
+dependencies = []
+
+[project.optional-dependencies]
+gui = [
+  "PyGObject",
+  "dasbus>=1.7",
+]
+dev = [
+  "pytest>=8.0",
+  "pytest-timeout",
+]
+
+[project.scripts]
+gatepath = "gatepath.__main__:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["gatepath"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-v"
+timeout = 30

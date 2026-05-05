@@ -1,0 +1,56 @@
+# OS / editor
+.DS_Store
+*.swp
+*.swo
+.idea/
+.vscode/
+*.iml
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+build/
+dist/
+.venv/
+venv/
+
+# Node / JS (in case)
+node_modules/
+
+# Android / Gradle
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+android/captures/
+android/.cxx/
+android/app/release/
+*.apk
+*.aab
+*.keystore
+*.jks
+local.properties
+
+# Kotlin
+*.kotlin_module
+
+# Flatpak build outputs
+desktop/build/
+desktop/.flatpak-builder/
+desktop/repo/
+
+# Pytest
+.pytest_cache/
+
+# OMC / agent harness state (never commit)
+.omc/
+.claude/
+
+# Cursor / similar tooling
+.cursor/
