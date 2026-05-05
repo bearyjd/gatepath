@@ -1,0 +1,64 @@
+name: android
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'android/**'
+      - 'mockportal/**'
+      - '.github/workflows/android.yml'
+  pull_request:
+    paths:
+      - 'android/**'
+      - 'mockportal/**'
+      - '.github/workflows/android.yml'
+
+jobs:
+  jvm-unit-tests:
+    name: JVM unit tests (no Android SDK needed)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Install kotlinc 2.0.21
+        run: |
+          curl -fsSL -o /tmp/kotlinc.zip \
+            https://github.com/JetBrains/kotlin/releases/download/v2.0.21/kotlin-compiler-2.0.21.zip
+          unzip -q /tmp/kotlinc.zip -d /opt
+          echo "/opt/kotlinc/bin" >> "$GITHUB_PATH"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Run JVM unit tests
+        run: bash android/run-jvm-tests.sh
+
+  assemble-debug:
+    name: assembleDebug + Gradle test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: android-actions/setup-android@v3
+      - name: Cache Gradle
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ hashFiles('android/**/*.gradle*', 'android/gradle/libs.versions.toml') }}
+      - name: assembleDebug
+        working-directory: android
+        run: ./gradlew --no-daemon :app:assembleDebug
+      - name: Unit tests via Gradle
+        working-directory: android
+        run: ./gradlew --no-daemon :app:test
+      - uses: actions/upload-artifact@v4
+        with:
+          name: gatepath-debug-apk
+          path: android/app/build/outputs/apk/debug/*.apk

@@ -1,0 +1,36 @@
+app-id: cc.grepon.Gatepath
+runtime: org.gnome.Platform
+runtime-version: "47"
+sdk: org.gnome.Sdk
+command: gatepath
+
+# Sandbox is Wayland-only by design. Spec explicitly forbids --socket=x11.
+# Spec explicitly forbids --filesystem=home and --device=all.
+finish-args:
+  - --socket=wayland
+  - --share=ipc
+  - --share=network
+  - --system-talk-name=org.freedesktop.NetworkManager
+  - --filesystem=xdg-data/gatepath:create
+  - --filesystem=xdg-cache/gatepath:create
+  - --talk-name=org.freedesktop.portal.Desktop
+
+modules:
+  - name: python3-dasbus
+    buildsystem: simple
+    build-commands:
+      - pip3 install --no-index --find-links=. --prefix=${FLATPAK_DEST} dasbus
+    sources:
+      - type: file
+        url: https://files.pythonhosted.org/packages/source/d/dasbus/dasbus-1.7.tar.gz
+        sha256: placeholder-update-before-release
+
+  - name: gatepath
+    buildsystem: simple
+    build-commands:
+      - pip3 install --no-index --no-build-isolation --prefix=${FLATPAK_DEST} .
+      - install -Dm644 cc.grepon.Gatepath.desktop ${FLATPAK_DEST}/share/applications/cc.grepon.Gatepath.desktop
+      - install -Dm644 cc.grepon.Gatepath.metainfo.xml ${FLATPAK_DEST}/share/metainfo/cc.grepon.Gatepath.metainfo.xml
+    sources:
+      - type: dir
+        path: .

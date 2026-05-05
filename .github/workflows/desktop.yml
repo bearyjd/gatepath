@@ -1,0 +1,49 @@
+name: desktop
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'desktop/**'
+      - 'mockportal/**'
+      - '.github/workflows/desktop.yml'
+  pull_request:
+    paths:
+      - 'desktop/**'
+      - 'mockportal/**'
+      - '.github/workflows/desktop.yml'
+
+jobs:
+  pytest:
+    name: pytest desktop + mockportal
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install test deps
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install pytest pyyaml
+      - name: Validate Flatpak manifest YAML
+        run: |
+          python -c "import yaml; yaml.safe_load(open('desktop/cc.grepon.Gatepath.yml'))"
+      - name: Run pytest
+        run: python -m pytest desktop/ mockportal/ -v
+      - name: Verify --help works without GTK
+        env:
+          PYTHONPATH: desktop
+        run: python -m gatepath --help
+
+  forbidden-imports:
+    name: grep — no requests/httpx/aiohttp
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: No forbidden HTTP libs in gatepath/
+        run: |
+          if grep -rE '\b(import requests|from requests|import httpx|from httpx|import aiohttp|from aiohttp)\b' desktop/gatepath/; then
+            echo "::error::Forbidden HTTP library import found in desktop/gatepath/"
+            exit 1
+          fi

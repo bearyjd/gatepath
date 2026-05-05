@@ -1,0 +1,19 @@
+using Gtk 4.0;
+using Adw 1;
+
+template $GatepathWindow : Adw.ApplicationWindow {
+  title: _("Gatepath");
+  default-width: 900;
+  default-height: 650;
+
+  Adw.ToolbarView {
+    [top]
+    Adw.HeaderBar {}
+
+    Adw.StatusPage status_page {
+      title: _("Monitoring for Captive Portal");
+      description: _("Gatepath will open a secure window when a captive portal is detected.\n\nIf a full-tunnel VPN is active, the portal page may not load — consider pausing your VPN first.");
+      icon-name: "network-wireless-symbolic";
+    }
+  }
+}

@@ -1,0 +1,40 @@
+using Gtk 4.0;
+using Adw 1;
+
+template $PortalView : Adw.Bin {
+
+  Adw.ToolbarView {
+    [top]
+    Adw.HeaderBar {
+      title-widget:
+        Adw.WindowTitle portal_title {
+          title: _("Captive Portal");
+          subtitle: "";
+        };
+
+      [end]
+      Button close_button {
+        icon-name: "window-close-symbolic";
+        tooltip-text: _("Close portal and dismiss session");
+      }
+    }
+
+    [top]
+    Adw.Banner vpn_banner {
+      title: _("Full-tunnel VPN detected — portal page may not load. Pause VPN before connecting.");
+      button-label: _("Learn more");
+      revealed: false;
+    }
+
+    Box portal_box {
+      orientation: vertical;
+
+      // WebKitWebView is added programmatically — placeholder here.
+      Label placeholder_label {
+        label: _("Loading portal…");
+        vexpand: true;
+        hexpand: true;
+      }
+    }
+  }
+}
