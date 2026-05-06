@@ -11,7 +11,9 @@ from gatepath.portal_session import (
     CloseReason,
     PortalPhase,
     PortalSession,
+    SESSION_TIMEOUT_SECONDS,
     to_active,
+    to_aborted_pre_active,
     to_completed,
     to_detected,
 )
@@ -187,3 +189,56 @@ class TestCloseReasonEnum:
         assert CloseReason.USER_DISMISSED == "user_dismissed"
         assert CloseReason.TIMEOUT == "timeout"
         assert CloseReason.ERROR == "error"
+        assert CloseReason.ABORTED_PRE_ACTIVE == "aborted_pre_active"
+
+
+class TestSessionTimeoutConstant:
+    def test_is_ten_minutes(self) -> None:
+        assert SESSION_TIMEOUT_SECONDS == 600
+
+
+class TestToAbortedPreActive:
+    """Recovery path for sessions that never reached ACTIVE.
+
+    Replaces the prior behaviour where `close_reason` could be None — the
+    audit log writer now requires a non-null close_reason on every entry.
+    """
+
+    def test_from_detected_sets_close_reason(self) -> None:
+        s = PortalSession(
+            phase=PortalPhase.DETECTED,
+            portal_domain="x.com",
+            portal_url="http://x.com/",
+        )
+        result = to_aborted_pre_active(s)
+        assert result.phase == PortalPhase.COMPLETED
+        assert result.close_reason == CloseReason.ABORTED_PRE_ACTIVE
+        assert result.session_opened_utc is not None
+        assert result.session_closed_utc is not None
+        # Duration is 0 — open and close are stamped at the same moment.
+        assert result.duration_seconds == 0
+
+    def test_from_monitoring_also_works(self) -> None:
+        """The recovery path is intentionally non-strict — any pre-Active phase."""
+        s = PortalSession(phase=PortalPhase.MONITORING, portal_domain="x.com")
+        result = to_aborted_pre_active(s)
+        assert result.close_reason == CloseReason.ABORTED_PRE_ACTIVE
+
+    def test_preserves_existing_open_timestamp(self) -> None:
+        opened = datetime(2026, 5, 5, 12, 0, 0, tzinfo=timezone.utc)
+        s = PortalSession(
+            phase=PortalPhase.DETECTED,
+            portal_domain="x.com",
+            session_opened_utc=opened,
+        )
+        result = to_aborted_pre_active(s)
+        assert result.session_opened_utc == opened
+        assert result.session_closed_utc is not None
+        assert result.session_closed_utc >= opened
+
+    def test_immutability(self) -> None:
+        """Original session must not be mutated."""
+        s = PortalSession(phase=PortalPhase.DETECTED, portal_domain="x.com")
+        _ = to_aborted_pre_active(s)
+        assert s.phase == PortalPhase.DETECTED
+        assert s.close_reason is None

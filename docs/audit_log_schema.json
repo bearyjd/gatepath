@@ -1,0 +1,56 @@
+{
+  "$comment": "Machine-readable contract for the Gatepath audit log. Both platforms load this file in their test suites and assert their writer's output conforms. Human-readable docs live in AUDIT_LOG_SCHEMA.md.",
+  "schema_version": 1,
+  "required_fields": [
+    "schema_version",
+    "timestamp_utc",
+    "platform",
+    "ssid",
+    "gateway_ip",
+    "portal_domain",
+    "vpn_interfaces_detected",
+    "vpn_warning_shown",
+    "session_opened_utc",
+    "session_closed_utc",
+    "close_reason",
+    "duration_seconds",
+    "blocked_navigation_attempts",
+    "blocked_resource_requests"
+  ],
+  "nullable_fields": [
+    "ssid",
+    "gateway_ip",
+    "session_closed_utc"
+  ],
+  "field_types": {
+    "schema_version": "int",
+    "timestamp_utc": "string",
+    "platform": "string",
+    "ssid": "string|null",
+    "gateway_ip": "string|null",
+    "portal_domain": "string",
+    "vpn_interfaces_detected": "array<string>",
+    "vpn_warning_shown": "bool",
+    "session_opened_utc": "string",
+    "session_closed_utc": "string|null",
+    "close_reason": "string",
+    "duration_seconds": "int",
+    "blocked_navigation_attempts": "int",
+    "blocked_resource_requests": "int"
+  },
+  "portal_domain_may_be_empty_when_close_reason_is": ["aborted_pre_active"],
+  "platform_enum": ["android", "desktop"],
+  "close_reason_enum": [
+    "portal_completed",
+    "user_dismissed",
+    "timeout",
+    "error",
+    "aborted_pre_active"
+  ],
+  "platform_specific_semantics": {
+    "blocked_resource_requests": {
+      "android": "Count of resource sub-requests that the WebView refused to load (kernel-level shouldInterceptRequest).",
+      "desktop": "Count of resource sub-requests that matched a tracker domain. WebKitGTK's resource-load-started signal is informational; the request is logged but NOT cancelled. See SECURITY_MODEL.md."
+    }
+  }
+}

@@ -13,6 +13,7 @@ import cc.grepon.gatepath.session.CloseReason
 import cc.grepon.gatepath.session.PortalSession
 import cc.grepon.gatepath.session.PortalSessionManager
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -24,7 +25,7 @@ import java.time.format.DateTimeFormatter
 import javax.inject.Inject
 
 private const val TAG = "GatepathVM"
-private const val SESSION_TIMEOUT_MS = 10 * 60 * 1000L // 10 minutes
+private const val SESSION_TIMEOUT_MS = 10 * 60 * 1000L // 10 minutes — see SECURITY_MODEL.md
 
 @HiltViewModel
 class MainViewModel @Inject constructor(
@@ -38,7 +39,13 @@ class MainViewModel @Inject constructor(
     private val _activeNetwork = MutableStateFlow<Network?>(null)
     val activeNetwork: StateFlow<Network?> = _activeNetwork.asStateFlow()
 
-    private var sessionOpenedUtc: String = ""
+    /**
+     * Handle to the in-flight session-timeout coroutine. Cancelled when the
+     * user dismisses, the network drops, or a new session begins. Without this
+     * cancellation the coroutine would survive a dismiss and fire 10 minutes
+     * later against whatever Active session happened to be running then.
+     */
+    private var timeoutJob: Job? = null
 
     init {
         observeNetwork()
@@ -57,6 +64,9 @@ class MainViewModel @Inject constructor(
                     is NetworkEvent.CaptiveNetworkLost -> {
                         if (_activeNetwork.value == event.network) {
                             _activeNetwork.value = null
+                            // The manager picks ABORTED_PRE_ACTIVE for pre-Active
+                            // states and ERROR for Active; we always pass ERROR
+                            // and let the manager decide based on phase.
                             handleClose(CloseReason.ERROR, "Network lost")
                         }
                     }
@@ -66,29 +76,33 @@ class MainViewModel @Inject constructor(
     }
 
     private fun openPortal() {
-        _session.value = sessionManager.openPortal(_session.value)
-        sessionOpenedUtc = utcNow()
+        // Cancel any prior timeout — defensively, in case a previous session
+        // was abandoned without going through handleClose.
+        timeoutJob?.cancel()
+        _session.value = sessionManager.openPortal(_session.value, utcNow())
         startSessionTimeout()
     }
 
     private fun startSessionTimeout() {
-        viewModelScope.launch {
+        timeoutJob = viewModelScope.launch {
             delay(SESSION_TIMEOUT_MS)
             val current = _session.value
             if (current is PortalSession.Active) {
                 Log.d(TAG, "Session timed out after 10 minutes")
-                val next = sessionManager.timeout(current)
+                val next = sessionManager.timeout(current, utcNow())
                 _session.value = next
-                writeAuditLog(next, CloseReason.TIMEOUT)
+                writeAuditLog(next)
             }
         }
     }
 
     fun onDismiss() {
+        timeoutJob?.cancel()
+        timeoutJob = null
         val current = _session.value
-        val next = sessionManager.dismiss(current)
+        val next = sessionManager.dismiss(current, utcNow())
         _session.value = next
-        writeAuditLog(next, CloseReason.USER_DISMISSED)
+        writeAuditLog(next)
     }
 
     fun onBlockedNavigation() {
@@ -99,34 +113,47 @@ class MainViewModel @Inject constructor(
         _session.value = sessionManager.recordBlockedResource(_session.value)
     }
 
-    private fun handleClose(reason: CloseReason, errorMsg: String = "") {
+    /**
+     * Closes the session with [requestedReason]. The manager may downgrade ERROR
+     * to ABORTED_PRE_ACTIVE for pre-Active phases, so the actual close reason
+     * comes from the resulting [PortalSession.Completed].
+     */
+    private fun handleClose(requestedReason: CloseReason, errorMsg: String = "") {
+        timeoutJob?.cancel()
+        timeoutJob = null
         val current = _session.value
-        val next = if (reason == CloseReason.ERROR) {
-            sessionManager.error(current, errorMsg)
+        val next = if (requestedReason == CloseReason.ERROR) {
+            sessionManager.error(current, utcNow(), errorMsg)
         } else {
-            sessionManager.dismiss(current)
+            sessionManager.dismiss(current, utcNow())
         }
         _session.value = next
-        writeAuditLog(next, reason)
+        writeAuditLog(next)
     }
 
-    private fun writeAuditLog(finalState: PortalSession, reason: CloseReason) {
-        val (blockedNav, blockedRes) = when (finalState) {
-            is PortalSession.Completed ->
-                finalState.blockedNavigationAttempts to finalState.blockedResourceRequests
-            is PortalSession.Active ->
-                finalState.blockedNavigationAttempts to finalState.blockedResourceRequests
-            else -> 0 to 0
+    /**
+     * Writes a single audit entry derived entirely from [finalState]. This is
+     * a pure function of the state — no var reads, no time recomputation.
+     *
+     * Skips the write when [finalState] is not Completed:
+     * - Idle/Monitoring: there was never a session worth logging.
+     * - Error: an Idle→Error path (rare, used only for unrecoverable startup
+     *   errors with no live session). Active errors are mapped to
+     *   Completed(ERROR) by the manager and DO produce an audit entry.
+     */
+    private fun writeAuditLog(finalState: PortalSession) {
+        if (finalState !is PortalSession.Completed) {
+            return
         }
-
-        val portalUrl = when (val s = _session.value) {
-            is PortalSession.Active -> s.portalUrl
-            is PortalSession.Detected -> s.portalUrl
-            else -> ""
-        }
-        val closedUtc = utcNow()
-        val openedInstant = runCatching { Instant.parse(sessionOpenedUtc) }.getOrElse { Instant.now() }
-        val duration = (Instant.parse(closedUtc).epochSecond - openedInstant.epochSecond).toInt()
+        // Manager-produced timestamps are always valid ISO-8601 (utcNow uses
+        // DateTimeFormatter.ISO_INSTANT). The defensive parse is kept as a
+        // single-line guard against future manager changes — if that ever
+        // returns 0, the next test failure will reveal it.
+        val durationSeconds = runCatching {
+            val opened = Instant.parse(finalState.openedUtc).epochSecond
+            val closed = Instant.parse(finalState.closedUtc).epochSecond
+            (closed - opened).coerceAtLeast(0).toInt()
+        }.getOrDefault(0)
 
         val vpnInfo = VpnDetector.detect()
         val vpnIfaces = vpnInfo.interfaces.map { iface ->
@@ -137,19 +164,22 @@ class MainViewModel @Inject constructor(
             }
         }
 
+        val portalDomain = runCatching { URI(finalState.portalUrl).host ?: finalState.portalUrl }
+            .getOrDefault(finalState.portalUrl)
+
         val entry = AuditEntry(
-            timestampUtc = closedUtc,
+            timestampUtc = finalState.closedUtc,
             ssid = null, // SSID retrieval requires ACCESS_FINE_LOCATION on Android 10+
             gatewayIp = null,
-            portalDomain = runCatching { URI(portalUrl).host ?: portalUrl }.getOrDefault(portalUrl),
+            portalDomain = portalDomain,
             vpnInterfacesDetected = vpnIfaces,
             vpnWarningShown = vpnIfaces.isNotEmpty(),
-            sessionOpenedUtc = sessionOpenedUtc,
-            sessionClosedUtc = closedUtc,
-            closeReason = reason.schemaValue,
-            durationSeconds = maxOf(0, duration),
-            blockedNavigationAttempts = blockedNav,
-            blockedResourceRequests = blockedRes,
+            sessionOpenedUtc = finalState.openedUtc,
+            sessionClosedUtc = finalState.closedUtc,
+            closeReason = finalState.closeReason.schemaValue,
+            durationSeconds = durationSeconds,
+            blockedNavigationAttempts = finalState.blockedNavigationAttempts,
+            blockedResourceRequests = finalState.blockedResourceRequests,
         )
 
         viewModelScope.launch {

@@ -14,7 +14,13 @@ from __future__ import annotations
 import dataclasses
 from datetime import datetime, timezone
 from enum import Enum, auto
-from typing import Optional
+from typing import Final, Optional
+
+
+# 10-minute session ceiling. Defined here as the canonical source for both the
+# desktop GTK shell (which schedules a GLib timeout) and any future tooling.
+# Android mirrors this value in MainViewModel.SESSION_TIMEOUT_MS — keep in sync.
+SESSION_TIMEOUT_SECONDS: Final[int] = 600
 
 
 class PortalPhase(Enum):
@@ -29,12 +35,17 @@ class PortalPhase(Enum):
 
 
 class CloseReason(str, Enum):
-    """Why the portal session window was closed."""
+    """Why the portal session window was closed.
+
+    Values are wire-format strings written verbatim to the audit log.
+    See docs/audit_log_schema.json `close_reason_enum` for the full set.
+    """
 
     PORTAL_COMPLETED = "portal_completed"
     USER_DISMISSED = "user_dismissed"
     TIMEOUT = "timeout"
     ERROR = "error"
+    ABORTED_PRE_ACTIVE = "aborted_pre_active"
 
 
 # Allowed (from_phase, to_phase) pairs.
@@ -158,4 +169,32 @@ def to_completed(
         session_closed_utc=_utcnow(),
         blocked_navigation_attempts=blocked_nav,
         blocked_resource_requests=blocked_resources,
+    )
+
+
+def to_aborted_pre_active(session: PortalSession) -> PortalSession:
+    """Mark a pre-Active session as aborted with a real, non-null close_reason.
+
+    Used when the network is lost (or another error fires) between DETECTED and
+    ACTIVE — the session was scheduled but the portal window never opened. The
+    resulting entry has `close_reason=aborted_pre_active`, `duration=0`, and
+    `session_opened_utc == session_closed_utc` (both set to "now") so the audit
+    log invariants hold.
+
+    Idempotent for already-terminal phases: if the session is already COMPLETED
+    or ERROR, return it unchanged. This prevents accidentally overwriting the
+    close_reason of a successfully-completed session.
+
+    For any non-terminal phase, returns a new session in COMPLETED phase. We
+    do NOT use the strict transition table here — this is the recovery path.
+    """
+    if session.phase in (PortalPhase.COMPLETED, PortalPhase.ERROR):
+        return session
+    now = _utcnow()
+    return dataclasses.replace(
+        session,
+        phase=PortalPhase.COMPLETED,
+        close_reason=CloseReason.ABORTED_PRE_ACTIVE,
+        session_opened_utc=session.session_opened_utc or now,
+        session_closed_utc=now,
     )

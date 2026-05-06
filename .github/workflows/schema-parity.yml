@@ -1,0 +1,48 @@
+name: schema-parity
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'docs/audit_log_schema.json'
+      - 'desktop/gatepath/audit_log.py'
+      - 'desktop/gatepath/portal_session.py'
+      - 'android/app/src/main/java/cc/grepon/gatepath/audit/**'
+      - 'android/app/src/main/java/cc/grepon/gatepath/session/PortalSession.kt'
+      - '.github/workflows/schema-parity.yml'
+  pull_request:
+    paths:
+      - 'docs/audit_log_schema.json'
+      - 'desktop/gatepath/audit_log.py'
+      - 'desktop/gatepath/portal_session.py'
+      - 'android/app/src/main/java/cc/grepon/gatepath/audit/**'
+      - 'android/app/src/main/java/cc/grepon/gatepath/session/PortalSession.kt'
+      - '.github/workflows/schema-parity.yml'
+
+jobs:
+  parity:
+    name: Audit log schema parity (desktop ⇄ android)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Install kotlinc 2.0.21
+        run: |
+          curl -fsSL -o /tmp/kotlinc.zip \
+            https://github.com/JetBrains/kotlin/releases/download/v2.0.21/kotlin-compiler-2.0.21.zip
+          unzip -q /tmp/kotlinc.zip -d /opt
+          echo "/opt/kotlinc/bin" >> "$GITHUB_PATH"
+      - name: Install pytest
+        run: python -m pip install --upgrade pip pytest
+      - name: Run desktop audit-log tests (incl. schema conformance)
+        run: python -m pytest desktop/tests/test_audit_log.py mockportal/ -v
+      - name: Run Android JVM schema parity test
+        run: bash android/run-jvm-tests.sh
+      - name: Validate schema JSON itself parses
+        run: python -c "import json; json.load(open('docs/audit_log_schema.json'))"
