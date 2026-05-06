@@ -164,6 +164,7 @@ TEST_SOURCES=(
     "$SRC_TEST/cc/grepon/gatepath/BlockedDomainsTest.kt"
     "$SRC_TEST/cc/grepon/gatepath/SessionStateTest.kt"
     "$SRC_TEST/cc/grepon/gatepath/AuditLogTest.kt"
+    "$SRC_TEST/cc/grepon/gatepath/AuditSchemaParityTest.kt"
     "$SRC_TEST/cc/grepon/gatepath/PortalProbeTest.kt"
 )
 
@@ -190,6 +191,7 @@ FULL_CP="$TEST_CP:$CLASSES_TEST:$JUNIT_LAUNCHER"
 echo ""
 echo "=== Running JVM unit tests ==="
 java \
+    -Dgatepath.repo.root="$REPO_ROOT" \
     -jar "$JUNIT_LAUNCHER" \
     execute \
     --class-path "$TEST_CP:$CLASSES_TEST" \

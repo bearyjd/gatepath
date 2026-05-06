@@ -110,7 +110,13 @@ class AuditLogTest {
 
     @Test
     fun `all close_reason enum values are valid strings`() = runBlocking {
-        val validReasons = setOf("portal_completed", "user_dismissed", "timeout", "error")
+        val validReasons = setOf(
+            "portal_completed",
+            "user_dismissed",
+            "timeout",
+            "error",
+            "aborted_pre_active",
+        )
         for (reason in validReasons) {
             writer.append(sampleEntry(closeReason = reason))
         }

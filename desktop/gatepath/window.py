@@ -7,7 +7,10 @@ module.  It is imported lazily inside GatepathApp.do_activate().
 from __future__ import annotations
 
 import logging
-from typing import Optional
+from typing import Callable, Optional
+
+from gatepath.portal_session import PortalSession
+from gatepath.session_controller import SessionController
 
 logger = logging.getLogger(__name__)
 
@@ -27,19 +30,55 @@ try:
 
     gi.require_version("Gtk", "4.0")
     gi.require_version("Adw", "1")
-    from gi.repository import Adw, Gtk  # type: ignore[import-untyped]
+    from gi.repository import Adw, GLib, Gtk  # type: ignore[import-untyped]
+
+    class GLibScheduler:
+        """`Scheduler` implementation backed by `GLib.timeout_add_seconds`.
+
+        Returned handles are GLib source IDs (positive ints). `cancel()` calls
+        `GLib.source_remove`, which is a no-op if the source already fired.
+        """
+
+        def schedule(
+            self,
+            seconds: int,
+            callback: Callable[[], None],
+        ) -> object:
+            def _wrapped() -> bool:
+                callback()
+                return GLib.SOURCE_REMOVE
+
+            return GLib.timeout_add_seconds(seconds, _wrapped)
+
+        def cancel(self, handle: object) -> None:
+            if isinstance(handle, int):
+                GLib.source_remove(handle)
 
     class GatepathWindow(Adw.ApplicationWindow):
-        """Main application window."""
+        """Main application window.
+
+        The window owns a [SessionController] that drives Active → Completed
+        transitions, owns the 10-minute timer, and writes audit entries. The
+        controller's `on_close` callback is wired here so the window can
+        dismiss the WebView and switch back to the monitoring view.
+        """
 
         def __init__(
             self,
             *,
             application: Adw.Application,
             probe_url: Optional[str] = None,
+            session_controller: Optional[SessionController] = None,
         ) -> None:
             super().__init__(application=application)
             self._probe_url = probe_url
+            # Default controller writes to the production audit log and uses
+            # GLib for its timer. Tests inject their own controller with a
+            # FakeScheduler.
+            self._controller = session_controller or SessionController(
+                scheduler=GLibScheduler(),
+                on_close=self._on_session_closed,
+            )
             self.set_title("Gatepath")
             self.set_default_size(900, 650)
             self._build_ui()
@@ -66,9 +105,31 @@ try:
             """Show an in-app VPN warning banner."""
             logger.warning("VPN interfaces active: %s", vpn_labels)
 
-        def open_portal(self, portal_url: str) -> None:
-            """Switch to the portal WebView."""
+        def open_portal(self, portal_url: str, active_session: PortalSession) -> None:
+            """Switch to the portal WebView via the controller.
+
+            [active_session] must be in PortalPhase.ACTIVE — the caller
+            (controller wiring in app.py) builds it via `to_active()` before
+            handing it here. The controller arms its own 10-minute timer.
+            """
             logger.info("Opening portal: %s", portal_url)
+            self._controller.set_active(active_session)
+
+        def dismiss_session(self) -> None:
+            """User-facing dismiss: route through controller (cancels timer + writes audit)."""
+            self._controller.on_user_dismiss()
+
+        def _on_session_closed(self, completed_session: PortalSession) -> None:
+            """Controller callback after Completed transition + audit write.
+
+            Switch back to the monitoring view. The controller has already
+            cancelled its timer and written the audit entry.
+            """
+            logger.info(
+                "Session closed: reason=%s duration=%ss",
+                completed_session.close_reason.value if completed_session.close_reason else "?",
+                completed_session.duration_seconds,
+            )
 
 except (ImportError, ValueError):
     # PyGObject not installed — define a stub so the module is importable

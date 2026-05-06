@@ -20,7 +20,15 @@ from typing import Callable, Optional
 logger = logging.getLogger(__name__)
 
 # Interface name prefixes that indicate VPN usage.
-_VPN_PREFIXES = ("tun", "tap", "wg", "proton", "torguard", "nordvpn")
+# Source of truth: docs/SECURITY_MODEL.md "VPN-interface prefixes" section.
+# Common prefixes (also detected by Android):
+#   tun, tap, wg, ipsec, ppp, tailscale, torguard
+# Desktop-only additions for Linux vendor-named interfaces:
+#   proton, nordvpn
+_VPN_PREFIXES = (
+    "tun", "tap", "wg", "ipsec", "ppp", "tailscale", "torguard",
+    "proton", "nordvpn",
+)
 _TAILSCALE_NAMES = frozenset({"tailscale0", "ts0"})
 
 TAILSCALE_STATUS_URL = "http://localhost:41112/localapi/v0/status"

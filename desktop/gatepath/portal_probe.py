@@ -20,6 +20,21 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
+# MUST be HTTP, not HTTPS — captive portals work by intercepting cleartext
+# HTTP and redirecting to a sign-in page. An HTTPS check would either succeed
+# (TLS termination by the portal, broken cert validation) or fail with a cert
+# error, neither of which distinguishes "captive portal active" from "internet
+# down."
+#
+# Expected responses for this URL (Ubuntu's connectivity-check endpoint):
+#   204 No Content       → connectivity validated, no portal
+#   301/302/307/308      → captive portal redirect; Location is the portal URL
+#   200 OK               → ALSO treated as portal (Cisco / Cloudflare style
+#                          intercepts return 200 with a login page; the
+#                          desktop probe accepts this where Android does not,
+#                          because NetworkManager-supplied URLs may target
+#                          endpoints that legitimately return 200)
+#   timeout / DNS error  → ProbeResult(status="error")
 CONNECTIVITY_CHECK_URL = "http://connectivity-check.ubuntu.com/"
 
 
