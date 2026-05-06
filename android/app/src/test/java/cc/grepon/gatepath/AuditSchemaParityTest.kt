@@ -157,21 +157,21 @@ class AuditSchemaParityTest {
                 else -> false
             }
         }
+        // JSON has no separate int/bool type; both serialize as primitive content.
+        // Strict mode: rely on `isString` for string-vs-non-string, then on the
+        // raw content for int-vs-bool to avoid kotlinx coercion (true→1, 1→true).
+        val raw = value.contentOrNull
         return when (declaredType) {
-            "int" -> value.intOrNullSafe() != null
+            "int" -> !value.isString && raw != null &&
+                raw != "true" && raw != "false" &&
+                raw.toIntOrNull() != null
             "string" -> value.isString
-            "bool" -> value.booleanOrNullSafe() != null
-            "string|null" -> value.contentOrNull == null || value.isString
+            "bool" -> !value.isString && (raw == "true" || raw == "false")
+            "string|null" -> raw == null || value.isString
             "array<string>" -> false
             else -> false
         }
     }
-
-    private fun JsonPrimitive.intOrNullSafe(): Int? =
-        runCatching { this.int }.getOrNull()
-
-    private fun JsonPrimitive.booleanOrNullSafe(): Boolean? =
-        runCatching { this.boolean }.getOrNull()
 
     // ── Schema location ─────────────────────────────────────────────────────
 

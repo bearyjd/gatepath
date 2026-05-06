@@ -10,9 +10,9 @@ This document is normative. If the code disagrees with this document, the code i
 
 - WebView/portal window navigation is restricted to the portal's origin domain only.
 - Third-party resource requests from the portal page are detected and counted on both
-  platforms. **Cancelling** the request is enforced on Android (kernel-level via
-  `WebViewClient.shouldInterceptRequest`) and **not** on desktop — see
-  "Desktop-specific limitations" below.
+  platforms. **Cancelling** the request is enforced on Android in-process via
+  `WebViewClient.shouldInterceptRequest` (a Java-side WebView callback) and **not**
+  on desktop — see "Desktop-specific limitations" below.
 - No portal page data (cookies, cache, localStorage) persists after session close.
 - Session is time-bounded: auto-closes after 10 minutes.
 - Every session is written to an append-only audit log
@@ -27,8 +27,11 @@ This document is normative. If the code disagrees with this document, the code i
   on all other connections — Gatepath never touches the VPN service.
 - Encrypted DNS (Private DNS / NextDNS / DoT / DoH) remains active on all other
   connections — Gatepath does not change system DNS settings.
-- Socket binding is enforced at the kernel level via `Network.openConnection()`; no
-  configuration error in user space can leak portal traffic into the VPN tunnel.
+- Socket binding is kernel-enforced: any socket opened while the process is bound to
+  the captive `Network` is routed by the kernel over that interface. The decision to
+  bind is user-space (Gatepath calls `bindProcessToNetwork`); the enforcement of an
+  established binding is in the kernel. No user-space configuration error elsewhere
+  can leak portal traffic into the VPN tunnel.
 
 ### Caveat — `bindProcessToNetwork` is process-wide, not WebView-scoped
 
@@ -42,7 +45,9 @@ during a session **must** re-evaluate this guarantee.
 The binding is undone in three places to defend against process-death leaks:
 1. `DisposableEffect.onDispose` in `GatepathWebView` (graceful close).
 2. `Application.onTerminate` (orderly process shutdown).
-3. An `ActivityLifecycleCallbacks.onActivityPaused` watchdog (foreground loss).
+3. A `ProcessLifecycleOwner` watchdog that fires on whole-app background (debounced
+   across in-app activity transitions, so routine pause/resume during navigation does
+   NOT yank the binding mid-session).
 
 If the process is killed by the OS without lifecycle callbacks firing, the binding
 ends with the process — Android does not persist it across launches.

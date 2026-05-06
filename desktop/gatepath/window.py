@@ -9,6 +9,8 @@ from __future__ import annotations
 import logging
 from typing import Callable, Optional
 
+from gatepath.portal_session import PortalSession
+from gatepath.session_controller import SessionController
 from gatepath.session_timer import SessionTimer
 
 logger = logging.getLogger(__name__)
@@ -54,16 +56,28 @@ try:
                 GLib.source_remove(handle)
 
     class GatepathWindow(Adw.ApplicationWindow):
-        """Main application window."""
+        """Main application window.
+
+        The window owns a [SessionController] that drives Active → Completed
+        transitions and writes audit entries. The controller's `on_close`
+        callback is wired to `_on_session_closed` here, which dismisses the
+        WebView and switches back to the monitoring view.
+        """
 
         def __init__(
             self,
             *,
             application: Adw.Application,
             probe_url: Optional[str] = None,
+            session_controller: Optional[SessionController] = None,
         ) -> None:
             super().__init__(application=application)
             self._probe_url = probe_url
+            # Default controller writes to the production audit log. Tests
+            # should pass a controller pointed at a tmp file.
+            self._controller = session_controller or SessionController(
+                on_close=self._on_session_closed,
+            )
             self._session_timer = SessionTimer(GLibScheduler())
             self.set_title("Gatepath")
             self.set_default_size(900, 650)
@@ -91,26 +105,49 @@ try:
             """Show an in-app VPN warning banner."""
             logger.warning("VPN interfaces active: %s", vpn_labels)
 
-        def open_portal(self, portal_url: str) -> None:
-            """Switch to the portal WebView and arm the session timeout."""
+        def open_portal(self, portal_url: str, active_session: PortalSession) -> None:
+            """Switch to the portal WebView and arm the session timeout.
+
+            [active_session] must be in PortalPhase.ACTIVE — the caller
+            (controller wiring in app.py) builds it via `to_active()` before
+            handing it here.
+            """
             logger.info("Opening portal: %s", portal_url)
+            self._controller.set_active(active_session)
             self._session_timer.start(self._on_session_timeout)
 
         def _on_session_timeout(self) -> None:
-            """Fired by the GLib scheduler 10 minutes after open_portal()."""
-            logger.warning("Session timed out — closing portal window")
-            self.close_session_due_to_timeout()
+            """Fired by the GLib scheduler 10 minutes after open_portal().
 
-        def close_session_due_to_timeout(self) -> None:
-            """Override hook for the controller to drive state to COMPLETED."""
-            # The GTK shell's controller reads this and writes the audit entry
-            # with CloseReason.TIMEOUT. The default no-op makes the window
-            # safely usable in isolation (e.g., demos).
-            return None
+            Routes through the controller so the audit entry is written and
+            the window is closed. No-op fallback removed — the contract is
+            that the timer always materialises a TIMEOUT audit entry.
+            """
+            logger.warning("Session timed out — closing portal window")
+            self._controller.on_timeout()
 
         def cancel_session_timer(self) -> None:
             """Cancel the timer when the user dismisses or the portal completes."""
             self._session_timer.cancel()
+
+        def dismiss_session(self) -> None:
+            """User-facing dismiss: cancel the timer, close via controller."""
+            self._session_timer.cancel()
+            self._controller.on_user_dismiss()
+
+        def _on_session_closed(self, completed_session: PortalSession) -> None:
+            """Controller callback after Completed transition + audit write.
+
+            Default behaviour: cancel any in-flight timer and switch back to
+            the monitoring view. Subclasses or wiring in app.py may override
+            via the controller's `on_close` parameter.
+            """
+            self._session_timer.cancel()
+            logger.info(
+                "Session closed: reason=%s duration=%ss",
+                completed_session.close_reason.value if completed_session.close_reason else "?",
+                completed_session.duration_seconds,
+            )
 
 except (ImportError, ValueError):
     # PyGObject not installed — define a stub so the module is importable

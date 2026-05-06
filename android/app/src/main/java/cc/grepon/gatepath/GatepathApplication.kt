@@ -1,11 +1,12 @@
 package cc.grepon.gatepath
 
-import android.app.Activity
 import android.app.Application
 import android.content.Context
 import android.net.ConnectivityManager
-import android.os.Bundle
 import android.util.Log
+import androidx.lifecycle.DefaultLifecycleObserver
+import androidx.lifecycle.LifecycleOwner
+import androidx.lifecycle.ProcessLifecycleOwner
 import cc.grepon.gatepath.audit.AuditLog
 import dagger.hilt.android.HiltAndroidApp
 
@@ -17,55 +18,43 @@ class GatepathApplication : Application() {
     override fun onCreate() {
         super.onCreate()
         AuditLog.init(filesDir)
-        // Watchdog: clear any leftover process-network binding when no
-        // foreground activity is active. SECURITY_MODEL.md "Caveat —
-        // bindProcessToNetwork is process-wide" describes the latent leak
-        // class this defends against.
-        registerActivityLifecycleCallbacks(BindWatchdog(this))
+        // Watchdog: clear any leftover process-network binding when the WHOLE
+        // app goes to background. ProcessLifecycleOwner debounces across
+        // per-Activity pause/resume transitions (rotation, single-task switch,
+        // intent-launched activity), so routine in-app navigation does NOT
+        // trigger a clear. See SECURITY_MODEL.md "Caveat — bindProcessToNetwork
+        // is process-wide" for the leak class this defends against.
+        ProcessLifecycleOwner.get().lifecycle.addObserver(BindWatchdog(this))
     }
 
     override fun onTerminate() {
         // Belt-and-braces: clear the binding on orderly shutdown. Android
-        // rarely calls this, but when it does we want the process to leave a
-        // clean kernel state.
+        // rarely calls this, but when it does we want the process to leave
+        // a clean kernel state.
         clearProcessNetworkBinding(this, "onTerminate")
         super.onTerminate()
     }
+}
 
-    /**
-     * Activity lifecycle watchdog. Counts foreground activities and clears
-     * the process Network binding when the count reaches zero (i.e., the
-     * user backgrounded the whole app). The portal WebView's normal close
-     * path also clears the binding via `DisposableEffect.onDispose`; this
-     * watchdog is the recovery for crash / abnormal-exit paths.
-     */
-    private class BindWatchdog(private val app: Application) :
-        ActivityLifecycleCallbacks {
+/**
+ * Whole-app foreground/background watchdog. Clears the process-network
+ * binding only when the entire app goes to background — never on per-Activity
+ * pause during in-app navigation.
+ *
+ * `onStop` fires once after the last visible Activity has been stopped (with
+ * an internal debounce of ~700ms in androidx.lifecycle:lifecycle-process), so
+ * activity transitions within the app do not trip this observer.
+ */
+private class BindWatchdog(private val app: Application) : DefaultLifecycleObserver {
 
-        private var resumedCount: Int = 0
-
-        override fun onActivityCreated(activity: Activity, savedInstanceState: Bundle?) = Unit
-        override fun onActivityStarted(activity: Activity) = Unit
-        override fun onActivityResumed(activity: Activity) {
-            resumedCount += 1
-        }
-
-        override fun onActivityPaused(activity: Activity) {
-            resumedCount = (resumedCount - 1).coerceAtLeast(0)
-            if (resumedCount == 0) {
-                clearProcessNetworkBinding(app, "no resumed activities")
-            }
-        }
-
-        override fun onActivityStopped(activity: Activity) = Unit
-        override fun onActivitySaveInstanceState(activity: Activity, outState: Bundle) = Unit
-        override fun onActivityDestroyed(activity: Activity) = Unit
+    override fun onStop(owner: LifecycleOwner) {
+        clearProcessNetworkBinding(app, "ProcessLifecycleOwner.onStop (app backgrounded)")
     }
 }
 
 /**
  * Idempotent: calling with no active binding is a no-op. Top-level so the
- * Activity-lifecycle inner class can call it without a Context dependency.
+ * watchdog can call it without a Context dependency.
  */
 private fun clearProcessNetworkBinding(ctx: Context, reason: String) {
     runCatching {

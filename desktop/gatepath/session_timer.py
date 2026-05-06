@@ -39,6 +39,11 @@ class SessionTimer:
     Owns a single in-flight timer at a time. `start()` cancels any previous
     schedule before re-arming, so calling `start()` twice replaces the timer
     instead of doubling it.
+
+    Thread-safety: NOT safe for concurrent `start()` / `cancel()` from multiple
+    threads. The intended caller is the GTK main thread, which is single-
+    threaded by design; concurrent calls would race on `_handle`. If used
+    outside the GTK loop, wrap calls in an external lock.
     """
 
     def __init__(

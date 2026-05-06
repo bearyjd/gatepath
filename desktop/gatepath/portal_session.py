@@ -181,9 +181,15 @@ def to_aborted_pre_active(session: PortalSession) -> PortalSession:
     `session_opened_utc == session_closed_utc` (both set to "now") so the audit
     log invariants hold.
 
-    Returns a new session in COMPLETED phase from any non-COMPLETED phase. We
+    Idempotent for already-terminal phases: if the session is already COMPLETED
+    or ERROR, return it unchanged. This prevents accidentally overwriting the
+    close_reason of a successfully-completed session.
+
+    For any non-terminal phase, returns a new session in COMPLETED phase. We
     do NOT use the strict transition table here — this is the recovery path.
     """
+    if session.phase in (PortalPhase.COMPLETED, PortalPhase.ERROR):
+        return session
     now = _utcnow()
     return dataclasses.replace(
         session,

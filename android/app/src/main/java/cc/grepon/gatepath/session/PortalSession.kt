@@ -24,19 +24,32 @@ sealed class PortalSession {
 
     /**
      * The portal WebView is open. [portalUrl] is the validated portal URL.
+     * [openedUtc] is the ISO-8601 UTC timestamp captured at transition to Active —
+     * carried forward into Completed so the audit log can read it back without
+     * relying on a mutable var on the ViewModel.
      * Counters are tracked here and carried forward to Completed.
      */
     data class Active(
         val portalUrl: String,
+        val openedUtc: String,
         val blockedNavigationAttempts: Int = 0,
         val blockedResourceRequests: Int = 0,
     ) : PortalSession()
 
     /**
      * Session has ended (successfully, dismissed, timed out, or errored).
+     * [openedUtc] / [closedUtc] are non-null on every Completed instance — the
+     * manager always sets them. For sessions that never reached Active
+     * (close_reason == ABORTED_PRE_ACTIVE), both are stamped at "now" so the
+     * audit log invariant (`session_opened_utc` non-null) holds.
+     * [portalUrl] is preserved from the Detected/Active phase so the audit log
+     * writer can emit `portal_domain` without consulting the previous state.
      */
     data class Completed(
         val closeReason: CloseReason,
+        val openedUtc: String,
+        val closedUtc: String,
+        val portalUrl: String,
         val blockedNavigationAttempts: Int = 0,
         val blockedResourceRequests: Int = 0,
     ) : PortalSession()
