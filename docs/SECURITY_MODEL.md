@@ -9,7 +9,10 @@ This document is normative. If the code disagrees with this document, the code i
 ## What Gatepath protects during a portal session
 
 - WebView/portal window navigation is restricted to the portal's origin domain only.
-- All third-party resource requests from the portal page are blocked and logged.
+- Third-party resource requests from the portal page are detected and counted on both
+  platforms. **Cancelling** the request is enforced on Android (kernel-level via
+  `WebViewClient.shouldInterceptRequest`) and **not** on desktop — see
+  "Desktop-specific limitations" below.
 - No portal page data (cookies, cache, localStorage) persists after session close.
 - Session is time-bounded: auto-closes after 10 minutes.
 - Every session is written to an append-only audit log
@@ -27,6 +30,23 @@ This document is normative. If the code disagrees with this document, the code i
 - Socket binding is enforced at the kernel level via `Network.openConnection()`; no
   configuration error in user space can leak portal traffic into the VPN tunnel.
 
+### Caveat — `bindProcessToNetwork` is process-wide, not WebView-scoped
+
+The Android API only allows process-wide rebinding. For the duration of an active
+portal session, **every socket opened by the Gatepath process** is routed over the
+captive WiFi network — including any future feature that issues HTTP. Gatepath does no
+other network I/O during a session and the session is capped at 10 minutes, so the
+exposure window is small, but new features that issue HTTP from the same process
+during a session **must** re-evaluate this guarantee.
+
+The binding is undone in three places to defend against process-death leaks:
+1. `DisposableEffect.onDispose` in `GatepathWebView` (graceful close).
+2. `Application.onTerminate` (orderly process shutdown).
+3. An `ActivityLifecycleCallbacks.onActivityPaused` watchdog (foreground loss).
+
+If the process is killed by the OS without lifecycle callbacks firing, the binding
+ends with the process — Android does not persist it across launches.
+
 ## Desktop-specific limitations (be explicit)
 
 - Linux's `SO_BINDTODEVICE` requires `CAP_NET_RAW`, which is unavailable in the Flatpak
@@ -42,6 +62,19 @@ This document is normative. If the code disagrees with this document, the code i
   works even when the VPN is up.
 - **Recommendation:** pause full-tunnel VPN before navigating a portal on desktop.
   Gatepath will remind you of this.
+
+### Caveat — desktop tracker-resource requests are logged, not blocked
+
+On Android, `WebViewClient.shouldInterceptRequest` lets Gatepath cancel requests to
+known tracker domains before they leave the device. On desktop, WebKitGTK's
+`resource-load-started` signal is informational — Gatepath observes the request and
+increments the counter, but the request still completes. The
+`blocked_resource_requests` audit-log field on desktop should be read as
+*"observed tracker requests"*, not *"blocked tracker requests"*. See
+[AUDIT_LOG_SCHEMA.md](AUDIT_LOG_SCHEMA.md) for the platform-specific semantics.
+
+This is a WebKitGTK API limitation and is honestly disclosed to the user in the
+portal-window banner.
 
 ## What neither platform protects against
 

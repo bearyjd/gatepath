@@ -57,7 +57,15 @@ class MainViewModel @Inject constructor(
                     is NetworkEvent.CaptiveNetworkLost -> {
                         if (_activeNetwork.value == event.network) {
                             _activeNetwork.value = null
-                            handleClose(CloseReason.ERROR, "Network lost")
+                            // If the session never reached Active, record an
+                            // ABORTED_PRE_ACTIVE entry rather than a malformed
+                            // ERROR entry with empty portal_domain / 0 duration.
+                            val reason = if (_session.value is PortalSession.Active) {
+                                CloseReason.ERROR
+                            } else {
+                                CloseReason.ABORTED_PRE_ACTIVE
+                            }
+                            handleClose(reason, "Network lost")
                         }
                     }
                 }
@@ -107,6 +115,11 @@ class MainViewModel @Inject constructor(
             sessionManager.dismiss(current)
         }
         _session.value = next
+        // ABORTED_PRE_ACTIVE: synthesise open/close timestamps so the audit
+        // entry passes schema validation (non-empty portal_domain, valid times).
+        if (reason == CloseReason.ABORTED_PRE_ACTIVE && sessionOpenedUtc.isEmpty()) {
+            sessionOpenedUtc = utcNow()
+        }
         writeAuditLog(next, reason)
     }
 

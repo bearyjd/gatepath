@@ -49,19 +49,22 @@ def write_session(
     """Append one JSON line for *session* to the audit log.
 
     Raises ValueError if the session lacks the minimum fields needed
-    for a valid log entry (portal_domain, session_opened_utc).
+    for a valid log entry (portal_domain, session_opened_utc, close_reason).
+    close_reason MUST be non-null; pre-Active aborts use
+    CloseReason.ABORTED_PRE_ACTIVE — never None.
     """
     if not session.portal_domain:
         raise ValueError("session.portal_domain is required for audit log")
     if session.session_opened_utc is None:
         raise ValueError("session.session_opened_utc is required for audit log")
+    if session.close_reason is None:
+        raise ValueError(
+            "session.close_reason is required for audit log "
+            "(use CloseReason.ABORTED_PRE_ACTIVE for sessions that never opened)"
+        )
 
     path = log_path or _default_log_path()
     path.parent.mkdir(parents=True, exist_ok=True)
-
-    close_reason_val: Optional[str] = (
-        session.close_reason.value if session.close_reason is not None else None
-    )
 
     entry: dict = {
         "schema_version": 1,
@@ -74,7 +77,7 @@ def write_session(
         "vpn_warning_shown": session.vpn_warning_shown,
         "session_opened_utc": _utc_iso(session.session_opened_utc),
         "session_closed_utc": _utc_iso(session.session_closed_utc),
-        "close_reason": close_reason_val,
+        "close_reason": session.close_reason.value,
         "duration_seconds": session.duration_seconds if session.duration_seconds is not None else 0,
         "blocked_navigation_attempts": session.blocked_navigation_attempts,
         "blocked_resource_requests": session.blocked_resource_requests,

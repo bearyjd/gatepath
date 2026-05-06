@@ -45,10 +45,20 @@ sealed class PortalSession {
     data class Error(val message: String) : PortalSession()
 }
 
-/** Why the portal session was closed. Values must match the audit log schema enum. */
+/**
+ * Why the portal session was closed. Values must match the audit log schema enum.
+ * Source of truth: `docs/audit_log_schema.json` `close_reason_enum`.
+ */
 enum class CloseReason(val schemaValue: String) {
     PORTAL_COMPLETED("portal_completed"),
     USER_DISMISSED("user_dismissed"),
     TIMEOUT("timeout"),
     ERROR("error"),
+
+    /**
+     * Session was terminated before the portal window opened (e.g. network lost
+     * during Detected phase). Audit entry has `duration_seconds=0` and
+     * `session_opened_utc == session_closed_utc`.
+     */
+    ABORTED_PRE_ACTIVE("aborted_pre_active"),
 }
