@@ -20,7 +20,11 @@ import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 
-PORTAL_HOST = os.environ.get("PORTAL_HOST", "127.0.0.1")
+# PORTAL_HOST is hard-coded to loopback to prevent the test endpoint from
+# being exposed on the LAN. /log returns request headers verbatim — exposing
+# that to non-loopback peers would leak Authorization tokens passed to the
+# mock during integration tests.
+PORTAL_HOST = "127.0.0.1"
 PORTAL_PORT = int(os.environ.get("PORTAL_PORT", "18080"))
 PORTAL_COMPLETE_AFTER = int(os.environ.get("PORTAL_COMPLETE_AFTER", "3"))
 

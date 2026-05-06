@@ -58,7 +58,7 @@ currently defined version. Increment it for any breaking change.
 | `user_dismissed` | User closed the portal window before completion. |
 | `timeout` | 10-minute session limit reached. |
 | `error` | Unrecoverable error during an active session. |
-| `aborted_pre_active` | Session was terminated before the portal window opened (e.g. network lost during `Detected` phase). `duration_seconds` will be `0` and `session_closed_utc` will equal `session_opened_utc` (or be `null` if the session never opened). |
+| `aborted_pre_active` | Session was terminated before the portal window opened — either by an involuntary event (network lost during `Detected` phase) or by the user dismissing the portal banner before opening the window. `duration_seconds` will be `0` and `session_closed_utc` will equal `session_opened_utc` (synthetic timestamps, both stamped at close time). `portal_domain` MAY be empty when the session never observed a portal URL (e.g., dismissal during `Monitoring`). For all other `close_reason` values, `portal_domain` is required and non-empty. |
 
 ## Platform-specific field semantics
 

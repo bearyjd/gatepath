@@ -10,6 +10,8 @@ import androidx.lifecycle.ProcessLifecycleOwner
 import cc.grepon.gatepath.audit.AuditLog
 import dagger.hilt.android.HiltAndroidApp
 
+@Suppress("unused") // Application class referenced from AndroidManifest.
+
 private const val TAG = "GatepathApp"
 
 @HiltAndroidApp
@@ -24,7 +26,14 @@ class GatepathApplication : Application() {
         // intent-launched activity), so routine in-app navigation does NOT
         // trigger a clear. See SECURITY_MODEL.md "Caveat — bindProcessToNetwork
         // is process-wide" for the leak class this defends against.
-        ProcessLifecycleOwner.get().lifecycle.addObserver(BindWatchdog(this))
+        ProcessLifecycleOwner.get().lifecycle.addObserver(
+            BindWatchdog {
+                clearProcessNetworkBinding(
+                    this,
+                    "ProcessLifecycleOwner.onStop (app backgrounded)",
+                )
+            }
+        )
     }
 
     override fun onTerminate() {
@@ -44,11 +53,20 @@ class GatepathApplication : Application() {
  * `onStop` fires once after the last visible Activity has been stopped (with
  * an internal debounce of ~700ms in androidx.lifecycle:lifecycle-process), so
  * activity transitions within the app do not trip this observer.
+ *
+ * Constructor takes a lambda instead of an Application reference so the
+ * observer is unit-testable on plain JVM: tests pass a recording lambda and
+ * feed lifecycle events via `LifecycleRegistry`. See `BindWatchdogTest.kt`.
+ *
+ * Visibility: `internal` (not private) so the JVM test can construct it
+ * without reflection.
  */
-private class BindWatchdog(private val app: Application) : DefaultLifecycleObserver {
+internal class BindWatchdog(
+    private val onAppBackgrounded: () -> Unit,
+) : DefaultLifecycleObserver {
 
     override fun onStop(owner: LifecycleOwner) {
-        clearProcessNetworkBinding(app, "ProcessLifecycleOwner.onStop (app backgrounded)")
+        onAppBackgrounded()
     }
 }
 

@@ -52,16 +52,27 @@ def write_session(
     for a valid log entry (portal_domain, session_opened_utc, close_reason).
     close_reason MUST be non-null; pre-Active aborts use
     CloseReason.ABORTED_PRE_ACTIVE — never None.
+
+    `portal_domain` MAY be empty when close_reason == ABORTED_PRE_ACTIVE
+    (a session terminated before any portal URL was observed, e.g. dismissal
+    during MONITORING). For all other close reasons it must be non-empty.
+    See docs/audit_log_schema.json `portal_domain_may_be_empty_when_close_reason_is`.
     """
-    if not session.portal_domain:
-        raise ValueError("session.portal_domain is required for audit log")
-    if session.session_opened_utc is None:
-        raise ValueError("session.session_opened_utc is required for audit log")
     if session.close_reason is None:
         raise ValueError(
             "session.close_reason is required for audit log "
             "(use CloseReason.ABORTED_PRE_ACTIVE for sessions that never opened)"
         )
+    if (
+        session.close_reason != CloseReason.ABORTED_PRE_ACTIVE
+        and not session.portal_domain
+    ):
+        raise ValueError(
+            "session.portal_domain is required for audit log "
+            "(empty allowed only for close_reason=aborted_pre_active)"
+        )
+    if session.session_opened_utc is None:
+        raise ValueError("session.session_opened_utc is required for audit log")
 
     path = log_path or _default_log_path()
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -72,7 +83,7 @@ def write_session(
         "platform": "desktop",
         "ssid": session.ssid,
         "gateway_ip": session.gateway_ip,
-        "portal_domain": session.portal_domain,
+        "portal_domain": session.portal_domain or "",
         "vpn_interfaces_detected": list(session.vpn_interfaces_detected),
         "vpn_warning_shown": session.vpn_warning_shown,
         "session_opened_utc": _utc_iso(session.session_opened_utc),

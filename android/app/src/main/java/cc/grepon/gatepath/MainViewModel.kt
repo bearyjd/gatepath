@@ -134,14 +134,21 @@ class MainViewModel @Inject constructor(
     /**
      * Writes a single audit entry derived entirely from [finalState]. This is
      * a pure function of the state — no var reads, no time recomputation.
-     * Skips the write for terminal phases that aren't Completed (Error, Idle).
+     *
+     * Skips the write when [finalState] is not Completed:
+     * - Idle/Monitoring: there was never a session worth logging.
+     * - Error: an Idle→Error path (rare, used only for unrecoverable startup
+     *   errors with no live session). Active errors are mapped to
+     *   Completed(ERROR) by the manager and DO produce an audit entry.
      */
     private fun writeAuditLog(finalState: PortalSession) {
         if (finalState !is PortalSession.Completed) {
-            // Error / Idle / pre-Completed states: nothing to log. Error
-            // already logged its own message via the calling Log.d/Log.w.
             return
         }
+        // Manager-produced timestamps are always valid ISO-8601 (utcNow uses
+        // DateTimeFormatter.ISO_INSTANT). The defensive parse is kept as a
+        // single-line guard against future manager changes — if that ever
+        // returns 0, the next test failure will reveal it.
         val durationSeconds = runCatching {
             val opened = Instant.parse(finalState.openedUtc).epochSecond
             val closed = Instant.parse(finalState.closedUtc).epochSecond

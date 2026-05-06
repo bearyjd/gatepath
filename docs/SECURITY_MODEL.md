@@ -27,11 +27,27 @@ This document is normative. If the code disagrees with this document, the code i
   on all other connections — Gatepath never touches the VPN service.
 - Encrypted DNS (Private DNS / NextDNS / DoT / DoH) remains active on all other
   connections — Gatepath does not change system DNS settings.
-- Socket binding is kernel-enforced: any socket opened while the process is bound to
-  the captive `Network` is routed by the kernel over that interface. The decision to
-  bind is user-space (Gatepath calls `bindProcessToNetwork`); the enforcement of an
-  established binding is in the kernel. No user-space configuration error elsewhere
-  can leak portal traffic into the VPN tunnel.
+- Socket binding is enforced in the Android framework's socket-creation path: every
+  socket opened by the process while bound is created against the captive `Network`'s
+  underlying kernel interface, which the kernel then routes accordingly. The decision
+  to bind is user-space (Gatepath calls `bindProcessToNetwork`); the binding cannot
+  be bypassed by user-space code in the same process without explicitly using
+  `Network.getSocketFactory()` or unbinding via `bindProcessToNetwork(null)`.
+
+### VPN-interface prefixes
+
+When detecting active VPNs to warn about, both platforms enumerate network interfaces
+and match these name prefixes. **This list is the source of truth — both platforms
+must match it.**
+
+**Common (Android + desktop):** `tun`, `tap`, `wg`, `ipsec`, `ppp`, `tailscale`, `torguard`
+
+**Desktop-only (Linux interface naming for vendor clients):** `proton`, `nordvpn`
+
+**Android-only:** none currently — Android VPN clients use `tun*` exclusively.
+
+If you add a vendor here, update `android/app/src/main/java/cc/grepon/gatepath/network/VpnDetector.kt`
+and `desktop/gatepath/vpn_detector.py` together.
 
 ### Caveat — `bindProcessToNetwork` is process-wide, not WebView-scoped
 

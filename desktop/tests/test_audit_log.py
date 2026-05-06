@@ -148,6 +148,40 @@ class TestWriteSession:
         with pytest.raises(ValueError, match="close_reason"):
             write_session(s, log_path=log)
 
+    def test_aborted_pre_active_with_empty_portal_domain_writes_successfully(
+        self, tmp_path: Path
+    ) -> None:
+        """ABORTED_PRE_ACTIVE is the only close_reason where portal_domain MAY
+        be empty (e.g. dismissal during MONITORING — never observed a portal).
+        Cross-platform parity: Android writes the empty string here too.
+        """
+        log = tmp_path / "audit.jsonl"
+        import dataclasses
+        s = dataclasses.replace(
+            _make_completed_session(),
+            close_reason=CloseReason.ABORTED_PRE_ACTIVE,
+            portal_domain="",
+        )
+        write_session(s, log_path=log)
+        entry = read_all(log_path=log)[0]
+        assert entry["close_reason"] == "aborted_pre_active"
+        assert entry["portal_domain"] == ""
+
+    def test_non_aborted_with_empty_portal_domain_raises(
+        self, tmp_path: Path
+    ) -> None:
+        """Empty portal_domain is rejected for any close_reason other than
+        ABORTED_PRE_ACTIVE — schema invariant."""
+        log = tmp_path / "audit.jsonl"
+        import dataclasses
+        s = dataclasses.replace(
+            _make_completed_session(),
+            close_reason=CloseReason.USER_DISMISSED,
+            portal_domain="",
+        )
+        with pytest.raises(ValueError, match="portal_domain"):
+            write_session(s, log_path=log)
+
     def test_aborted_pre_active_writes_valid_entry(self, tmp_path: Path) -> None:
         """A session that never opened still produces a schema-valid entry."""
         log = tmp_path / "audit.jsonl"

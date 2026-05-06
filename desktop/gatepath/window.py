@@ -11,7 +11,6 @@ from typing import Callable, Optional
 
 from gatepath.portal_session import PortalSession
 from gatepath.session_controller import SessionController
-from gatepath.session_timer import SessionTimer
 
 logger = logging.getLogger(__name__)
 
@@ -59,9 +58,9 @@ try:
         """Main application window.
 
         The window owns a [SessionController] that drives Active → Completed
-        transitions and writes audit entries. The controller's `on_close`
-        callback is wired to `_on_session_closed` here, which dismisses the
-        WebView and switches back to the monitoring view.
+        transitions, owns the 10-minute timer, and writes audit entries. The
+        controller's `on_close` callback is wired here so the window can
+        dismiss the WebView and switch back to the monitoring view.
         """
 
         def __init__(
@@ -73,12 +72,13 @@ try:
         ) -> None:
             super().__init__(application=application)
             self._probe_url = probe_url
-            # Default controller writes to the production audit log. Tests
-            # should pass a controller pointed at a tmp file.
+            # Default controller writes to the production audit log and uses
+            # GLib for its timer. Tests inject their own controller with a
+            # FakeScheduler.
             self._controller = session_controller or SessionController(
+                scheduler=GLibScheduler(),
                 on_close=self._on_session_closed,
             )
-            self._session_timer = SessionTimer(GLibScheduler())
             self.set_title("Gatepath")
             self.set_default_size(900, 650)
             self._build_ui()
@@ -106,43 +106,25 @@ try:
             logger.warning("VPN interfaces active: %s", vpn_labels)
 
         def open_portal(self, portal_url: str, active_session: PortalSession) -> None:
-            """Switch to the portal WebView and arm the session timeout.
+            """Switch to the portal WebView via the controller.
 
             [active_session] must be in PortalPhase.ACTIVE — the caller
             (controller wiring in app.py) builds it via `to_active()` before
-            handing it here.
+            handing it here. The controller arms its own 10-minute timer.
             """
             logger.info("Opening portal: %s", portal_url)
             self._controller.set_active(active_session)
-            self._session_timer.start(self._on_session_timeout)
-
-        def _on_session_timeout(self) -> None:
-            """Fired by the GLib scheduler 10 minutes after open_portal().
-
-            Routes through the controller so the audit entry is written and
-            the window is closed. No-op fallback removed — the contract is
-            that the timer always materialises a TIMEOUT audit entry.
-            """
-            logger.warning("Session timed out — closing portal window")
-            self._controller.on_timeout()
-
-        def cancel_session_timer(self) -> None:
-            """Cancel the timer when the user dismisses or the portal completes."""
-            self._session_timer.cancel()
 
         def dismiss_session(self) -> None:
-            """User-facing dismiss: cancel the timer, close via controller."""
-            self._session_timer.cancel()
+            """User-facing dismiss: route through controller (cancels timer + writes audit)."""
             self._controller.on_user_dismiss()
 
         def _on_session_closed(self, completed_session: PortalSession) -> None:
             """Controller callback after Completed transition + audit write.
 
-            Default behaviour: cancel any in-flight timer and switch back to
-            the monitoring view. Subclasses or wiring in app.py may override
-            via the controller's `on_close` parameter.
+            Switch back to the monitoring view. The controller has already
+            cancelled its timer and written the audit entry.
             """
-            self._session_timer.cancel()
             logger.info(
                 "Session closed: reason=%s duration=%ss",
                 completed_session.close_reason.value if completed_session.close_reason else "?",

@@ -120,6 +120,18 @@ class AuditSchemaParityTest {
     }
 
     @Test
+    fun `aborted_pre_active accepts empty portal_domain (cross-platform parity)`() = runBlocking {
+        // Mirrors desktop's permission for empty portal_domain when the session
+        // never observed a portal URL (Monitoring-phase dismissal). The schema
+        // doc explicitly allows this for ABORTED_PRE_ACTIVE only.
+        val entry = sampleEntry(closeReason = "aborted_pre_active").copy(portalDomain = "")
+        writer.append(entry)
+        val obj = readWrittenJson()
+        assertEquals("aborted_pre_active", obj["close_reason"]!!.jsonPrimitive.content)
+        assertEquals("", obj["portal_domain"]!!.jsonPrimitive.content)
+    }
+
+    @Test
     fun `platform value is in the schema platform_enum`() = runBlocking {
         writer.append(sampleEntry())
         val obj = readWrittenJson()

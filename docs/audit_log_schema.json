@@ -38,6 +38,7 @@
     "blocked_navigation_attempts": "int",
     "blocked_resource_requests": "int"
   },
+  "portal_domain_may_be_empty_when_close_reason_is": ["aborted_pre_active"],
   "platform_enum": ["android", "desktop"],
   "close_reason_enum": [
     "portal_completed",
