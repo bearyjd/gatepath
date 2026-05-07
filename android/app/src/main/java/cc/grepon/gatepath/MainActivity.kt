@@ -30,6 +30,7 @@ class MainActivity : ComponentActivity() {
                 val viewModel: MainViewModel = hiltViewModel()
                 val session by viewModel.session.collectAsState()
                 val activeNetwork by viewModel.activeNetwork.collectAsState()
+                val networkStatus by viewModel.networkStatus.collectAsState()
 
                 when (val s = session) {
                     is PortalSession.Active -> {
@@ -44,10 +45,18 @@ class MainActivity : ComponentActivity() {
                                 onBlockedResource = viewModel::onBlockedResource,
                             )
                         } else {
-                            MainScreen(session = s, onDismiss = viewModel::onDismiss)
+                            MainScreen(
+                                session = s,
+                                networkStatus = networkStatus,
+                                onDismiss = viewModel::onDismiss,
+                            )
                         }
                     }
-                    else -> MainScreen(session = s, onDismiss = viewModel::onDismiss)
+                    else -> MainScreen(
+                        session = s,
+                        networkStatus = networkStatus,
+                        onDismiss = viewModel::onDismiss,
+                    )
                 }
             }
         }

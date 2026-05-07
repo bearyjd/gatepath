@@ -32,6 +32,18 @@ sealed interface NetworkEvent {
     data class NetworkValidated(val network: Network) : NetworkEvent
 
     /**
+     * A network was observed as validated on first sight — no captive portal
+     * detected. Use this to tell the user "you are on a regular WiFi, all good"
+     * instead of leaving them staring at an unending "Monitoring…" screen.
+     *
+     * Distinct from [NetworkValidated]: this fires for networks that were never
+     * captive in the first place (e.g. home WiFi). [NetworkValidated] fires
+     * specifically when a captive network transitions to validated after a
+     * successful sign-in.
+     */
+    data class NetworkObservedNoPortal(val network: Network) : NetworkEvent
+
+    /**
      * A previously-captive network was lost (e.g. WiFi disconnect during
      * sign-in). Only emitted for networks we previously identified as captive,
      * not every network that disappears.
@@ -79,6 +91,10 @@ class CaptivePortalMonitor(
         // both NetworkValidated (success signal) and CaptiveNetworkLost
         // (don't emit Lost for non-captive networks the caller never cared about).
         val captive = java.util.concurrent.ConcurrentHashMap.newKeySet<Network>()
+        // Networks we have already reported as validated/no-portal so the UI
+        // doesn't get spammed with NetworkObservedNoPortal events as
+        // capabilities churn.
+        val reportedNoPortal = java.util.concurrent.ConcurrentHashMap.newKeySet<Network>()
         // Last-seen capability summary per network. We log capability changes
         // only when this transitions, so logcat isn't drowned in churn.
         val lastCaps = java.util.concurrent.ConcurrentHashMap<Network, Pair<Boolean, Boolean>>()
@@ -128,13 +144,20 @@ class CaptivePortalMonitor(
                 if (!hasInternet) return
 
                 if (isValidated) {
-                    // Validated. If we previously identified this network as
-                    // captive, the user just signed in successfully. Surface
-                    // NetworkValidated so the session can transition to
-                    // Completed(PORTAL_COMPLETED).
+                    // Validated. Two cases:
+                    // 1. We previously identified this network as captive →
+                    //    user just signed in. Surface NetworkValidated so the
+                    //    session transitions to Completed(PORTAL_COMPLETED).
+                    // 2. First-time validated observation (the common case for
+                    //    home WiFi) → emit NetworkObservedNoPortal so the UI
+                    //    can say "no captive portal here" instead of looking
+                    //    stuck at "Monitoring…".
                     if (captive.remove(network)) {
                         Log.i(TAG, "Captive network $network became validated — sign-in succeeded")
                         trySend(NetworkEvent.NetworkValidated(network))
+                    } else if (reportedNoPortal.add(network)) {
+                        Log.d(TAG, "Network $network observed validated, no portal")
+                        trySend(NetworkEvent.NetworkObservedNoPortal(network))
                     }
                     probed.remove(network)
                     return
@@ -147,6 +170,7 @@ class CaptivePortalMonitor(
                 Log.d(TAG, "Network lost: $network")
                 probed.remove(network)
                 lastCaps.remove(network)
+                reportedNoPortal.remove(network)
                 // Only emit Lost for networks we previously identified as
                 // captive. A regular WiFi disconnect with no portal in flight
                 // is not a session event.
