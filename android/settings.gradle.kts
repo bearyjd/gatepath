@@ -18,11 +18,10 @@ dependencyResolutionManagement {
         google()
         mavenCentral()
     }
-    versionCatalogs {
-        create("libs") {
-            from(files("gradle/libs.versions.toml"))
-        }
-    }
+    // Gradle picks up `gradle/libs.versions.toml` as the default `libs` version
+    // catalog automatically — explicitly creating one with the same name fails
+    // with "you can only call 'from' a single time" because the auto-import
+    // already happened.
 }
 
 rootProject.name = "gatepath"
