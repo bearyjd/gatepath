@@ -7,6 +7,7 @@ import androidx.lifecycle.viewModelScope
 import cc.grepon.gatepath.audit.AuditEntry
 import cc.grepon.gatepath.audit.AuditLog
 import cc.grepon.gatepath.network.CaptivePortalMonitor
+import cc.grepon.gatepath.network.NetworkDiagnostics
 import cc.grepon.gatepath.network.NetworkEvent
 import cc.grepon.gatepath.network.VpnDetector
 import cc.grepon.gatepath.session.CloseReason
@@ -60,10 +61,29 @@ class MainViewModel @Inject constructor(
 
         /** Captive network was lost mid-session. */
         Lost,
+
+        /**
+         * Network looks captive but our probe was refused (typically EPERM
+         * because Android marks captive networks as restricted). The user
+         * needs to tap the system Wi-Fi "Sign in" notification and pick
+         * Gatepath as the handler — that path delivers a CaptivePortal token
+         * which bypasses the restriction.
+         */
+        CaptivePending,
     }
 
     private val _networkStatus = MutableStateFlow(NetworkStatus.Unknown)
     val networkStatus: StateFlow<NetworkStatus> = _networkStatus.asStateFlow()
+
+    /**
+     * Diagnostics from the most recent failed-probe attempt. Surfaces in the
+     * troubleshooting panel when [networkStatus] is [NetworkStatus.CaptivePending].
+     * Cleared whenever the network transitions to a known-good state
+     * (validated / sign-in complete / captive confirmed) so stale info doesn't
+     * persist across networks.
+     */
+    private val _latestDiagnostics = MutableStateFlow<NetworkDiagnostics?>(null)
+    val latestDiagnostics: StateFlow<NetworkDiagnostics?> = _latestDiagnostics.asStateFlow()
 
     /**
      * Handle to the in-flight session-timeout coroutine. Cancelled when the
@@ -85,6 +105,7 @@ class MainViewModel @Inject constructor(
                     is NetworkEvent.CaptiveNetworkAvailable -> {
                         _activeNetwork.value = event.network
                         _networkStatus.value = NetworkStatus.CaptiveDetected
+                        _latestDiagnostics.value = null
                         _session.value = sessionManager.portalDetected(_session.value, event.portalUrl)
                         openPortal()
                     }
@@ -92,6 +113,7 @@ class MainViewModel @Inject constructor(
                         // The portal sign-in succeeded — captive network now has
                         // NET_CAPABILITY_VALIDATED. Transition Active → Completed.
                         _networkStatus.value = NetworkStatus.SignInComplete
+                        _latestDiagnostics.value = null
                         if (_activeNetwork.value == event.network) {
                             handleSignInSuccess()
                         }
@@ -101,9 +123,20 @@ class MainViewModel @Inject constructor(
                         // user "you're on a normal network, all good" instead
                         // of leaving them on "Monitoring network…" forever.
                         _networkStatus.value = NetworkStatus.NoPortal
+                        _latestDiagnostics.value = null
+                    }
+                    is NetworkEvent.CaptivePortalSuspected -> {
+                        // Both probe paths failed. Diagnostics carries VPN
+                        // status, Private DNS, proxy, and raw probe errors so
+                        // the UI can guide the user through the troubleshooting
+                        // pathway.
+                        Log.w(TAG, "Captive suspected on ${event.network}: ${event.diagnostics}")
+                        _latestDiagnostics.value = event.diagnostics
+                        _networkStatus.value = NetworkStatus.CaptivePending
                     }
                     is NetworkEvent.CaptiveNetworkLost -> {
                         _networkStatus.value = NetworkStatus.Lost
+                        _latestDiagnostics.value = null
                         if (_activeNetwork.value == event.network) {
                             _activeNetwork.value = null
                             // The manager picks ABORTED_PRE_ACTIVE for pre-Active

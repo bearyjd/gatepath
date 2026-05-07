@@ -30,6 +30,24 @@
             </intent-filter>
         </activity>
 
+        <!--
+          Captive portal sign-in handler. When the user taps the system's
+          "Sign in to Wi-Fi network" notification, Android shows a chooser of
+          installed handlers; Gatepath appears alongside Chrome/Settings.
+          Picking Gatepath delivers a CaptivePortal token that grants the
+          process the temporary "use restricted network" permission needed
+          to bypass the EPERM that direct probes hit.
+        -->
+        <activity
+            android:name=".CaptivePortalActivity"
+            android:exported="true"
+            android:theme="@style/Theme.Gatepath">
+            <intent-filter>
+                <action android:name="android.net.conn.CAPTIVE_PORTAL" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+        </activity>
+
         <service
             android:name=".service.PortalMonitorService"
             android:exported="false"
