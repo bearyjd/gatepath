@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Block cleartext HTTP everywhere by default.
+
+  Exception: the Android connectivity-check endpoint (Google's /generate_204
+  on connectivitycheck.gstatic.com) MUST be cleartext — captive portals work
+  by intercepting unencrypted HTTP probes and returning a 302 redirect to the
+  sign-in page. An HTTPS probe defeats the detection mechanism.
+
+  Captive-portal IPs (RFC1918 / link-local) are also allowed cleartext because
+  portals on hotel/airport networks frequently serve their sign-in page from
+  the local gateway IP. Once the user has signed in, all subsequent traffic
+  goes back to HTTPS-only enforcement.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="true">connectivitycheck.gstatic.com</domain>
+        <domain includeSubdomains="false">100.100.100.100</domain>
+    </domain-config>
+
+    <!-- Captive-portal local-network ranges. The captive Network is bound
+         via bindProcessToNetwork; cleartext to portals on the local LAN is
+         required for portal sign-in pages. -->
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="true">10.0.0.0</domain>
+        <domain includeSubdomains="true">172.16.0.0</domain>
+        <domain includeSubdomains="true">192.168.0.0</domain>
+        <domain includeSubdomains="true">169.254.0.0</domain>
+    </domain-config>
+</network-security-config>

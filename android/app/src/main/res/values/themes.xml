@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Compose-only app: theme is set in Kotlin via GatepathTheme. This XML
+         theme just gives the system a valid window background + status-bar
+         configuration before Compose takes over. -->
+    <style name="Theme.Gatepath" parent="android:Theme.Material.Light.NoActionBar" />
+</resources>
