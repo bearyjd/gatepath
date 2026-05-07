@@ -7,6 +7,7 @@ import android.net.NetworkRequest
 import android.util.Log
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
@@ -22,25 +23,39 @@ sealed interface NetworkEvent {
         val portalUrl: String,
     ) : NetworkEvent
 
-    /** The captive network was lost before the session completed. */
+    /**
+     * A previously-captive network has transitioned to validated. This is the
+     * SUCCESS signal of a portal sign-in: the user authenticated, the network
+     * gained NET_CAPABILITY_VALIDATED, and the session can transition from
+     * Active → Completed(PORTAL_COMPLETED).
+     */
+    data class NetworkValidated(val network: Network) : NetworkEvent
+
+    /**
+     * A previously-captive network was lost (e.g. WiFi disconnect during
+     * sign-in). Only emitted for networks we previously identified as captive,
+     * not every network that disappears.
+     */
     data class CaptiveNetworkLost(val network: Network) : NetworkEvent
 }
 
 /**
  * Wraps [ConnectivityManager.NetworkCallback] in a cold [Flow].
  *
- * Listens for any WiFi or Ethernet network with INTERNET capability. The
- * earlier implementation filtered on `NET_CAPABILITY_CAPTIVE_PORTAL`, which
- * is only set when the Android framework has already classified a network as
- * captive — for a normal WiFi connection it is never present, so the callback
- * never fired. The new filter receives every WiFi/Ethernet network and we
- * detect captive portals ourselves via [PortalProbe].
+ * Listens for any WiFi or Ethernet network with INTERNET capability and detects
+ * captive portals via [PortalProbe].
  *
  * Captive detection rule (per the original spec): a network is treated as
  * captive when it has `NET_CAPABILITY_INTERNET` but lacks
  * `NET_CAPABILITY_VALIDATED`. We confirm with a probe and only emit
  * [NetworkEvent.CaptiveNetworkAvailable] when the probe returns
  * [ProbeResult.Portal].
+ *
+ * Lifecycle:
+ * - Captive detected → emit `CaptiveNetworkAvailable`
+ * - Captive then validated → emit `NetworkValidated` (success: user signed in)
+ * - Captive then lost → emit `CaptiveNetworkLost`
+ * - Validated network transitions are silent (no event for non-captive lifecycle)
  *
  * Collect this flow from a lifecycle-scoped coroutine (e.g. viewModelScope).
  */
@@ -57,9 +72,16 @@ class CaptivePortalMonitor(
             .build()
 
         val ioScope = CoroutineScope(Dispatchers.IO)
-        // Track networks we've already probed (or have a probe in flight for)
-        // so capability churn doesn't queue dozens of probes.
+        // Networks we have probed (or have a probe in flight for) — prevents
+        // capability churn from queueing dozens of probes for the same net.
         val probed = java.util.concurrent.ConcurrentHashMap.newKeySet<Network>()
+        // Networks we have emitted CaptiveNetworkAvailable for. Used to gate
+        // both NetworkValidated (success signal) and CaptiveNetworkLost
+        // (don't emit Lost for non-captive networks the caller never cared about).
+        val captive = java.util.concurrent.ConcurrentHashMap.newKeySet<Network>()
+        // Last-seen capability summary per network. We log capability changes
+        // only when this transitions, so logcat isn't drowned in churn.
+        val lastCaps = java.util.concurrent.ConcurrentHashMap<Network, Pair<Boolean, Boolean>>()
 
         fun probeAndEmit(network: Network) {
             if (!probed.add(network)) return
@@ -67,7 +89,8 @@ class CaptivePortalMonitor(
                 Log.d(TAG, "Probing network $network")
                 when (val result = probe.probe(network)) {
                     is ProbeResult.Portal -> {
-                        Log.i(TAG, "Captive portal detected on $network at ${result.locationUrl}")
+                        Log.d(TAG, "Captive portal detected on $network")
+                        captive.add(network)
                         trySend(NetworkEvent.CaptiveNetworkAvailable(network, result.locationUrl))
                     }
                     is ProbeResult.Validated ->
@@ -94,19 +117,26 @@ class CaptivePortalMonitor(
             ) {
                 val hasInternet = caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
                 val isValidated = caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
-                Log.d(
-                    TAG,
-                    "Capabilities for $network: internet=$hasInternet validated=$isValidated",
-                )
+                val newSummary = hasInternet to isValidated
+                val previousSummary = lastCaps.put(network, newSummary)
+                if (previousSummary != newSummary) {
+                    Log.d(
+                        TAG,
+                        "Capabilities for $network: internet=$hasInternet validated=$isValidated",
+                    )
+                }
                 if (!hasInternet) return
 
                 if (isValidated) {
-                    // Network is validated — no portal. If we previously emitted
-                    // a captive event for this network, surface a "lost" so the
-                    // session can transition to Completed.
-                    if (probed.remove(network)) {
-                        Log.d(TAG, "Network $network became validated; clearing")
+                    // Validated. If we previously identified this network as
+                    // captive, the user just signed in successfully. Surface
+                    // NetworkValidated so the session can transition to
+                    // Completed(PORTAL_COMPLETED).
+                    if (captive.remove(network)) {
+                        Log.i(TAG, "Captive network $network became validated — sign-in succeeded")
+                        trySend(NetworkEvent.NetworkValidated(network))
                     }
+                    probed.remove(network)
                     return
                 }
                 // INTERNET present but NOT validated → likely captive. Probe it.
@@ -116,7 +146,13 @@ class CaptivePortalMonitor(
             override fun onLost(network: Network) {
                 Log.d(TAG, "Network lost: $network")
                 probed.remove(network)
-                trySend(NetworkEvent.CaptiveNetworkLost(network))
+                lastCaps.remove(network)
+                // Only emit Lost for networks we previously identified as
+                // captive. A regular WiFi disconnect with no portal in flight
+                // is not a session event.
+                if (captive.remove(network)) {
+                    trySend(NetworkEvent.CaptiveNetworkLost(network))
+                }
             }
         }
 
@@ -126,6 +162,8 @@ class CaptivePortalMonitor(
         awaitClose {
             Log.i(TAG, "CaptivePortalMonitor unregistering")
             connectivityManager.unregisterNetworkCallback(callback)
+            // Cancel any in-flight probe coroutines so they don't outlive the flow.
+            ioScope.cancel()
         }
     }
 }
