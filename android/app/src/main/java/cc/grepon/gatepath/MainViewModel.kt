@@ -40,6 +40,32 @@ class MainViewModel @Inject constructor(
     val activeNetwork: StateFlow<Network?> = _activeNetwork.asStateFlow()
 
     /**
+     * Latest classification of the current network. Surfaces the monitor's
+     * observation to the UI so the user sees a real status — not a permanent
+     * "Monitoring network…" with no feedback. Updated whenever the monitor
+     * emits an event.
+     */
+    enum class NetworkStatus {
+        /** No network observation yet. */
+        Unknown,
+
+        /** Validated WiFi with no captive portal. The common home/office case. */
+        NoPortal,
+
+        /** Captive portal detected; session is or is about to be Active. */
+        CaptiveDetected,
+
+        /** Sign-in succeeded; network became validated. */
+        SignInComplete,
+
+        /** Captive network was lost mid-session. */
+        Lost,
+    }
+
+    private val _networkStatus = MutableStateFlow(NetworkStatus.Unknown)
+    val networkStatus: StateFlow<NetworkStatus> = _networkStatus.asStateFlow()
+
+    /**
      * Handle to the in-flight session-timeout coroutine. Cancelled when the
      * user dismisses, the network drops, or a new session begins. Without this
      * cancellation the coroutine would survive a dismiss and fire 10 minutes
@@ -58,17 +84,26 @@ class MainViewModel @Inject constructor(
                 when (event) {
                     is NetworkEvent.CaptiveNetworkAvailable -> {
                         _activeNetwork.value = event.network
+                        _networkStatus.value = NetworkStatus.CaptiveDetected
                         _session.value = sessionManager.portalDetected(_session.value, event.portalUrl)
                         openPortal()
                     }
                     is NetworkEvent.NetworkValidated -> {
                         // The portal sign-in succeeded — captive network now has
                         // NET_CAPABILITY_VALIDATED. Transition Active → Completed.
+                        _networkStatus.value = NetworkStatus.SignInComplete
                         if (_activeNetwork.value == event.network) {
                             handleSignInSuccess()
                         }
                     }
+                    is NetworkEvent.NetworkObservedNoPortal -> {
+                        // Validated WiFi observed for the first time. Tell the
+                        // user "you're on a normal network, all good" instead
+                        // of leaving them on "Monitoring network…" forever.
+                        _networkStatus.value = NetworkStatus.NoPortal
+                    }
                     is NetworkEvent.CaptiveNetworkLost -> {
+                        _networkStatus.value = NetworkStatus.Lost
                         if (_activeNetwork.value == event.network) {
                             _activeNetwork.value = null
                             // The manager picks ABORTED_PRE_ACTIVE for pre-Active
