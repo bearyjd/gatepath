@@ -61,6 +61,13 @@ class MainViewModel @Inject constructor(
                         _session.value = sessionManager.portalDetected(_session.value, event.portalUrl)
                         openPortal()
                     }
+                    is NetworkEvent.NetworkValidated -> {
+                        // The portal sign-in succeeded — captive network now has
+                        // NET_CAPABILITY_VALIDATED. Transition Active → Completed.
+                        if (_activeNetwork.value == event.network) {
+                            handleSignInSuccess()
+                        }
+                    }
                     is NetworkEvent.CaptiveNetworkLost -> {
                         if (_activeNetwork.value == event.network) {
                             _activeNetwork.value = null
@@ -101,6 +108,24 @@ class MainViewModel @Inject constructor(
         timeoutJob = null
         val current = _session.value
         val next = sessionManager.dismiss(current, utcNow())
+        _session.value = next
+        writeAuditLog(next)
+    }
+
+    /**
+     * The captive network became validated — the user signed in successfully.
+     * Transition Active → Completed(PORTAL_COMPLETED) and write the audit entry.
+     * If the session was never Active, no audit entry is written.
+     */
+    private fun handleSignInSuccess() {
+        timeoutJob?.cancel()
+        timeoutJob = null
+        val current = _session.value
+        if (current !is PortalSession.Active) {
+            Log.d(TAG, "NetworkValidated received but session not Active (was $current)")
+            return
+        }
+        val next = sessionManager.completePortal(current, utcNow())
         _session.value = next
         writeAuditLog(next)
     }
