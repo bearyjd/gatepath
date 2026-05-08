@@ -1,36 +1,22 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  Gatepath application icon. Placeholder design — feel free to replace with
-  something done by an actual designer. Visual metaphor: shield (security) +
-  Wi-Fi arcs (captive portal). GNOME accent-blue background per the platform's
-  default-theme convention.
+  Gatepath application icon. Placeholder design — replace with something done
+  by an actual designer. Visual metaphor: shield (security) + Wi-Fi arcs
+  (captive portal). GNOME accent-blue background.
+
+  Solid colours only — no gradients, no opacity, no defs. librsvg (as used
+  by appstreamcli compose) is stricter than browser SVG renderers; sticking
+  to the boring-and-portable subset keeps the AppStream compose step happy.
 -->
-<svg width="256" height="256" viewBox="0 0 256 256"
-     xmlns="http://www.w3.org/2000/svg">
-  <defs>
-    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#3584e4"/>
-      <stop offset="1" stop-color="#1a5fb4"/>
-    </linearGradient>
-  </defs>
-
-  <!-- App background. Rounded square, GNOME convention. -->
-  <rect width="256" height="256" rx="48" fill="url(#bg)"/>
-
-  <!-- Shield. White, slightly translucent so the gradient reads through. -->
-  <path d="M 128 44
-           L 196 76
-           L 196 144
-           Q 196 196 128 228
-           Q 60 196 60 144
-           L 60 76 Z"
-        fill="#ffffff" opacity="0.95"/>
-
-  <!-- Wi-Fi arcs centered on the shield. Three rings + dot. -->
-  <g stroke="#1a5fb4" stroke-width="9" fill="none" stroke-linecap="round">
-    <path d="M 80 130 Q 128 90 176 130"/>
-    <path d="M 96 148 Q 128 120 160 148"/>
-    <path d="M 112 166 Q 128 154 144 166"/>
-  </g>
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">
+  <rect width="256" height="256" rx="48" fill="#3584e4"/>
+  <path d="M 128 44 L 196 76 L 196 144 Q 196 196 128 228 Q 60 196 60 144 L 60 76 Z"
+        fill="#ffffff"/>
+  <path d="M 80 130 Q 128 90 176 130" stroke="#1a5fb4" stroke-width="9"
+        fill="none" stroke-linecap="round"/>
+  <path d="M 96 148 Q 128 120 160 148" stroke="#1a5fb4" stroke-width="9"
+        fill="none" stroke-linecap="round"/>
+  <path d="M 112 166 Q 128 154 144 166" stroke="#1a5fb4" stroke-width="9"
+        fill="none" stroke-linecap="round"/>
   <circle cx="128" cy="180" r="7" fill="#1a5fb4"/>
 </svg>

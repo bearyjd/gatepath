@@ -26,6 +26,8 @@
 
   <launchable type="desktop-id">cc.grepon.Gatepath.desktop</launchable>
 
+  <icon type="stock">cc.grepon.Gatepath</icon>
+
   <url type="homepage">https://github.com/bearyjd/gatepath</url>
   <url type="bugtracker">https://github.com/bearyjd/gatepath/issues</url>
   <url type="vcs-browser">https://github.com/bearyjd/gatepath</url>
