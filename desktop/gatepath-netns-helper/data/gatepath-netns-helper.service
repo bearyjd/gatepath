@@ -1,0 +1,48 @@
+[Unit]
+Description=Gatepath captive-portal netns helper
+Documentation=https://github.com/bearyjd/gatepath
+# Need NetworkManager to be up before we can query "is this captive" — that
+# query lands in 5b.4. Keeping the dependency declared from the start so
+# socket activation orders correctly the moment we add it.
+After=NetworkManager.service dbus.service
+Requires=dbus.service
+
+[Service]
+Type=dbus
+BusName=cc.grepon.Gatepath.NetNsHelper
+ExecStart=/usr/libexec/gatepath-netns-helper
+# Helper needs CAP_NET_ADMIN to run `ip netns ...` and move interfaces; it
+# runs as root so that root's CAP_NET_ADMIN is implicit. We could drop to
+# a dedicated user with AmbientCapabilities=CAP_NET_ADMIN, but distros that
+# package this can make that decision per their security posture.
+User=root
+
+# Hardening — these are tight by default; loosen only if shown necessary.
+NoNewPrivileges=false
+# (Cannot set NoNewPrivileges=true because we exec `ip` from iproute2.
+#  iproute2 doesn't need new privileges, but the test of suid bits across
+#  distros has produced false positives. Reconsider once 5b switches to
+#  direct netlink.)
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_UNIX AF_NETLINK AF_INET AF_INET6
+LockPersonality=true
+MemoryDenyWriteExecute=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+SystemCallArchitectures=native
+
+# The helper itself does not write its audit log yet (5b.4); reserving the
+# state directory now so the path is stable across versions.
+StateDirectory=gatepath
+StateDirectoryMode=0755
+
+[Install]
+# D-Bus activation handles startup; no Alias / WantedBy needed unless an
+# operator wants to pre-start. The .service file in /usr/share/dbus-1/system-services/
+# tells the bus which systemd unit to invoke.

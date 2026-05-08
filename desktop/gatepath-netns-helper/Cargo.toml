@@ -11,8 +11,18 @@ authors = ["Gatepath Contributors"]
 name = "gatepath_netns_helper"
 path = "src/lib.rs"
 
+[[bin]]
+name = "gatepath-netns-helper"
+path = "src/bin/gatepath-netns-helper.rs"
+
 [dependencies]
 thiserror = "1"
+anyhow = "1"
+# zbus 5 is the current major; native tokio integration without an extra crate.
+zbus = { version = "5", default-features = false, features = ["tokio", "blocking-api"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "sync"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 [lints.rust]
 unsafe_code = "forbid"
