@@ -110,6 +110,13 @@ MAIN_SOURCES=(
     "$SRC_MAIN/cc/grepon/gatepath/session/PortalSession.kt"
     "$SRC_MAIN/cc/grepon/gatepath/session/PortalSessionManager.kt"
     "$SRC_MAIN/cc/grepon/gatepath/ui/WebViewHostMatching.kt"
+    "$SRC_MAIN/cc/grepon/gatepath/diag/DiagnosticReport.kt"
+    "$SRC_MAIN/cc/grepon/gatepath/diag/RecommendedAction.kt"
+    "$SRC_MAIN/cc/grepon/gatepath/diag/ProbeContext.kt"
+    "$SRC_MAIN/cc/grepon/gatepath/diag/DiagnosticProbe.kt"
+    "$SRC_MAIN/cc/grepon/gatepath/diag/DiagnosticEngine.kt"
+    "$SRC_MAIN/cc/grepon/gatepath/diag/PrivateDnsProbe.kt"
+    "$SRC_MAIN/cc/grepon/gatepath/diag/HttpProbe.kt"
 )
 
 MAIN_CP="$KOTLIN_STDLIB:$KOTLINX_COROUTINES:$KOTLINX_SERIALIZATION:$KOTLINX_SERIALIZATION_CORE"
@@ -168,6 +175,9 @@ TEST_SOURCES=(
     "$SRC_TEST/cc/grepon/gatepath/AuditSchemaParityTest.kt"
     "$SRC_TEST/cc/grepon/gatepath/PortalProbeTest.kt"
     "$SRC_TEST/cc/grepon/gatepath/WebViewHostMatchingTest.kt"
+    "$SRC_TEST/cc/grepon/gatepath/diag/DiagnosticEngineTest.kt"
+    "$SRC_TEST/cc/grepon/gatepath/diag/PrivateDnsProbeTest.kt"
+    "$SRC_TEST/cc/grepon/gatepath/diag/HttpProbeTest.kt"
 )
 
 TEST_CP="$MAIN_CP:$CLASSES_MAIN:$ANDROID_STUB:$JUNIT_JAR:$HAMCREST_JAR:$COROUTINES_TEST"
