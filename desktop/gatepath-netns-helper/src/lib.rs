@@ -46,7 +46,9 @@
 //! helper has no authorization to touch their interfaces.
 
 pub mod auth;
+pub mod dbus_service;
 pub mod netns;
+pub mod policykit;
 pub mod service;
 pub mod validation;
 
