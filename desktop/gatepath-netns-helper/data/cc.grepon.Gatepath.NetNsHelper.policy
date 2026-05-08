@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE policyconfig PUBLIC
+  "-//freedesktop//DTD PolicyKit Policy Configuration 1.0//EN"
+  "http://www.freedesktop.org/standards/PolicyKit/1/policyconfig.dtd">
+<!--
+  PolicyKit actions for gatepath-netns-helper.
+
+  Both actions require an active local user session. The default is
+  "auth_admin_keep" — the user must enter an admin password the first time
+  in a session, and subsequent calls within that session reuse the auth.
+  This matches the UX of NetworkManager's "edit a connection" prompt.
+
+  Distros that want stricter (always prompt) or looser (allow without prompt
+  for logged-in users) policies can override via /etc/polkit-1/rules.d/.
+-->
+<policyconfig>
+  <vendor>Gatepath</vendor>
+  <vendor_url>https://github.com/bearyjd/gatepath</vendor_url>
+
+  <action id="cc.grepon.Gatepath.NetNsHelper.SetupCaptive">
+    <description>Move a Wi-Fi interface into Gatepath's captive netns</description>
+    <message>Authentication is required to set up the captive-portal isolation</message>
+    <defaults>
+      <allow_any>auth_admin_keep</allow_any>
+      <allow_inactive>auth_admin_keep</allow_inactive>
+      <allow_active>auth_admin_keep</allow_active>
+    </defaults>
+  </action>
+
+  <action id="cc.grepon.Gatepath.NetNsHelper.TeardownCaptive">
+    <description>Tear down Gatepath's captive netns</description>
+    <message>Authentication is required to tear down the captive-portal isolation</message>
+    <defaults>
+      <allow_any>auth_admin_keep</allow_any>
+      <allow_inactive>auth_admin_keep</allow_inactive>
+      <allow_active>auth_admin_keep</allow_active>
+    </defaults>
+  </action>
+</policyconfig>
