@@ -35,6 +35,7 @@ modules:
       - pip3 install --no-index --no-build-isolation --prefix=${FLATPAK_DEST} .
       - install -Dm644 cc.grepon.Gatepath.desktop ${FLATPAK_DEST}/share/applications/cc.grepon.Gatepath.desktop
       - install -Dm644 cc.grepon.Gatepath.metainfo.xml ${FLATPAK_DEST}/share/metainfo/cc.grepon.Gatepath.metainfo.xml
+      - install -Dm644 cc.grepon.Gatepath.svg ${FLATPAK_DEST}/share/icons/hicolor/scalable/apps/cc.grepon.Gatepath.svg
     sources:
       - type: dir
         path: .
