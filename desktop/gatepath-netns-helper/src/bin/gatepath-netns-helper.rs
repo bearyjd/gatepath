@@ -24,7 +24,6 @@ use gatepath_netns_helper::service::GatepathHelperService;
 use tokio::signal::unix::{SignalKind, signal};
 use tracing::{error, info, warn};
 use zbus::connection;
-use zbus::names::OwnedBusName;
 
 #[tokio::main(flavor = "multi_thread", worker_threads = 2)]
 async fn main() -> ExitCode {
@@ -99,9 +98,3 @@ async fn wait_for_shutdown(_conn: &zbus::Connection) -> anyhow::Result<()> {
     }
     Ok(())
 }
-
-// Quiets clippy::needless_pass_by_value for the OwnedBusName import alias.
-// Used in the signature of the future PR's named-watch handler; importing
-// here so that signature doesn't churn the imports list later.
-#[allow(dead_code)]
-fn _stub(_: OwnedBusName) {}
