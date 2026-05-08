@@ -145,7 +145,7 @@ private fun buildWebViewClient(
         request: WebResourceRequest,
     ): Boolean {
         val requestHost = runCatching { request.url.host ?: "" }.getOrDefault("")
-        val isSameOrigin = requestHost == portalHost || requestHost.endsWith(".$portalHost")
+        val isSameOrigin = WebViewHostMatching.isSameOriginHost(requestHost, portalHost)
         return if (isSameOrigin) {
             false // allow WebView to load it
         } else {
