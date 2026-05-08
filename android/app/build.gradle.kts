@@ -44,6 +44,9 @@ android {
 
     buildFeatures {
         compose = true
+        // Generate BuildConfig so we can gate diagnostic logging on
+        // BuildConfig.DEBUG. AGP 8+ disables this by default.
+        buildConfig = true
     }
 }
 
