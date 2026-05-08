@@ -1,6 +1,6 @@
 app-id: cc.grepon.Gatepath
 runtime: org.gnome.Platform
-runtime-version: "47"
+runtime-version: "49"
 sdk: org.gnome.Sdk
 command: gatepath
 
@@ -19,7 +19,11 @@ modules:
   - name: python3-dasbus
     buildsystem: simple
     build-commands:
-      - pip3 install --no-index --find-links=. --prefix=${FLATPAK_DEST} dasbus
+      # --no-build-isolation: pip 25+ (GNOME 49 / Python 3.13) defaults to
+      # PEP 517 isolation, which fetches setuptools from PyPI to build the
+      # wheel. Combined with --no-index that fails. The GNOME SDK already
+      # ships setuptools, so use the system one and skip isolation.
+      - pip3 install --no-index --no-build-isolation --find-links=. --prefix=${FLATPAK_DEST} dasbus
     sources:
       - type: file
         url: https://files.pythonhosted.org/packages/37/79/9c5984d723ffbe2e839ee649690f3e1fa6544ab6a17a5150e5ac14a47072/dasbus-1.7.tar.gz
