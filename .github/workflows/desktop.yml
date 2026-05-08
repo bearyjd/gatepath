@@ -47,3 +47,20 @@ jobs:
             echo "::error::Forbidden HTTP library import found in desktop/gatepath/"
             exit 1
           fi
+
+  flatpak-build:
+    name: flatpak-builder bundle
+    runs-on: ubuntu-latest
+    # bilelmoussaoui/flatpak-github-actions ships a container with flatpak,
+    # flatpak-builder, and the GNOME 47 SDK pre-installed. --privileged is
+    # required for bubblewrap (the sandbox flatpak-builder uses).
+    container:
+      image: ghcr.io/flathub-infra/flatpak-github-actions:gnome-47
+      options: --privileged
+    steps:
+      - uses: actions/checkout@v4
+      - uses: flatpak/flatpak-github-actions/flatpak-builder@v6
+        with:
+          bundle: gatepath.flatpak
+          manifest-path: desktop/cc.grepon.Gatepath.yml
+          cache-key: flatpak-builder-${{ hashFiles('desktop/cc.grepon.Gatepath.yml') }}

@@ -1,6 +1,10 @@
 [build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
+# setuptools is bundled with the GNOME SDK Python that flatpak-builder uses,
+# so `pip install --no-index --no-build-isolation .` succeeds inside the
+# sandbox. hatchling isn't, and adding it as another Flatpak module just to
+# build one local package isn't worth it.
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
 
 [project]
 name = "gatepath"
@@ -39,7 +43,7 @@ dev = [
 [project.scripts]
 gatepath = "gatepath.__main__:main"
 
-[tool.hatch.build.targets.wheel]
+[tool.setuptools]
 packages = ["gatepath"]
 
 [tool.pytest.ini_options]
