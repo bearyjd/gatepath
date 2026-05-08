@@ -45,7 +45,9 @@
 //! sign-in stops working. Other apps' VPN traffic is unaffected because the
 //! helper has no authorization to touch their interfaces.
 
+pub mod auth;
 pub mod netns;
+pub mod service;
 pub mod validation;
 
 /// Request shape for the D-Bus method `SetupCaptiveNetns(interface_name: s)`.
