@@ -31,6 +31,10 @@ ProtectKernelTunables=true
 ProtectKernelModules=true
 ProtectControlGroups=true
 RestrictAddressFamilies=AF_UNIX AF_NETLINK AF_INET AF_INET6
+# Helper makes no outbound IP connections — only AF_UNIX to dbus-daemon and
+# AF_NETLINK to the kernel via `ip`. Deny all IP traffic at the cgroup level
+# so a compromised helper can't exfiltrate over the network.
+IPAddressDeny=any
 LockPersonality=true
 MemoryDenyWriteExecute=true
 RestrictRealtime=true

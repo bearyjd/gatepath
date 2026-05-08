@@ -52,6 +52,23 @@ pub enum HelperError {
     NotActive(String),
 }
 
+/// Extract the sender's bus name from the message header, refusing the call
+/// up-front with `Unauthorised` if it's missing.
+///
+/// `header.sender()` returns `None` for peer-to-peer connections or before a
+/// connection has finished its initial handshake. Both are unusual but real;
+/// previously we mapped this to an empty string passed to PolicyKit, which
+/// returns an error and surfaces as `KernelError`. That misclassifies an
+/// auth condition as an internal error. Refuse explicitly.
+fn sender_or_unauthorised(header: &zbus::message::Header<'_>) -> Result<String, HelperError> {
+    match header.sender() {
+        Some(name) => Ok(name.to_string()),
+        None => Err(HelperError::Unauthorised(
+            "no sender on D-Bus header (peer-to-peer connection?)".into(),
+        )),
+    }
+}
+
 impl HelperError {
     fn from_setup_refusal(reason: RefusalReason) -> Self {
         match reason {
@@ -88,7 +105,7 @@ impl<N: NetnsOps + Send + Sync + 'static, A: Authorizer + Send + Sync + 'static>
         interface_name: String,
         #[zbus(header)] header: zbus::message::Header<'_>,
     ) -> Result<String, HelperError> {
-        let sender = header.sender().map(ToString::to_string).unwrap_or_default();
+        let sender = sender_or_unauthorised(&header)?;
         let request = SetupCaptiveRequest { interface_name };
         let inner = Arc::clone(&self.inner);
         let response = tokio::task::spawn_blocking(move || inner.setup_captive(&request, &sender))
@@ -107,7 +124,7 @@ impl<N: NetnsOps + Send + Sync + 'static, A: Authorizer + Send + Sync + 'static>
         &self,
         #[zbus(header)] header: zbus::message::Header<'_>,
     ) -> Result<(), HelperError> {
-        let sender = header.sender().map(ToString::to_string).unwrap_or_default();
+        let sender = sender_or_unauthorised(&header)?;
         let inner = Arc::clone(&self.inner);
         let response = tokio::task::spawn_blocking(move || inner.teardown_captive(&sender))
             .await
