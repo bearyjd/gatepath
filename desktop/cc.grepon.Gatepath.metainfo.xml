@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>cc.grepon.Gatepath</id>
+  <name>Gatepath</name>
+  <summary>Captive-portal handler that protects your other apps</summary>
+
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-3.0-or-later</project_license>
+
+  <description>
+    <p>
+      Gatepath signs you in to captive Wi-Fi networks (hotels, airports, conference venues)
+      without exposing your other running apps to the captive gateway. Traffic from the
+      sign-in page is isolated to the captive interface; your VPN and DNS configuration
+      remain in effect for everything else on your machine.
+    </p>
+    <p>Features:</p>
+    <ul>
+      <li>Detects captive portals via NetworkManager</li>
+      <li>Loads the sign-in page in a sandboxed WebKit view</li>
+      <li>Blocks tracker subresources during sign-in</li>
+      <li>Refuses off-domain navigation</li>
+      <li>Writes a structured audit log of every session</li>
+    </ul>
+  </description>
+
+  <launchable type="desktop-id">cc.grepon.Gatepath.desktop</launchable>
+
+  <url type="homepage">https://github.com/bearyjd/gatepath</url>
+  <url type="bugtracker">https://github.com/bearyjd/gatepath/issues</url>
+  <url type="vcs-browser">https://github.com/bearyjd/gatepath</url>
+
+  <developer id="cc.grepon">
+    <name>Gatepath Contributors</name>
+  </developer>
+
+  <categories>
+    <category>Network</category>
+  </categories>
+
+  <keywords>
+    <keyword>captive-portal</keyword>
+    <keyword>wifi</keyword>
+    <keyword>hotspot</keyword>
+    <keyword>sign-in</keyword>
+  </keywords>
+
+  <content_rating type="oars-1.1"/>
+
+  <releases>
+    <release version="0.1.0" date="2026-05-08">
+      <description>
+        <p>Initial alpha. Captive-portal detection, sandboxed sign-in WebView, audit log.</p>
+      </description>
+    </release>
+  </releases>
+</component>
