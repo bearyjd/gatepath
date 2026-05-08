@@ -6,9 +6,13 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import cc.grepon.gatepath.audit.AuditEntry
 import cc.grepon.gatepath.audit.AuditLog
+import cc.grepon.gatepath.diag.DiagnosisResult
+import cc.grepon.gatepath.diag.DiagnosticEngine
+import cc.grepon.gatepath.diag.ProbeContext
 import cc.grepon.gatepath.network.CaptivePortalMonitor
 import cc.grepon.gatepath.network.NetworkDiagnostics
 import cc.grepon.gatepath.network.NetworkEvent
+import cc.grepon.gatepath.network.PortalProbe
 import cc.grepon.gatepath.network.VpnDetector
 import cc.grepon.gatepath.session.CloseReason
 import cc.grepon.gatepath.session.PortalSession
@@ -32,7 +36,10 @@ private const val SESSION_TIMEOUT_MS = 10 * 60 * 1000L // 10 minutes — see SEC
 class MainViewModel @Inject constructor(
     private val monitor: CaptivePortalMonitor,
     private val sessionManager: PortalSessionManager,
+    private val diagnosticEngine: DiagnosticEngine,
 ) : ViewModel() {
+
+    private val portalProbe = PortalProbe()
 
     private val _session = MutableStateFlow<PortalSession>(PortalSession.Idle)
     val session: StateFlow<PortalSession> = _session.asStateFlow()
@@ -86,6 +93,18 @@ class MainViewModel @Inject constructor(
     val latestDiagnostics: StateFlow<NetworkDiagnostics?> = _latestDiagnostics.asStateFlow()
 
     /**
+     * Result of the most recent diagnostic-engine run. Set when the monitor
+     * emits [NetworkEvent.CaptivePortalSuspected] and the engine has produced
+     * a finding. UI consumes this to show the top finding + recommended action
+     * above the existing static troubleshooting list.
+     *
+     * Cleared whenever the network transitions to a known-good state, so a
+     * stale finding from a previous network can't linger.
+     */
+    private val _diagnosis = MutableStateFlow<DiagnosisResult?>(null)
+    val diagnosis: StateFlow<DiagnosisResult?> = _diagnosis.asStateFlow()
+
+    /**
      * Handle to the in-flight session-timeout coroutine. Cancelled when the
      * user dismisses, the network drops, or a new session begins. Without this
      * cancellation the coroutine would survive a dismiss and fire 10 minutes
@@ -106,6 +125,7 @@ class MainViewModel @Inject constructor(
                         _activeNetwork.value = event.network
                         _networkStatus.value = NetworkStatus.CaptiveDetected
                         _latestDiagnostics.value = null
+                        _diagnosis.value = null
                         _session.value = sessionManager.portalDetected(_session.value, event.portalUrl)
                         openPortal()
                     }
@@ -114,6 +134,7 @@ class MainViewModel @Inject constructor(
                         // NET_CAPABILITY_VALIDATED. Transition Active → Completed.
                         _networkStatus.value = NetworkStatus.SignInComplete
                         _latestDiagnostics.value = null
+                        _diagnosis.value = null
                         if (_activeNetwork.value == event.network) {
                             handleSignInSuccess()
                         }
@@ -124,6 +145,7 @@ class MainViewModel @Inject constructor(
                         // of leaving them on "Monitoring network…" forever.
                         _networkStatus.value = NetworkStatus.NoPortal
                         _latestDiagnostics.value = null
+                        _diagnosis.value = null
                     }
                     is NetworkEvent.CaptivePortalSuspected -> {
                         // Both probe paths failed. Diagnostics carries VPN
@@ -133,10 +155,12 @@ class MainViewModel @Inject constructor(
                         Log.w(TAG, "Captive suspected on ${event.network}: ${event.diagnostics}")
                         _latestDiagnostics.value = event.diagnostics
                         _networkStatus.value = NetworkStatus.CaptivePending
+                        runDiagnosticEngine(event.network, event.diagnostics)
                     }
                     is NetworkEvent.CaptiveNetworkLost -> {
                         _networkStatus.value = NetworkStatus.Lost
                         _latestDiagnostics.value = null
+                        _diagnosis.value = null
                         if (_activeNetwork.value == event.network) {
                             _activeNetwork.value = null
                             // The manager picks ABORTED_PRE_ACTIVE for pre-Active
@@ -147,6 +171,36 @@ class MainViewModel @Inject constructor(
                     }
                 }
             }
+        }
+    }
+
+    /**
+     * Run the [DiagnosticEngine] against the suspected captive [network] and
+     * publish the result to [diagnosis]. Builds a [ProbeContext] from the
+     * monitor's [NetworkDiagnostics] snapshot — most fields are already
+     * collected there, the only addition is the active-probe callable.
+     *
+     * The active-probe closure deliberately invokes `portalProbe.probe(null)`
+     * (no bind) — bind has already failed by the time we reach this branch
+     * (that's what triggered Suspected), so re-running it would just confirm
+     * EPERM. The default-route probe instead exercises whether the userspace
+     * fallback might be working now (e.g. VPN was just paused).
+     */
+    private fun runDiagnosticEngine(network: Network, diagnostics: NetworkDiagnostics) {
+        viewModelScope.launch {
+            val ctx = ProbeContext(
+                networkId = diagnostics.networkId,
+                isPrivateDnsActive = diagnostics.privateDnsActive,
+                privateDnsServer = diagnostics.privateDnsServer,
+                httpProxyDescription = diagnostics.httpProxyDescription,
+                vpnInterfaces = diagnostics.vpnInterfaces,
+                isTailscaleFullTunnel = diagnostics.isTailscaleFullTunnel,
+                dnsServerCount = diagnostics.dnsServerCount,
+                activeProbe = { portalProbe.probe(network = null) },
+            )
+            val result = diagnosticEngine.run(ctx)
+            Log.i(TAG, "Diagnosis on ${network}: top=${result.top::class.simpleName} action=${result.recommended}")
+            _diagnosis.value = result
         }
     }
 
