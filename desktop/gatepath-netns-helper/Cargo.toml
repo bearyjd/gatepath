@@ -1,0 +1,21 @@
+[package]
+name = "gatepath-netns-helper"
+version = "0.1.0"
+edition = "2024"
+license = "GPL-3.0-or-later"
+description = "Privileged helper for Gatepath's desktop network-namespace isolation"
+repository = "https://github.com/bearyjd/gatepath"
+authors = ["Gatepath Contributors"]
+
+[lib]
+name = "gatepath_netns_helper"
+path = "src/lib.rs"
+
+[dependencies]
+thiserror = "1"
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+all = "warn"

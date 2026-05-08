@@ -48,6 +48,24 @@ jobs:
             exit 1
           fi
 
+  rust-helper:
+    name: cargo test (gatepath-netns-helper)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: desktop/gatepath-netns-helper
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - name: cargo fmt --check
+        run: cargo fmt --all -- --check
+      - name: cargo clippy
+        run: cargo clippy --all-targets -- -D warnings
+      - name: cargo test
+        run: cargo test --all-targets
+
   flatpak-build:
     name: flatpak-builder bundle
     runs-on: ubuntu-latest
