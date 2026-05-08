@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=Gatepath
+GenericName=Captive Portal Handler
+Comment=Sign in to captive Wi-Fi networks while keeping your other apps protected
+Exec=gatepath
+Icon=cc.grepon.Gatepath
+Categories=Network;GTK;
+Terminal=false
+StartupNotify=true
+StartupWMClass=cc.grepon.Gatepath
+Keywords=captive;portal;wifi;hotspot;sign-in;
