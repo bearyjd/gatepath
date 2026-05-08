@@ -32,6 +32,7 @@ class MainActivity : ComponentActivity() {
                 val activeNetwork by viewModel.activeNetwork.collectAsState()
                 val networkStatus by viewModel.networkStatus.collectAsState()
                 val diagnostics by viewModel.latestDiagnostics.collectAsState()
+                val diagnosis by viewModel.diagnosis.collectAsState()
 
                 when (val s = session) {
                     is PortalSession.Active -> {
@@ -50,6 +51,7 @@ class MainActivity : ComponentActivity() {
                                 session = s,
                                 networkStatus = networkStatus,
                                 diagnostics = diagnostics,
+                                diagnosis = diagnosis,
                                 onDismiss = viewModel::onDismiss,
                             )
                         }
@@ -58,6 +60,7 @@ class MainActivity : ComponentActivity() {
                         session = s,
                         networkStatus = networkStatus,
                         diagnostics = diagnostics,
+                        diagnosis = diagnosis,
                         onDismiss = viewModel::onDismiss,
                     )
                 }

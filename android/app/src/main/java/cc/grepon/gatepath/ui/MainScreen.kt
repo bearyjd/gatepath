@@ -20,6 +20,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import cc.grepon.gatepath.MainViewModel.NetworkStatus
+import cc.grepon.gatepath.diag.DiagnosisResult
 import cc.grepon.gatepath.network.NetworkDiagnostics
 import cc.grepon.gatepath.session.PortalSession
 
@@ -35,6 +36,7 @@ fun MainScreen(
     session: PortalSession,
     networkStatus: NetworkStatus,
     diagnostics: NetworkDiagnostics?,
+    diagnosis: DiagnosisResult?,
     onDismiss: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -74,8 +76,12 @@ fun MainScreen(
             )
         }
 
-        if (networkStatus == NetworkStatus.CaptivePending && diagnostics != null) {
+        if (networkStatus == NetworkStatus.CaptivePending && diagnosis != null) {
             Spacer(modifier = Modifier.height(24.dp))
+            DiagnosisPanel(diagnosis = diagnosis)
+        }
+        if (networkStatus == NetworkStatus.CaptivePending && diagnostics != null) {
+            Spacer(modifier = Modifier.height(16.dp))
             TroubleshootingPanel(diagnostics)
         }
 
