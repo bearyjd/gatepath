@@ -109,6 +109,7 @@ MAIN_SOURCES=(
     "$SRC_MAIN/cc/grepon/gatepath/network/PortalProbe.kt"
     "$SRC_MAIN/cc/grepon/gatepath/session/PortalSession.kt"
     "$SRC_MAIN/cc/grepon/gatepath/session/PortalSessionManager.kt"
+    "$SRC_MAIN/cc/grepon/gatepath/ui/WebViewHostMatching.kt"
 )
 
 MAIN_CP="$KOTLIN_STDLIB:$KOTLINX_COROUTINES:$KOTLINX_SERIALIZATION:$KOTLINX_SERIALIZATION_CORE"
@@ -166,6 +167,7 @@ TEST_SOURCES=(
     "$SRC_TEST/cc/grepon/gatepath/AuditLogTest.kt"
     "$SRC_TEST/cc/grepon/gatepath/AuditSchemaParityTest.kt"
     "$SRC_TEST/cc/grepon/gatepath/PortalProbeTest.kt"
+    "$SRC_TEST/cc/grepon/gatepath/WebViewHostMatchingTest.kt"
 )
 
 TEST_CP="$MAIN_CP:$CLASSES_MAIN:$ANDROID_STUB:$JUNIT_JAR:$HAMCREST_JAR:$COROUTINES_TEST"
