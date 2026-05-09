@@ -41,10 +41,13 @@ RestrictRealtime=true
 RestrictSUIDSGID=true
 SystemCallArchitectures=native
 
-# The helper itself does not write its audit log yet (5b.4); reserving the
-# state directory now so the path is stable across versions.
+# State directory holds the audit log (helper-audit.jsonl). Mode 0750 so
+# the audit log is reachable by root and the gatepath group only — closes
+# a temporal-pattern leak to other local users that the default 0755 +
+# default umask 0644 would expose. The audit log file itself is opened
+# 0640 (see src/audit_log.rs).
 StateDirectory=gatepath
-StateDirectoryMode=0755
+StateDirectoryMode=0750
 
 [Install]
 # D-Bus activation handles startup; no Alias / WantedBy needed unless an

@@ -159,7 +159,7 @@ impl<N: NetnsOps, A: Authorizer, C: CaptiveStateChecker> GatepathHelperService<N
         if let Err(err) = self.ops.move_interface(&request.interface_name, NETNS_NAME) {
             // Best-effort teardown so we don't leak a netns on partial failure.
             let _ = self.ops.destroy_netns(NETNS_NAME);
-            tracing_error_msg(&err);
+            tracing::error!(error = %err, "move_interface failed");
             return SetupCaptiveResponse::Refused {
                 reason: RefusalReason::KernelError,
             };
@@ -181,7 +181,7 @@ impl<N: NetnsOps, A: Authorizer, C: CaptiveStateChecker> GatepathHelperService<N
 
     fn teardown_captive_inner(&self, sender: &str) -> TeardownCaptiveResponse {
         if let Err(err) = self.auth.check(ACTION_TEARDOWN_CAPTIVE, sender) {
-            tracing_error_msg(&err);
+            tracing::error!(error = %err, "teardown auth check failed");
             return TeardownCaptiveResponse::KernelError;
         }
 
@@ -208,7 +208,7 @@ impl<N: NetnsOps, A: Authorizer, C: CaptiveStateChecker> GatepathHelperService<N
         let decision = match response {
             SetupCaptiveResponse::Success { .. } => AuditDecision::Success,
             SetupCaptiveResponse::Refused { reason } => AuditDecision::Refused {
-                reason: refusal_reason_name(*reason).to_string(),
+                reason: reason.as_str().to_string(),
             },
         };
         let entry = entry_now(
@@ -250,26 +250,6 @@ fn refusal_for_auth_error(err: &AuthError) -> RefusalReason {
         AuthError::Error(_) => RefusalReason::KernelError,
     }
 }
-
-/// Stable string names for [`RefusalReason`] variants. Used in the audit
-/// log so the JSON is human-readable without needing crate internals.
-fn refusal_reason_name(reason: RefusalReason) -> &'static str {
-    match reason {
-        RefusalReason::InvalidInterface => "invalid_interface",
-        RefusalReason::NotCaptive => "not_captive",
-        RefusalReason::Pending => "pending",
-        RefusalReason::Unauthorised => "unauthorised",
-        RefusalReason::BackendUnavailable => "backend_unavailable",
-        RefusalReason::KernelError => "kernel_error",
-        RefusalReason::AlreadyActive => "already_active",
-        RefusalReason::Throttled => "throttled",
-    }
-}
-
-/// Stub for future tracing wiring. Intentionally a no-op so we don't pull
-/// in the `tracing` crate during 5b.2 — 5b.3 wires it up alongside the
-/// audit log writer.
-fn tracing_error_msg<T: std::fmt::Display>(_err: &T) {}
 
 // ── Tests ────────────────────────────────────────────────────────────────
 
@@ -669,5 +649,26 @@ mod tests {
         assert_eq!(entries[0].interface, Some("wlan0".to_string()));
         assert_eq!(entries[1].action, AuditAction::TeardownCaptive);
         assert_eq!(entries[1].interface, None);
+    }
+
+    #[test]
+    fn throttled_setup_still_writes_audit_entry() {
+        // The audit log MUST capture refusals so an operator can see DoS
+        // attempts in the log. Pin that throttled refusals get logged.
+        let throttle = Throttle::new(1, Duration::from_secs(60));
+        let (svc, audit) = svc_with_audit(
+            FakeNetnsOps::new(),
+            FakeAuthorizer::allow_all(),
+            allow_captive(),
+            throttle,
+        );
+        let _first = svc.setup_captive(&req("wlan0"), ":1.42");
+        let _second_throttled = svc.setup_captive(&req("wlan0"), ":1.42");
+        let entries = audit.entries();
+        assert_eq!(entries.len(), 2);
+        match &entries[1].decision {
+            AuditDecision::Refused { reason } => assert_eq!(reason, "throttled"),
+            other => panic!("expected throttled refusal, got {other:?}"),
+        }
     }
 }
