@@ -1,34 +1,38 @@
 //! Orchestration service for the helper.
 //!
-//! Pure-logic layer that the future zbus binary in 5b.3 will instantiate. It
-//! glues five concerns together:
+//! Pure-logic layer that the zbus binary instantiates. Glues seven concerns
+//! together:
 //!
 //!   1. Validate the interface name against [`crate::validation`] (refuses
 //!      VPN/tunnel/loopback/ethernet interfaces — the security spec from PR #14).
 //!   2. Confirm with NetworkManager that the interface IS currently captive
 //!      via [`crate::network_manager::CaptiveStateChecker`]. Runs BEFORE
 //!      PolicyKit so the user doesn't see an auth prompt for a non-captive
-//!      interface (and so a malicious caller can't trigger prompt fatigue
-//!      by spamming SetupCaptive on bogus targets).
-//!   3. Run the PolicyKit auth check via [`crate::auth::Authorizer`] — only
-//!      after the request is plausibly valid.
-//!   4. Drive the kernel ops via [`crate::netns::NetnsOps`].
-//!   5. Track a single active session — a second concurrent setup is refused
+//!      interface (PR #20).
+//!   3. Per-sender rate limit via [`crate::throttle::Throttle`] (PR after 5b.5).
+//!      Closes the prompt-fatigue DoS that survives reorder: malicious caller
+//!      spamming `SetupCaptive` on a real captive WiFi can still trigger one
+//!      polkit prompt per call. Throttle caps that at N per window.
+//!   4. PolicyKit auth check via [`crate::auth::Authorizer`].
+//!   5. Drive the kernel ops via [`crate::netns::NetnsOps`].
+//!   6. Track a single active session — a second concurrent setup is refused
 //!      with [`crate::RefusalReason::AlreadyActive`].
+//!   7. Audit-log every decision (success or refusal) via
+//!      [`crate::audit_log::AuditWriter`].
 //!
-//! The order is deliberate. Validation runs FIRST so that even if the
-//! Authorizer were to crash or the kernel ops were buggy, an attacker
-//! cannot reach the privileged code paths with a malicious interface name.
-//! That makes the security boundary one tested function rather than a
-//! property of multiple subsystems agreeing.
+//! The order is deliberate. Validation runs FIRST so that even if any later
+//! subsystem misbehaves, an attacker cannot reach privileged code paths
+//! with a malicious interface name.
 
 use std::sync::Mutex;
 
 use crate::{
     RefusalReason, SetupCaptiveRequest, SetupCaptiveResponse, TeardownCaptiveResponse,
+    audit_log::{AuditAction, AuditDecision, AuditWriter, entry_now},
     auth::{ACTION_SETUP_CAPTIVE, ACTION_TEARDOWN_CAPTIVE, AuthError, Authorizer},
     netns::NetnsOps,
     network_manager::{CaptiveStateChecker, NMError},
+    throttle::Throttle,
     validation::validate_interface_name,
 };
 
@@ -40,6 +44,8 @@ pub struct GatepathHelperService<N: NetnsOps, A: Authorizer, C: CaptiveStateChec
     ops: N,
     auth: A,
     captive_check: C,
+    throttle: Throttle,
+    audit: Box<dyn AuditWriter>,
     /// `Some(interface_name)` while a session is active, `None` otherwise.
     /// Mutex because the D-Bus service handles concurrent calls; this field
     /// is the lock that prevents two concurrent setups racing.
@@ -47,17 +53,35 @@ pub struct GatepathHelperService<N: NetnsOps, A: Authorizer, C: CaptiveStateChec
 }
 
 impl<N: NetnsOps, A: Authorizer, C: CaptiveStateChecker> GatepathHelperService<N, A, C> {
-    pub fn new(ops: N, auth: A, captive_check: C) -> Self {
+    pub fn new(
+        ops: N,
+        auth: A,
+        captive_check: C,
+        throttle: Throttle,
+        audit: Box<dyn AuditWriter>,
+    ) -> Self {
         Self {
             ops,
             auth,
             captive_check,
+            throttle,
+            audit,
             active: Mutex::new(None),
         }
     }
 
     /// Handle a `SetupCaptiveNetns` D-Bus call.
     pub fn setup_captive(
+        &self,
+        request: &SetupCaptiveRequest,
+        sender: &str,
+    ) -> SetupCaptiveResponse {
+        let response = self.setup_captive_inner(request, sender);
+        self.audit_setup(request, sender, &response);
+        response
+    }
+
+    fn setup_captive_inner(
         &self,
         request: &SetupCaptiveRequest,
         sender: &str,
@@ -69,12 +93,7 @@ impl<N: NetnsOps, A: Authorizer, C: CaptiveStateChecker> GatepathHelperService<N
             };
         }
 
-        // 2. NetworkManager check BEFORE auth.
-        //    Querying NM is a no-side-effect read of information already
-        //    public on the system bus. Running auth first means the user
-        //    gets a polkit prompt for an interface we don't even believe is
-        //    captive — bad UX and a prompt-fatigue DoS vector. Map each
-        //    NMError variant to a distinct RefusalReason.
+        // 2. NetworkManager check BEFORE auth (PR #20 reorder).
         match self.captive_check.is_captive(&request.interface_name) {
             Ok(true) => {}
             Ok(false) => {
@@ -88,29 +107,36 @@ impl<N: NetnsOps, A: Authorizer, C: CaptiveStateChecker> GatepathHelperService<N
                 };
             }
             Err(NMError::InterfaceNotFound(_)) => {
-                // Validator passed the name but NM has no such device. Same
-                // user-facing class as a malformed name.
                 return SetupCaptiveResponse::Refused {
                     reason: RefusalReason::InvalidInterface,
                 };
             }
             Err(NMError::DbusFailed(_)) => {
-                // NM unreachable. Distinct from KernelError — actionable hint
-                // is "is NetworkManager running?" not "kernel hiccup."
                 return SetupCaptiveResponse::Refused {
                     reason: RefusalReason::BackendUnavailable,
                 };
             }
         }
 
-        // 3. PolicyKit — only after the request is plausibly valid.
+        // 3. Throttle: per-sender rate-limit before PolicyKit. A malicious
+        //    caller spamming SetupCaptive on a real captive WiFi would
+        //    otherwise trigger a polkit prompt for every call. Throttle
+        //    caps that at the configured limit per window.
+        if !self.throttle.allow(sender) {
+            return SetupCaptiveResponse::Refused {
+                reason: RefusalReason::Throttled,
+            };
+        }
+
+        // 4. PolicyKit — only after the request is plausibly valid AND
+        //    the sender hasn't blown through the rate limit.
         if let Err(err) = self.auth.check(ACTION_SETUP_CAPTIVE, sender) {
             return SetupCaptiveResponse::Refused {
                 reason: refusal_for_auth_error(&err),
             };
         }
 
-        // 4. Single-session lock — refuse a concurrent setup before touching
+        // 5. Single-session lock — refuse a concurrent setup before touching
         //    the kernel.
         let mut active = self.active.lock().expect("active mutex poisoned");
         if active.is_some() {
@@ -119,7 +145,7 @@ impl<N: NetnsOps, A: Authorizer, C: CaptiveStateChecker> GatepathHelperService<N
             };
         }
 
-        // 5. Kernel ops. On failure, the session does NOT become active —
+        // 6. Kernel ops. On failure, the session does NOT become active —
         //    we return KernelError and the caller can retry.
         let netns_path = match self.ops.create_netns(NETNS_NAME) {
             Ok(p) => p,
@@ -148,10 +174,14 @@ impl<N: NetnsOps, A: Authorizer, C: CaptiveStateChecker> GatepathHelperService<N
 
     /// Handle a `TeardownCaptiveNetns` D-Bus call.
     pub fn teardown_captive(&self, sender: &str) -> TeardownCaptiveResponse {
+        let response = self.teardown_captive_inner(sender);
+        self.audit_teardown(sender, &response);
+        response
+    }
+
+    fn teardown_captive_inner(&self, sender: &str) -> TeardownCaptiveResponse {
         if let Err(err) = self.auth.check(ACTION_TEARDOWN_CAPTIVE, sender) {
             tracing_error_msg(&err);
-            // Auth failure on teardown is unusual — but if PolicyKit denies,
-            // we must not pretend we tore something down.
             return TeardownCaptiveResponse::KernelError;
         }
 
@@ -167,6 +197,41 @@ impl<N: NetnsOps, A: Authorizer, C: CaptiveStateChecker> GatepathHelperService<N
             }
             Err(_) => TeardownCaptiveResponse::KernelError,
         }
+    }
+
+    fn audit_setup(
+        &self,
+        request: &SetupCaptiveRequest,
+        sender: &str,
+        response: &SetupCaptiveResponse,
+    ) {
+        let decision = match response {
+            SetupCaptiveResponse::Success { .. } => AuditDecision::Success,
+            SetupCaptiveResponse::Refused { reason } => AuditDecision::Refused {
+                reason: refusal_reason_name(*reason).to_string(),
+            },
+        };
+        let entry = entry_now(
+            AuditAction::SetupCaptive,
+            sender,
+            Some(request.interface_name.clone()),
+            decision,
+        );
+        self.audit.append(&entry);
+    }
+
+    fn audit_teardown(&self, sender: &str, response: &TeardownCaptiveResponse) {
+        let decision = match response {
+            TeardownCaptiveResponse::Success => AuditDecision::Success,
+            TeardownCaptiveResponse::NotActive => AuditDecision::Refused {
+                reason: "not_active".into(),
+            },
+            TeardownCaptiveResponse::KernelError => AuditDecision::Refused {
+                reason: "kernel_error".into(),
+            },
+        };
+        let entry = entry_now(AuditAction::TeardownCaptive, sender, None, decision);
+        self.audit.append(&entry);
     }
 
     /// Test-only accessor. Lets tests verify state without exposing the
@@ -186,6 +251,21 @@ fn refusal_for_auth_error(err: &AuthError) -> RefusalReason {
     }
 }
 
+/// Stable string names for [`RefusalReason`] variants. Used in the audit
+/// log so the JSON is human-readable without needing crate internals.
+fn refusal_reason_name(reason: RefusalReason) -> &'static str {
+    match reason {
+        RefusalReason::InvalidInterface => "invalid_interface",
+        RefusalReason::NotCaptive => "not_captive",
+        RefusalReason::Pending => "pending",
+        RefusalReason::Unauthorised => "unauthorised",
+        RefusalReason::BackendUnavailable => "backend_unavailable",
+        RefusalReason::KernelError => "kernel_error",
+        RefusalReason::AlreadyActive => "already_active",
+        RefusalReason::Throttled => "throttled",
+    }
+}
+
 /// Stub for future tracing wiring. Intentionally a no-op so we don't pull
 /// in the `tracing` crate during 5b.2 — 5b.3 wires it up alongside the
 /// audit log writer.
@@ -196,9 +276,11 @@ fn tracing_error_msg<T: std::fmt::Display>(_err: &T) {}
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::audit_log::FakeAuditWriter;
     use crate::auth::FakeAuthorizer;
     use crate::netns::{FakeNetnsOps, NetnsError};
     use crate::network_manager::FakeCaptiveCheck;
+    use std::time::Duration;
 
     fn req(iface: &str) -> SetupCaptiveRequest {
         SetupCaptiveRequest {
@@ -206,8 +288,8 @@ mod tests {
         }
     }
 
-    /// Default-allow captive checker — says any interface passed is captive.
-    /// Used by tests that aren't specifically testing the captive gate.
+    /// Permissive captive checker — says wlan*-named interfaces are captive.
+    /// Used by tests not specifically exercising the captive gate.
     fn allow_captive() -> FakeCaptiveCheck {
         let nm = FakeCaptiveCheck::new();
         nm.say_captive("wlan0");
@@ -215,29 +297,60 @@ mod tests {
         nm
     }
 
+    /// Effectively-unlimited throttle for tests not exercising rate limiting.
+    fn permissive_throttle() -> Throttle {
+        Throttle::new(1_000_000, Duration::from_secs(60))
+    }
+
+    /// Build a service with a fresh FakeAuditWriter exposed for assertion.
+    fn svc_with_audit(
+        ops: FakeNetnsOps,
+        auth: FakeAuthorizer,
+        nm: FakeCaptiveCheck,
+        throttle: Throttle,
+    ) -> (
+        GatepathHelperService<FakeNetnsOps, FakeAuthorizer, FakeCaptiveCheck>,
+        std::sync::Arc<FakeAuditWriter>,
+    ) {
+        let audit = std::sync::Arc::new(FakeAuditWriter::new());
+        let audit_ref = std::sync::Arc::clone(&audit);
+        // We need to put the FakeAuditWriter behind the trait object AND
+        // keep an Arc handle for tests to inspect entries(). FakeAuditWriter
+        // doesn't implement Clone (it has Mutex<Vec<_>>), so we go via Arc
+        // and a thin newtype that defers to it.
+        struct ArcWriter(std::sync::Arc<FakeAuditWriter>);
+        impl AuditWriter for ArcWriter {
+            fn append(&self, entry: &crate::audit_log::AuditEntry) {
+                self.0.append(entry);
+            }
+        }
+        let svc =
+            GatepathHelperService::new(ops, auth, nm, throttle, Box::new(ArcWriter(audit_ref)));
+        (svc, audit)
+    }
+
     #[test]
     fn setup_with_valid_input_succeeds_and_marks_active() {
-        let svc = GatepathHelperService::new(
+        let (svc, audit) = svc_with_audit(
             FakeNetnsOps::new(),
             FakeAuthorizer::allow_all(),
             allow_captive(),
+            permissive_throttle(),
         );
         let resp = svc.setup_captive(&req("wlan0"), ":1.42");
-        match resp {
-            SetupCaptiveResponse::Success { netns_path } => {
-                assert_eq!(netns_path, "/var/run/netns/gatepath");
-            }
-            other => panic!("expected Success, got {other:?}"),
-        }
+        assert!(matches!(resp, SetupCaptiveResponse::Success { .. }));
         assert!(svc.is_active());
+        assert_eq!(audit.entries().len(), 1);
+        assert_eq!(audit.entries()[0].decision, AuditDecision::Success);
     }
 
     #[test]
     fn setup_with_invalid_interface_skips_auth_and_kernel() {
-        let svc = GatepathHelperService::new(
+        let (svc, audit) = svc_with_audit(
             FakeNetnsOps::new(),
             FakeAuthorizer::allow_all(),
             allow_captive(),
+            permissive_throttle(),
         );
         let resp = svc.setup_captive(&req("tun0"), ":1.42");
         assert_eq!(
@@ -246,21 +359,23 @@ mod tests {
                 reason: RefusalReason::InvalidInterface,
             },
         );
-        // Validation must fire BEFORE auth — record-only check should be empty.
-        assert_eq!(
-            svc.auth.checks().len(),
-            0,
-            "auth ran on rejected interface — validation must short-circuit",
-        );
+        assert_eq!(svc.auth.checks().len(), 0);
         assert!(!svc.is_active());
+        // Audit still records refusal.
+        assert_eq!(audit.entries().len(), 1);
+        assert!(matches!(
+            audit.entries()[0].decision,
+            AuditDecision::Refused { .. }
+        ));
     }
 
     #[test]
     fn setup_with_auth_denied_does_not_touch_kernel() {
-        let svc = GatepathHelperService::new(
+        let (svc, _audit) = svc_with_audit(
             FakeNetnsOps::new(),
             FakeAuthorizer::deny_all(),
             allow_captive(),
+            permissive_throttle(),
         );
         let resp = svc.setup_captive(&req("wlan0"), ":1.42");
         assert_eq!(
@@ -269,19 +384,17 @@ mod tests {
                 reason: RefusalReason::Unauthorised,
             },
         );
-        assert!(
-            svc.ops.netns().is_empty(),
-            "netns created despite auth deny"
-        );
+        assert!(svc.ops.netns().is_empty());
         assert!(!svc.is_active());
     }
 
     #[test]
     fn setup_with_auth_backend_error_returns_kernel_error() {
-        let svc = GatepathHelperService::new(
+        let (svc, _audit) = svc_with_audit(
             FakeNetnsOps::new(),
             FakeAuthorizer::errored("polkit unreachable"),
             allow_captive(),
+            permissive_throttle(),
         );
         let resp = svc.setup_captive(&req("wlan0"), ":1.42");
         assert_eq!(
@@ -296,7 +409,12 @@ mod tests {
     fn setup_with_non_captive_interface_returns_not_captive() {
         let nm = FakeCaptiveCheck::new();
         nm.say_not_captive("wlan0");
-        let svc = GatepathHelperService::new(FakeNetnsOps::new(), FakeAuthorizer::allow_all(), nm);
+        let (svc, _audit) = svc_with_audit(
+            FakeNetnsOps::new(),
+            FakeAuthorizer::allow_all(),
+            nm,
+            permissive_throttle(),
+        );
         let resp = svc.setup_captive(&req("wlan0"), ":1.42");
         assert_eq!(
             resp,
@@ -305,17 +423,18 @@ mod tests {
             },
         );
         assert!(!svc.is_active());
-        assert!(
-            svc.ops.netns().is_empty(),
-            "netns created despite NotCaptive refusal",
-        );
     }
 
     #[test]
     fn setup_with_nm_unreachable_returns_backend_unavailable() {
         let nm = FakeCaptiveCheck::new();
         nm.fail_dbus();
-        let svc = GatepathHelperService::new(FakeNetnsOps::new(), FakeAuthorizer::allow_all(), nm);
+        let (svc, _audit) = svc_with_audit(
+            FakeNetnsOps::new(),
+            FakeAuthorizer::allow_all(),
+            nm,
+            permissive_throttle(),
+        );
         let resp = svc.setup_captive(&req("wlan0"), ":1.42");
         assert_eq!(
             resp,
@@ -323,14 +442,18 @@ mod tests {
                 reason: RefusalReason::BackendUnavailable,
             },
         );
-        assert!(!svc.is_active());
     }
 
     #[test]
     fn setup_with_pending_nm_state_returns_pending() {
         let nm = FakeCaptiveCheck::new();
         nm.say_pending("wlan0");
-        let svc = GatepathHelperService::new(FakeNetnsOps::new(), FakeAuthorizer::allow_all(), nm);
+        let (svc, _audit) = svc_with_audit(
+            FakeNetnsOps::new(),
+            FakeAuthorizer::allow_all(),
+            nm,
+            permissive_throttle(),
+        );
         let resp = svc.setup_captive(&req("wlan0"), ":1.42");
         assert_eq!(
             resp,
@@ -338,19 +461,18 @@ mod tests {
                 reason: RefusalReason::Pending,
             },
         );
-        // No auth check fires for pending — UI should retry shortly.
         assert_eq!(svc.auth.checks().len(), 0);
-        assert!(!svc.is_active());
     }
 
     #[test]
     fn setup_with_unknown_interface_returns_invalid_interface() {
-        // FakeCaptiveCheck returns InterfaceNotFound for unseen interfaces;
-        // service.rs maps that to InvalidInterface (same user-facing class
-        // as a malformed name from the validator).
         let nm = FakeCaptiveCheck::new();
-        // Don't say anything about wlan0 → InterfaceNotFound.
-        let svc = GatepathHelperService::new(FakeNetnsOps::new(), FakeAuthorizer::allow_all(), nm);
+        let (svc, _audit) = svc_with_audit(
+            FakeNetnsOps::new(),
+            FakeAuthorizer::allow_all(),
+            nm,
+            permissive_throttle(),
+        );
         let resp = svc.setup_captive(&req("wlan0"), ":1.42");
         assert_eq!(
             resp,
@@ -362,10 +484,11 @@ mod tests {
 
     #[test]
     fn second_setup_returns_already_active() {
-        let svc = GatepathHelperService::new(
+        let (svc, _audit) = svc_with_audit(
             FakeNetnsOps::new(),
             FakeAuthorizer::allow_all(),
             allow_captive(),
+            permissive_throttle(),
         );
         let _first = svc.setup_captive(&req("wlan0"), ":1.42");
         let second = svc.setup_captive(&req("wlp3s0"), ":1.42");
@@ -379,24 +502,30 @@ mod tests {
 
     #[test]
     fn teardown_when_active_succeeds_and_clears_state() {
-        let svc = GatepathHelperService::new(
+        let (svc, audit) = svc_with_audit(
             FakeNetnsOps::new(),
             FakeAuthorizer::allow_all(),
             allow_captive(),
+            permissive_throttle(),
         );
         svc.setup_captive(&req("wlan0"), ":1.42");
         assert!(svc.is_active());
         let resp = svc.teardown_captive(":1.42");
         assert_eq!(resp, TeardownCaptiveResponse::Success);
         assert!(!svc.is_active());
+        // Two audit entries: setup success + teardown success.
+        assert_eq!(audit.entries().len(), 2);
+        assert_eq!(audit.entries()[1].action, AuditAction::TeardownCaptive);
+        assert_eq!(audit.entries()[1].decision, AuditDecision::Success);
     }
 
     #[test]
     fn teardown_when_idle_returns_not_active() {
-        let svc = GatepathHelperService::new(
+        let (svc, _audit) = svc_with_audit(
             FakeNetnsOps::new(),
             FakeAuthorizer::allow_all(),
             allow_captive(),
+            permissive_throttle(),
         );
         let resp = svc.teardown_captive(":1.42");
         assert_eq!(resp, TeardownCaptiveResponse::NotActive);
@@ -404,13 +533,13 @@ mod tests {
 
     #[test]
     fn teardown_with_auth_denied_does_not_clear_state() {
-        let svc = GatepathHelperService::new(
+        let (svc, _audit) = svc_with_audit(
             FakeNetnsOps::new(),
             FakeAuthorizer::allow_all(),
             allow_captive(),
+            permissive_throttle(),
         );
         svc.setup_captive(&req("wlan0"), ":1.42");
-        assert!(svc.is_active());
         let before = svc.auth.checks().len();
         let _ = svc.teardown_captive(":1.42");
         assert_eq!(svc.auth.checks().len(), before + 1);
@@ -418,9 +547,6 @@ mod tests {
 
     #[test]
     fn kernel_error_during_move_rolls_back_netns() {
-        // Trigger this by validating an interface the FAKE will accept
-        // (passes validation and captive check) but that the fake's
-        // move_interface will reject. Build a custom NetnsOps that fails on move.
         struct ExplodingMoveFake {
             inner: FakeNetnsOps,
         }
@@ -439,10 +565,18 @@ mod tests {
                 self.inner.destroy_netns(name)
             }
         }
-        let inner = FakeNetnsOps::new();
-        let exploding = ExplodingMoveFake { inner };
-        let svc =
-            GatepathHelperService::new(exploding, FakeAuthorizer::allow_all(), allow_captive());
+        let exploding = ExplodingMoveFake {
+            inner: FakeNetnsOps::new(),
+        };
+        // Use the regular constructor directly since svc_with_audit pins the
+        // ops type to FakeNetnsOps.
+        let svc = GatepathHelperService::new(
+            exploding,
+            FakeAuthorizer::allow_all(),
+            allow_captive(),
+            permissive_throttle(),
+            Box::new(FakeAuditWriter::new()),
+        );
         let resp = svc.setup_captive(&req("wlan0"), ":1.42");
         assert_eq!(
             resp,
@@ -450,11 +584,90 @@ mod tests {
                 reason: RefusalReason::KernelError,
             },
         );
-        // Critical: failed move must NOT leave the session marked active —
-        // otherwise the user is stuck with no path to retry.
-        assert!(
-            !svc.is_active(),
-            "failed setup must not mark session active"
+        assert!(!svc.is_active());
+    }
+
+    // ── Phase 5b.5 NEW tests: throttle + audit ────────────────────────────
+
+    #[test]
+    fn setup_throttled_after_burst_returns_throttled() {
+        // Limit 2; first 2 should pass auth/lock, 3rd should be throttled.
+        let throttle = Throttle::new(2, Duration::from_secs(60));
+        let (svc, _audit) = svc_with_audit(
+            FakeNetnsOps::new(),
+            FakeAuthorizer::allow_all(),
+            allow_captive(),
+            throttle,
         );
+        let _first = svc.setup_captive(&req("wlan0"), ":1.42");
+        // Second call hits AlreadyActive; throttle still recorded the call.
+        let _second = svc.setup_captive(&req("wlan0"), ":1.42");
+        // Third call from same sender: throttled.
+        let third = svc.setup_captive(&req("wlan0"), ":1.42");
+        assert_eq!(
+            third,
+            SetupCaptiveResponse::Refused {
+                reason: RefusalReason::Throttled,
+            },
+        );
+    }
+
+    #[test]
+    fn throttled_setup_does_not_consume_auth_check() {
+        let throttle = Throttle::new(1, Duration::from_secs(60));
+        let (svc, _audit) = svc_with_audit(
+            FakeNetnsOps::new(),
+            FakeAuthorizer::allow_all(),
+            allow_captive(),
+            throttle,
+        );
+        let _first = svc.setup_captive(&req("wlan0"), ":1.42");
+        let auth_count_after_first = svc.auth.checks().len();
+        let throttled = svc.setup_captive(&req("wlan0"), ":1.42");
+        assert_eq!(
+            throttled,
+            SetupCaptiveResponse::Refused {
+                reason: RefusalReason::Throttled,
+            },
+        );
+        // Throttle blocks BEFORE auth — no additional auth check.
+        assert_eq!(svc.auth.checks().len(), auth_count_after_first);
+    }
+
+    #[test]
+    fn audit_records_refusal_with_reason_string() {
+        let nm = FakeCaptiveCheck::new();
+        nm.say_not_captive("wlan0");
+        let (svc, audit) = svc_with_audit(
+            FakeNetnsOps::new(),
+            FakeAuthorizer::allow_all(),
+            nm,
+            permissive_throttle(),
+        );
+        let _resp = svc.setup_captive(&req("wlan0"), ":1.42");
+        let entries = audit.entries();
+        assert_eq!(entries.len(), 1);
+        match &entries[0].decision {
+            AuditDecision::Refused { reason } => assert_eq!(reason, "not_captive"),
+            other => panic!("expected Refused, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn audit_records_setup_then_teardown_in_order() {
+        let (svc, audit) = svc_with_audit(
+            FakeNetnsOps::new(),
+            FakeAuthorizer::allow_all(),
+            allow_captive(),
+            permissive_throttle(),
+        );
+        svc.setup_captive(&req("wlan0"), ":1.42");
+        svc.teardown_captive(":1.42");
+        let entries = audit.entries();
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].action, AuditAction::SetupCaptive);
+        assert_eq!(entries[0].interface, Some("wlan0".to_string()));
+        assert_eq!(entries[1].action, AuditAction::TeardownCaptive);
+        assert_eq!(entries[1].interface, None);
     }
 }

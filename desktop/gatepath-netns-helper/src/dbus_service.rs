@@ -56,6 +56,9 @@ pub enum HelperError {
     AlreadyActive(String),
     /// Teardown called when no session is active.
     NotActive(String),
+    /// Caller has exceeded the per-sender rate limit. UI should back off
+    /// without prompting the user again.
+    Throttled(String),
 }
 
 /// Extract the sender's bus name from the message header, refusing the call
@@ -89,6 +92,9 @@ impl HelperError {
             }
             RefusalReason::KernelError => Self::KernelError("kernel op failed".into()),
             RefusalReason::AlreadyActive => Self::AlreadyActive("session in flight".into()),
+            RefusalReason::Throttled => {
+                Self::Throttled("rate limit exceeded for this sender".into())
+            }
         }
     }
 }
