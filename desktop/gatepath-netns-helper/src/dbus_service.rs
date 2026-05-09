@@ -19,6 +19,7 @@
 use std::sync::Arc;
 
 use crate::auth::Authorizer;
+use crate::name_watch::NameWatcher;
 use crate::netns::NetnsOps;
 use crate::network_manager::CaptiveStateChecker;
 use crate::service::GatepathHelperService;
@@ -100,23 +101,26 @@ impl HelperError {
 }
 
 /// zbus-facing wrapper over `GatepathHelperService`. Generic over the same
-/// trait params so production wiring (`LinuxNetnsOps` + `PolicyKitAuthorizer`
-/// + `NMCaptiveCheck`) and integration tests (with fakes) reuse the binding.
+/// trait params so production wiring (`LinuxNetnsOps`, `PolicyKitAuthorizer`,
+/// `NMCaptiveCheck`, `LinuxNameWatcher`) and integration tests (with fakes)
+/// share the binding.
 pub struct DbusService<
     N: NetnsOps + Send + Sync + 'static,
     A: Authorizer + Send + Sync + 'static,
     C: CaptiveStateChecker + Send + Sync + 'static,
+    W: NameWatcher,
 > {
-    inner: Arc<GatepathHelperService<N, A, C>>,
+    inner: Arc<GatepathHelperService<N, A, C, W>>,
 }
 
 impl<
     N: NetnsOps + Send + Sync + 'static,
     A: Authorizer + Send + Sync + 'static,
     C: CaptiveStateChecker + Send + Sync + 'static,
-> DbusService<N, A, C>
+    W: NameWatcher,
+> DbusService<N, A, C, W>
 {
-    pub fn new(inner: Arc<GatepathHelperService<N, A, C>>) -> Self {
+    pub fn new(inner: Arc<GatepathHelperService<N, A, C, W>>) -> Self {
         Self { inner }
     }
 }
@@ -126,7 +130,8 @@ impl<
     N: NetnsOps + Send + Sync + 'static,
     A: Authorizer + Send + Sync + 'static,
     C: CaptiveStateChecker + Send + Sync + 'static,
-> DbusService<N, A, C>
+    W: NameWatcher,
+> DbusService<N, A, C, W>
 {
     /// `SetupCaptive(interface_name: s) -> s`
     ///

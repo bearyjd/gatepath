@@ -22,6 +22,7 @@ use std::time::Duration;
 use anyhow::Context;
 use gatepath_netns_helper::audit_log::FileAuditWriter;
 use gatepath_netns_helper::dbus_service::{BUS_NAME, DbusService, OBJECT_PATH};
+use gatepath_netns_helper::name_watch::LinuxNameWatcher;
 use gatepath_netns_helper::netns::LinuxNetnsOps;
 use gatepath_netns_helper::network_manager::NMCaptiveCheck;
 use gatepath_netns_helper::policykit::PolicyKitAuthorizer;
@@ -68,11 +69,13 @@ fn init_tracing() {
 }
 
 async fn run() -> anyhow::Result<()> {
-    // Build the production orchestrator. PolicyKit + NetworkManager + audit-
-    // log open failures here are fatal — we refuse to start without auth, the
-    // defence-in-depth captive check, or a working audit log path.
+    // Build the production orchestrator. PolicyKit + NetworkManager +
+    // name-watcher + audit-log open failures here are fatal — we refuse to
+    // start without auth, the defence-in-depth captive check, the
+    // disconnect watch (5b.6 leak prevention), or a working audit log path.
     let auth = PolicyKitAuthorizer::connect().context("connecting to PolicyKit")?;
     let captive_check = NMCaptiveCheck::connect().context("connecting to NetworkManager")?;
+    let watcher = LinuxNameWatcher::connect().context("connecting to D-Bus for name watch")?;
     let ops = LinuxNetnsOps::new();
     let throttle = Throttle::new(THROTTLE_LIMIT, THROTTLE_WINDOW);
     let audit = FileAuditWriter::open(PathBuf::from(AUDIT_LOG_PATH))
@@ -83,6 +86,7 @@ async fn run() -> anyhow::Result<()> {
         auth,
         captive_check,
         throttle,
+        watcher,
         Box::new(audit),
     ));
     let dbus_service = DbusService::new(service);
@@ -103,15 +107,10 @@ async fn run() -> anyhow::Result<()> {
         "registered on system bus"
     );
 
-    // D5.2: watch the connection's unique name. If the dbus-daemon reports
-    // our connection has died, we exit — systemd will deactivate us and a
-    // future client request will reactivate via D-Bus activation. This is
-    // the simplest implementation of "tear down on disconnect" since each
-    // helper invocation is one session anyway.
-    //
-    // Watching SPECIFIC client names (Gatepath UI's :1.X) for disconnect
-    // would let us tear down even when other clients remain — but that's
-    // 5b.4 territory once we have multiple potential callers.
+    // Per-session disconnect handling lives in the orchestrator now (5b.6):
+    // the name watcher fires an auto-teardown when the requesting sender's
+    // connection drops, even if we keep running for other clients. Helper
+    // process lifetime is governed by SIGTERM/SIGINT here.
     wait_for_shutdown(&conn).await
 }
 
