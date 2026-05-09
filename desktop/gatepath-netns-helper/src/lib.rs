@@ -45,12 +45,14 @@
 //! sign-in stops working. Other apps' VPN traffic is unaffected because the
 //! helper has no authorization to touch their interfaces.
 
+pub mod audit_log;
 pub mod auth;
 pub mod dbus_service;
 pub mod netns;
 pub mod network_manager;
 pub mod policykit;
 pub mod service;
+pub mod throttle;
 pub mod validation;
 
 /// Request shape for the D-Bus method `SetupCaptiveNetns(interface_name: s)`.
@@ -101,6 +103,10 @@ pub enum RefusalReason {
     KernelError,
     /// A previous setup is still active and hasn't been torn down.
     AlreadyActive,
+    /// Caller exceeded the per-sender rate limit. UI should back off and
+    /// retry after a brief delay; it should NOT prompt the user again.
+    /// Closes the prompt-fatigue DoS the devil's advocate review flagged.
+    Throttled,
 }
 
 /// Response shape for `TeardownCaptiveNetns`. No request payload — the helper

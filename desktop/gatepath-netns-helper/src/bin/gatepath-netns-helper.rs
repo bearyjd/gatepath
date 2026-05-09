@@ -16,15 +16,29 @@
 use std::process::ExitCode;
 use std::sync::Arc;
 
+use std::path::PathBuf;
+use std::time::Duration;
+
 use anyhow::Context;
+use gatepath_netns_helper::audit_log::FileAuditWriter;
 use gatepath_netns_helper::dbus_service::{BUS_NAME, DbusService, OBJECT_PATH};
 use gatepath_netns_helper::netns::LinuxNetnsOps;
 use gatepath_netns_helper::network_manager::NMCaptiveCheck;
 use gatepath_netns_helper::policykit::PolicyKitAuthorizer;
 use gatepath_netns_helper::service::GatepathHelperService;
+use gatepath_netns_helper::throttle::Throttle;
 use tokio::signal::unix::{SignalKind, signal};
 use tracing::{error, info, warn};
 use zbus::connection;
+
+/// Per-sender rate limit. Prevents prompt-fatigue DoS: 5 SetupCaptive calls
+/// per 60s from the same sender. Real Gatepath UI never approaches this.
+const THROTTLE_LIMIT: usize = 5;
+const THROTTLE_WINDOW: Duration = Duration::from_secs(60);
+
+/// Audit log path. Matches `StateDirectory=gatepath` in the systemd unit:
+/// systemd creates `/var/lib/gatepath/` with the helper's UID at startup.
+const AUDIT_LOG_PATH: &str = "/var/lib/gatepath/helper-audit.jsonl";
 
 #[tokio::main(flavor = "multi_thread", worker_threads = 2)]
 async fn main() -> ExitCode {
@@ -54,13 +68,23 @@ fn init_tracing() {
 }
 
 async fn run() -> anyhow::Result<()> {
-    // Build the production orchestrator. PolicyKit + NetworkManager
-    // connection failures here are fatal — we refuse to start without auth
-    // OR without the defence-in-depth captive check.
+    // Build the production orchestrator. PolicyKit + NetworkManager + audit-
+    // log open failures here are fatal — we refuse to start without auth, the
+    // defence-in-depth captive check, or a working audit log path.
     let auth = PolicyKitAuthorizer::connect().context("connecting to PolicyKit")?;
     let captive_check = NMCaptiveCheck::connect().context("connecting to NetworkManager")?;
     let ops = LinuxNetnsOps::new();
-    let service = Arc::new(GatepathHelperService::new(ops, auth, captive_check));
+    let throttle = Throttle::new(THROTTLE_LIMIT, THROTTLE_WINDOW);
+    let audit = FileAuditWriter::open(PathBuf::from(AUDIT_LOG_PATH))
+        .with_context(|| format!("opening audit log at {AUDIT_LOG_PATH}"))?;
+    info!(audit_log = AUDIT_LOG_PATH, "audit log opened");
+    let service = Arc::new(GatepathHelperService::new(
+        ops,
+        auth,
+        captive_check,
+        throttle,
+        Box::new(audit),
+    ));
     let dbus_service = DbusService::new(service);
 
     let conn = connection::Builder::system()
