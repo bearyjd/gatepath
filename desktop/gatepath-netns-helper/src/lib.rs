@@ -48,6 +48,7 @@
 pub mod audit_log;
 pub mod auth;
 pub mod dbus_service;
+pub mod name_watch;
 pub mod netns;
 pub mod network_manager;
 pub mod policykit;
