@@ -109,6 +109,25 @@ pub enum RefusalReason {
     Throttled,
 }
 
+impl RefusalReason {
+    /// Stable snake-case name for a refusal variant. Used in audit logs
+    /// and the D-Bus error mapping so a single source of truth exists for
+    /// the wire-visible names.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::InvalidInterface => "invalid_interface",
+            Self::NotCaptive => "not_captive",
+            Self::Pending => "pending",
+            Self::Unauthorised => "unauthorised",
+            Self::BackendUnavailable => "backend_unavailable",
+            Self::KernelError => "kernel_error",
+            Self::AlreadyActive => "already_active",
+            Self::Throttled => "throttled",
+        }
+    }
+}
+
 /// Response shape for `TeardownCaptiveNetns`. No request payload — the helper
 /// tears down whatever it set up most recently (per-process; helper tracks
 /// one active netns at a time, since Gatepath only ever has one captive

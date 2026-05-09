@@ -1,0 +1,24 @@
+# /etc/logrotate.d/gatepath-netns-helper
+#
+# Rotates the helper's per-action audit log to keep its size bounded.
+# Without rotation, a malicious caller spamming SetupCaptive forever (and
+# being throttled forever) would still grow the audit file unboundedly —
+# every refusal writes one line.
+#
+# Distros that package gatepath-netns-helper should install this file
+# alongside the systemd unit + D-Bus service file.
+
+/var/lib/gatepath/helper-audit.jsonl {
+    weekly
+    rotate 8
+    compress
+    delaycompress
+    missingok
+    notifempty
+    # The helper holds the file open with append mode. copytruncate keeps
+    # the same inode (so the open file descriptor stays valid) and zeros
+    # the file. Avoids a HUP-handler dance.
+    copytruncate
+    # Keep the same 0640 mode we open with from src/audit_log.rs.
+    create 0640 root root
+}
