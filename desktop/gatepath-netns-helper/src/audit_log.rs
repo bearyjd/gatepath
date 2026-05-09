@@ -15,11 +15,23 @@
 
 use std::fs::OpenOptions;
 use std::io::{BufWriter, Write};
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use serde::Serialize;
 use thiserror::Error;
+
+/// File mode for the audit log. `0640` = owner rw, group r, world none.
+/// Helper runs as root with `StateDirectory=gatepath` (`0750` per the
+/// systemd unit), so the audit log is reachable by root and the gatepath
+/// group only — not world-readable. Closes a temporal-pattern leak to
+/// other local users that the default umask-derived `0644` would expose.
+///
+/// `mode()` only applies on file CREATION; if the file already exists
+/// with looser permissions, this does NOT tighten them. Operators should
+/// ensure the systemd unit creates the StateDirectory fresh.
+const AUDIT_LOG_MODE: u32 = 0o640;
 
 /// One privileged-operation event. Schema is internal to the helper —
 /// changing field names is a breaking change for any external log
@@ -88,6 +100,7 @@ impl FileAuditWriter {
         let file = OpenOptions::new()
             .create(true)
             .append(true)
+            .mode(AUDIT_LOG_MODE)
             .open(&path)
             .map_err(|source| AuditError::OpenFailed {
                 path: path.clone(),
