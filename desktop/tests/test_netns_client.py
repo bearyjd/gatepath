@@ -1,0 +1,244 @@
+"""Tests for :py:mod:`gatepath.netns_client`.
+
+The real dasbus path is exercised in integration tests with a running
+helper; here we drive the client through a fake proxy that simulates
+both success and the helper's typed error variants.
+"""
+
+from __future__ import annotations
+
+import pytest
+
+from gatepath.netns_client import (
+    ERROR_PREFIX,
+    HelperUnavailable,
+    NetnsClient,
+    RefusalReason,
+    SetupRefused,
+    SetupSuccess,
+    TeardownRefused,
+    TeardownSuccess,
+    _dbus_error_name,
+)
+
+
+class _DBusError(Exception):
+    """Test stand-in for dasbus's DBusError.
+
+    Real dasbus exposes ``dbus_name`` on its error class; we mirror just
+    that attribute so :py:func:`gatepath.netns_client._dbus_error_name`
+    finds it via ``getattr``.
+    """
+
+    def __init__(self, dbus_name: str, message: str = "") -> None:
+        super().__init__(message or dbus_name)
+        self.dbus_name = dbus_name
+
+
+class FakeProxy:
+    """Hand-rolled fake satisfying :py:class:`HelperProxy`.
+
+    Tests configure ``setup_result`` and ``teardown_result`` to either
+    a return value (or ``None`` for teardown) or an exception to raise.
+    """
+
+    def __init__(self) -> None:
+        self.setup_result: object = "/var/run/netns/gatepath"
+        self.teardown_result: object = None
+        self.setup_calls: list[str] = []
+        self.teardown_calls: int = 0
+
+    def SetupCaptive(self, interface_name: str) -> str:  # noqa: N802
+        self.setup_calls.append(interface_name)
+        if isinstance(self.setup_result, BaseException):
+            raise self.setup_result
+        assert isinstance(self.setup_result, str)
+        return self.setup_result
+
+    def TeardownCaptive(self) -> None:  # noqa: N802
+        self.teardown_calls += 1
+        if isinstance(self.teardown_result, BaseException):
+            raise self.teardown_result
+
+
+# ── RefusalReason mapping ────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    ("suffix", "expected"),
+    [
+        ("InvalidInterface", RefusalReason.INVALID_INTERFACE),
+        ("NotCaptive", RefusalReason.NOT_CAPTIVE),
+        ("Pending", RefusalReason.PENDING),
+        ("Unauthorised", RefusalReason.UNAUTHORISED),
+        ("BackendUnavailable", RefusalReason.BACKEND_UNAVAILABLE),
+        ("KernelError", RefusalReason.KERNEL_ERROR),
+        ("AlreadyActive", RefusalReason.ALREADY_ACTIVE),
+        ("Throttled", RefusalReason.THROTTLED),
+        ("NotActive", RefusalReason.NOT_ACTIVE),
+    ],
+)
+def test_refusal_reason_maps_known_variants(suffix: str, expected: RefusalReason) -> None:
+    assert RefusalReason.from_dbus_error_name(ERROR_PREFIX + suffix) == expected
+
+
+def test_refusal_reason_unknown_suffix_maps_to_unknown() -> None:
+    assert (
+        RefusalReason.from_dbus_error_name(ERROR_PREFIX + "FuturePhase")
+        == RefusalReason.UNKNOWN
+    )
+
+
+def test_refusal_reason_foreign_prefix_maps_to_unknown() -> None:
+    assert (
+        RefusalReason.from_dbus_error_name("org.freedesktop.DBus.Error.AccessDenied")
+        == RefusalReason.UNKNOWN
+    )
+
+
+# ── _dbus_error_name extractor ───────────────────────────────────────────
+
+
+def test_dbus_error_name_reads_attribute() -> None:
+    exc = _DBusError(ERROR_PREFIX + "InvalidInterface", "interface not usable")
+    assert _dbus_error_name(exc) == ERROR_PREFIX + "InvalidInterface"
+
+
+def test_dbus_error_name_returns_none_for_plain_exception() -> None:
+    assert _dbus_error_name(RuntimeError("transport blew up")) is None
+
+
+def test_dbus_error_name_returns_none_for_empty_attribute() -> None:
+    exc = _DBusError("", "no name")
+    assert _dbus_error_name(exc) is None
+
+
+# ── setup_captive ────────────────────────────────────────────────────────
+
+
+def test_setup_captive_success_returns_netns_path() -> None:
+    proxy = FakeProxy()
+    proxy.setup_result = "/var/run/netns/gatepath"
+    client = NetnsClient(proxy)
+
+    result = client.setup_captive("wlan0")
+
+    assert result == SetupSuccess(netns_path="/var/run/netns/gatepath")
+    assert proxy.setup_calls == ["wlan0"]
+
+
+@pytest.mark.parametrize(
+    ("error_suffix", "expected_reason"),
+    [
+        ("InvalidInterface", RefusalReason.INVALID_INTERFACE),
+        ("NotCaptive", RefusalReason.NOT_CAPTIVE),
+        ("Pending", RefusalReason.PENDING),
+        ("Unauthorised", RefusalReason.UNAUTHORISED),
+        ("BackendUnavailable", RefusalReason.BACKEND_UNAVAILABLE),
+        ("KernelError", RefusalReason.KERNEL_ERROR),
+        ("AlreadyActive", RefusalReason.ALREADY_ACTIVE),
+        ("Throttled", RefusalReason.THROTTLED),
+    ],
+)
+def test_setup_captive_dbus_errors_map_to_typed_refusals(
+    error_suffix: str, expected_reason: RefusalReason
+) -> None:
+    proxy = FakeProxy()
+    proxy.setup_result = _DBusError(ERROR_PREFIX + error_suffix, "msg")
+    client = NetnsClient(proxy)
+
+    result = client.setup_captive("wlan0")
+
+    assert isinstance(result, SetupRefused)
+    assert result.reason == expected_reason
+    assert "msg" in result.detail
+
+
+def test_setup_captive_unknown_dbus_error_maps_to_unknown() -> None:
+    proxy = FakeProxy()
+    proxy.setup_result = _DBusError("org.freedesktop.DBus.Error.AccessDenied", "nope")
+    client = NetnsClient(proxy)
+
+    result = client.setup_captive("wlan0")
+
+    assert isinstance(result, SetupRefused)
+    assert result.reason == RefusalReason.UNKNOWN
+
+
+def test_setup_captive_transport_error_maps_to_unknown() -> None:
+    proxy = FakeProxy()
+    proxy.setup_result = RuntimeError("connection reset by peer")
+    client = NetnsClient(proxy)
+
+    result = client.setup_captive("wlan0")
+
+    assert isinstance(result, SetupRefused)
+    assert result.reason == RefusalReason.UNKNOWN
+    assert "connection reset" in result.detail
+
+
+def test_setup_captive_empty_path_maps_to_unknown() -> None:
+    proxy = FakeProxy()
+    proxy.setup_result = ""
+    client = NetnsClient(proxy)
+
+    result = client.setup_captive("wlan0")
+
+    assert isinstance(result, SetupRefused)
+    assert result.reason == RefusalReason.UNKNOWN
+
+
+# ── teardown_captive ─────────────────────────────────────────────────────
+
+
+def test_teardown_captive_success() -> None:
+    proxy = FakeProxy()
+    client = NetnsClient(proxy)
+
+    result = client.teardown_captive()
+
+    assert isinstance(result, TeardownSuccess)
+    assert proxy.teardown_calls == 1
+
+
+def test_teardown_captive_not_active_maps_to_typed_refusal() -> None:
+    proxy = FakeProxy()
+    proxy.teardown_result = _DBusError(ERROR_PREFIX + "NotActive", "nothing to tear")
+    client = NetnsClient(proxy)
+
+    result = client.teardown_captive()
+
+    assert isinstance(result, TeardownRefused)
+    assert result.reason == RefusalReason.NOT_ACTIVE
+
+
+def test_teardown_captive_kernel_error_maps_to_kernel_error() -> None:
+    proxy = FakeProxy()
+    proxy.teardown_result = _DBusError(ERROR_PREFIX + "KernelError", "destroy failed")
+    client = NetnsClient(proxy)
+
+    result = client.teardown_captive()
+
+    assert isinstance(result, TeardownRefused)
+    assert result.reason == RefusalReason.KERNEL_ERROR
+
+
+def test_teardown_captive_unknown_error_maps_to_unknown() -> None:
+    proxy = FakeProxy()
+    proxy.teardown_result = RuntimeError("disconnected")
+    client = NetnsClient(proxy)
+
+    result = client.teardown_captive()
+
+    assert isinstance(result, TeardownRefused)
+    assert result.reason == RefusalReason.UNKNOWN
+
+
+# ── HelperUnavailable surface ────────────────────────────────────────────
+
+
+def test_helper_unavailable_is_subclass_of_exception() -> None:
+    # Pin the public surface: callers catch this specific class to
+    # decide "fall back to static UX". A future refactor that changed
+    # the base class would silently break those callers.
+    assert issubclass(HelperUnavailable, Exception)
