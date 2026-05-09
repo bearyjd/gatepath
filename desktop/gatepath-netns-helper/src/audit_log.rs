@@ -52,6 +52,10 @@ pub struct AuditEntry {
 pub enum AuditAction {
     SetupCaptive,
     TeardownCaptive,
+    /// Auto-teardown driven by a D-Bus disconnect (Phase 5b.6). Distinct
+    /// from `TeardownCaptive` so an operator reading the log can tell the
+    /// helper cleaned up after a UI crash vs the user clicking "done".
+    AutoTeardown,
 }
 
 /// Decision recorded in the audit log. `Refused` carries the
