@@ -19,6 +19,7 @@ use std::sync::Arc;
 use anyhow::Context;
 use gatepath_netns_helper::dbus_service::{BUS_NAME, DbusService, OBJECT_PATH};
 use gatepath_netns_helper::netns::LinuxNetnsOps;
+use gatepath_netns_helper::network_manager::NMCaptiveCheck;
 use gatepath_netns_helper::policykit::PolicyKitAuthorizer;
 use gatepath_netns_helper::service::GatepathHelperService;
 use tokio::signal::unix::{SignalKind, signal};
@@ -53,11 +54,13 @@ fn init_tracing() {
 }
 
 async fn run() -> anyhow::Result<()> {
-    // Build the production orchestrator. PolicyKit connection failure here
-    // is fatal — we refuse to start without auth.
+    // Build the production orchestrator. PolicyKit + NetworkManager
+    // connection failures here are fatal — we refuse to start without auth
+    // OR without the defence-in-depth captive check.
     let auth = PolicyKitAuthorizer::connect().context("connecting to PolicyKit")?;
+    let captive_check = NMCaptiveCheck::connect().context("connecting to NetworkManager")?;
     let ops = LinuxNetnsOps::new();
-    let service = Arc::new(GatepathHelperService::new(ops, auth));
+    let service = Arc::new(GatepathHelperService::new(ops, auth, captive_check));
     let dbus_service = DbusService::new(service);
 
     let conn = connection::Builder::system()

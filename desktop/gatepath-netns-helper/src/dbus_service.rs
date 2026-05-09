@@ -20,6 +20,7 @@ use std::sync::Arc;
 
 use crate::auth::Authorizer;
 use crate::netns::NetnsOps;
+use crate::network_manager::CaptiveStateChecker;
 use crate::service::GatepathHelperService;
 use crate::{RefusalReason, SetupCaptiveRequest, SetupCaptiveResponse, TeardownCaptiveResponse};
 
@@ -40,7 +41,6 @@ pub enum HelperError {
     /// Interface name failed `validate_interface_name`.
     InvalidInterface(String),
     /// Interface exists but `NetworkManager` does not flag it as captive.
-    /// Reserved for 5b.4 — currently never returned.
     NotCaptive(String),
     /// `PolicyKit` denied authorisation for the calling user.
     Unauthorised(String),
@@ -82,20 +82,34 @@ impl HelperError {
 }
 
 /// zbus-facing wrapper over `GatepathHelperService`. Generic over the same
-/// trait params so production wiring (`LinuxNetnsOps` + `PolicyKitAuthorizer`)
-/// and integration tests (with fakes) reuse the binding.
-pub struct DbusService<N: NetnsOps + Send + Sync + 'static, A: Authorizer + Send + Sync + 'static> {
-    inner: Arc<GatepathHelperService<N, A>>,
+/// trait params so production wiring (`LinuxNetnsOps` + `PolicyKitAuthorizer`
+/// + `NMCaptiveCheck`) and integration tests (with fakes) reuse the binding.
+pub struct DbusService<
+    N: NetnsOps + Send + Sync + 'static,
+    A: Authorizer + Send + Sync + 'static,
+    C: CaptiveStateChecker + Send + Sync + 'static,
+> {
+    inner: Arc<GatepathHelperService<N, A, C>>,
 }
 
-impl<N: NetnsOps + Send + Sync + 'static, A: Authorizer + Send + Sync + 'static> DbusService<N, A> {
-    pub fn new(inner: Arc<GatepathHelperService<N, A>>) -> Self {
+impl<
+    N: NetnsOps + Send + Sync + 'static,
+    A: Authorizer + Send + Sync + 'static,
+    C: CaptiveStateChecker + Send + Sync + 'static,
+> DbusService<N, A, C>
+{
+    pub fn new(inner: Arc<GatepathHelperService<N, A, C>>) -> Self {
         Self { inner }
     }
 }
 
 #[zbus::interface(name = "cc.grepon.Gatepath.NetNsHelper1")]
-impl<N: NetnsOps + Send + Sync + 'static, A: Authorizer + Send + Sync + 'static> DbusService<N, A> {
+impl<
+    N: NetnsOps + Send + Sync + 'static,
+    A: Authorizer + Send + Sync + 'static,
+    C: CaptiveStateChecker + Send + Sync + 'static,
+> DbusService<N, A, C>
+{
     /// `SetupCaptive(interface_name: s) -> s`
     ///
     /// Returns the netns path (`/var/run/netns/gatepath`) on success, a
