@@ -77,15 +77,26 @@ pub enum SetupCaptiveResponse {
 
 /// Stable identifiers for refusal cases. The UI maps these to the strings
 /// shown to the user; keeping the wire format stable lets us evolve copy
-/// without bumping the protocol.
+/// without bumping the protocol. Variants are append-only — old clients
+/// that don't know a new variant should treat it as a generic refusal.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RefusalReason {
-    /// The requested interface name failed [`validation::validate_interface_name`].
+    /// The requested interface name failed [`validation::validate_interface_name`]
+    /// OR the interface doesn't exist on the system at all (per `NetworkManager`'s
+    /// device list). Both are "this name is not usable" from the user's POV.
     InvalidInterface,
-    /// The interface exists but NetworkManager does not flag it as captive.
+    /// The interface exists but `NetworkManager` does not flag it as captive.
     NotCaptive,
-    /// PolicyKit denied authorisation for the calling user.
+    /// `NetworkManager` is still evaluating connectivity for this interface
+    /// (state == `NM_CONNECTIVITY_UNKNOWN`). Distinct from `NotCaptive` so the
+    /// UI can show "retry shortly" instead of "this isn't a captive network".
+    Pending,
+    /// `PolicyKit` denied authorisation for the calling user.
     Unauthorised,
+    /// `NetworkManager` D-Bus call itself failed — service unreachable, schema
+    /// mismatch, etc. Distinct from `KernelError` so the UI can suggest
+    /// "is NetworkManager running?" instead of a generic kernel hint.
+    BackendUnavailable,
     /// Kernel returned an error during the netns/interface migration.
     KernelError,
     /// A previous setup is still active and hasn't been torn down.

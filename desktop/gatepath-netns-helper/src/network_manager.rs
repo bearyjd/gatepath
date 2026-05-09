@@ -25,13 +25,18 @@ use zbus::zvariant::OwnedObjectPath;
 pub enum NMError {
     #[error("interface '{0}' not found among NetworkManager devices")]
     InterfaceNotFound(String),
+    #[error("NetworkManager is still evaluating connectivity for '{0}'")]
+    Pending(String),
     #[error("NetworkManager D-Bus call failed: {0}")]
     DbusFailed(String),
 }
 
-/// `NM_CONNECTIVITY_PORTAL` per `nm-dbus-types.h`. Strict — we don't accept
-/// `LIMITED` (3) because that fires for any network NM couldn't fully
-/// validate, opening the helper to misuse for non-captive disruption.
+/// Connectivity state values per `nm-dbus-types.h`. We accept only `PORTAL`
+/// as captive; `LIMITED` is excluded because it fires for any network NM
+/// couldn't fully validate, opening the helper to misuse for non-captive
+/// disruption. `UNKNOWN` returns [`NMError::Pending`] so the UI can show
+/// "retry" instead of "not captive" — race against NM's poll loop.
+const NM_CONNECTIVITY_UNKNOWN: u32 = 0;
 const NM_CONNECTIVITY_PORTAL: u32 = 2;
 
 #[proxy(
@@ -119,7 +124,11 @@ impl CaptiveStateChecker for NMCaptiveCheck {
             let conn_state = device
                 .connectivity()
                 .map_err(|e| NMError::DbusFailed(e.to_string()))?;
-            return Ok(conn_state == NM_CONNECTIVITY_PORTAL);
+            return match conn_state {
+                NM_CONNECTIVITY_PORTAL => Ok(true),
+                NM_CONNECTIVITY_UNKNOWN => Err(NMError::Pending(interface.to_string())),
+                _ => Ok(false),
+            };
         }
         Err(NMError::InterfaceNotFound(interface.to_string()))
     }
@@ -131,7 +140,10 @@ impl CaptiveStateChecker for NMCaptiveCheck {
 pub struct FakeCaptiveCheck {
     /// Interface → captive boolean. Missing key → InterfaceNotFound.
     pub answers: std::sync::Mutex<std::collections::HashMap<String, bool>>,
-    /// Override that returns NMError::DbusFailed for the test "backend down" path.
+    /// Interfaces flagged "NM still evaluating" — yields `NMError::Pending`.
+    /// Checked before [`answers`]; presence here wins.
+    pub pending: std::sync::Mutex<std::collections::HashSet<String>>,
+    /// Override that returns `NMError::DbusFailed` for the test "backend down" path.
     pub force_dbus_error: std::sync::Mutex<bool>,
 }
 
@@ -140,6 +152,7 @@ impl FakeCaptiveCheck {
     pub fn new() -> Self {
         Self {
             answers: std::sync::Mutex::new(std::collections::HashMap::new()),
+            pending: std::sync::Mutex::new(std::collections::HashSet::new()),
             force_dbus_error: std::sync::Mutex::new(false),
         }
     }
@@ -161,6 +174,10 @@ impl FakeCaptiveCheck {
     pub fn fail_dbus(&self) {
         *self.force_dbus_error.lock().unwrap() = true;
     }
+
+    pub fn say_pending(&self, interface: &str) {
+        self.pending.lock().unwrap().insert(interface.to_string());
+    }
 }
 
 #[cfg(test)]
@@ -175,6 +192,9 @@ impl CaptiveStateChecker for FakeCaptiveCheck {
     fn is_captive(&self, interface: &str) -> Result<bool, NMError> {
         if *self.force_dbus_error.lock().unwrap() {
             return Err(NMError::DbusFailed("fake forced".into()));
+        }
+        if self.pending.lock().unwrap().contains(interface) {
+            return Err(NMError::Pending(interface.to_string()));
         }
         match self.answers.lock().unwrap().get(interface) {
             Some(captive) => Ok(*captive),

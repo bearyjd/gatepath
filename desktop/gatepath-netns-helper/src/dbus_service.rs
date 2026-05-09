@@ -38,12 +38,18 @@ pub const BUS_NAME: &str = "cc.grepon.Gatepath.NetNsHelper";
 pub enum HelperError {
     #[zbus(error)]
     ZBus(zbus::Error),
-    /// Interface name failed `validate_interface_name`.
+    /// Interface name failed `validate_interface_name` OR doesn't exist on
+    /// the system per `NetworkManager`'s device list.
     InvalidInterface(String),
     /// Interface exists but `NetworkManager` does not flag it as captive.
     NotCaptive(String),
+    /// `NetworkManager` is still evaluating connectivity. UI should retry.
+    Pending(String),
     /// `PolicyKit` denied authorisation for the calling user.
     Unauthorised(String),
+    /// `NetworkManager` D-Bus service is unreachable. Distinct from
+    /// `KernelError` so the UI can suggest "is NetworkManager running?".
+    BackendUnavailable(String),
     /// Kernel returned an error during the netns/interface migration.
     KernelError(String),
     /// A previous setup is still active and hasn't been torn down.
@@ -72,9 +78,15 @@ fn sender_or_unauthorised(header: &zbus::message::Header<'_>) -> Result<String, 
 impl HelperError {
     fn from_setup_refusal(reason: RefusalReason) -> Self {
         match reason {
-            RefusalReason::InvalidInterface => Self::InvalidInterface("validation refused".into()),
+            RefusalReason::InvalidInterface => {
+                Self::InvalidInterface("interface name not usable".into())
+            }
             RefusalReason::NotCaptive => Self::NotCaptive("not flagged captive".into()),
+            RefusalReason::Pending => Self::Pending("NetworkManager still evaluating".into()),
             RefusalReason::Unauthorised => Self::Unauthorised("PolicyKit denied".into()),
+            RefusalReason::BackendUnavailable => {
+                Self::BackendUnavailable("NetworkManager unreachable".into())
+            }
             RefusalReason::KernelError => Self::KernelError("kernel op failed".into()),
             RefusalReason::AlreadyActive => Self::AlreadyActive("session in flight".into()),
         }

@@ -5,11 +5,13 @@
 //!
 //!   1. Validate the interface name against [`crate::validation`] (refuses
 //!      VPN/tunnel/loopback/ethernet interfaces — the security spec from PR #14).
-//!   2. Run the PolicyKit auth check via [`crate::auth::Authorizer`].
-//!   3. Confirm with NetworkManager that the interface IS currently captive
-//!      via [`crate::network_manager::CaptiveStateChecker`] (defence-in-depth
-//!      added in 5b.4 — argument validation alone is not enough; an attacker
-//!      with valid PolicyKit creds could otherwise target any WiFi interface).
+//!   2. Confirm with NetworkManager that the interface IS currently captive
+//!      via [`crate::network_manager::CaptiveStateChecker`]. Runs BEFORE
+//!      PolicyKit so the user doesn't see an auth prompt for a non-captive
+//!      interface (and so a malicious caller can't trigger prompt fatigue
+//!      by spamming SetupCaptive on bogus targets).
+//!   3. Run the PolicyKit auth check via [`crate::auth::Authorizer`] — only
+//!      after the request is plausibly valid.
 //!   4. Drive the kernel ops via [`crate::netns::NetnsOps`].
 //!   5. Track a single active session — a second concurrent setup is refused
 //!      with [`crate::RefusalReason::AlreadyActive`].
@@ -26,7 +28,7 @@ use crate::{
     RefusalReason, SetupCaptiveRequest, SetupCaptiveResponse, TeardownCaptiveResponse,
     auth::{ACTION_SETUP_CAPTIVE, ACTION_TEARDOWN_CAPTIVE, AuthError, Authorizer},
     netns::NetnsOps,
-    network_manager::CaptiveStateChecker,
+    network_manager::{CaptiveStateChecker, NMError},
     validation::validate_interface_name,
 };
 
@@ -67,18 +69,12 @@ impl<N: NetnsOps, A: Authorizer, C: CaptiveStateChecker> GatepathHelperService<N
             };
         }
 
-        // 2. PolicyKit.
-        if let Err(err) = self.auth.check(ACTION_SETUP_CAPTIVE, sender) {
-            return SetupCaptiveResponse::Refused {
-                reason: refusal_for_auth_error(&err),
-            };
-        }
-
-        // 3. NetworkManager defence-in-depth: confirm the requested interface
-        //    is currently flagged captive. Argument validation says "this is
-        //    a sane WiFi name"; this says "...and it's actually captive right
-        //    now." Without this, an attacker with valid PolicyKit creds could
-        //    target any WiFi interface and disrupt the user's normal network.
+        // 2. NetworkManager check BEFORE auth.
+        //    Querying NM is a no-side-effect read of information already
+        //    public on the system bus. Running auth first means the user
+        //    gets a polkit prompt for an interface we don't even believe is
+        //    captive — bad UX and a prompt-fatigue DoS vector. Map each
+        //    NMError variant to a distinct RefusalReason.
         match self.captive_check.is_captive(&request.interface_name) {
             Ok(true) => {}
             Ok(false) => {
@@ -86,13 +82,32 @@ impl<N: NetnsOps, A: Authorizer, C: CaptiveStateChecker> GatepathHelperService<N
                     reason: RefusalReason::NotCaptive,
                 };
             }
-            Err(_) => {
-                // NM unreachable / interface missing — treat as KernelError;
-                // never auto-grant when the defence-in-depth backend is down.
+            Err(NMError::Pending(_)) => {
                 return SetupCaptiveResponse::Refused {
-                    reason: RefusalReason::KernelError,
+                    reason: RefusalReason::Pending,
                 };
             }
+            Err(NMError::InterfaceNotFound(_)) => {
+                // Validator passed the name but NM has no such device. Same
+                // user-facing class as a malformed name.
+                return SetupCaptiveResponse::Refused {
+                    reason: RefusalReason::InvalidInterface,
+                };
+            }
+            Err(NMError::DbusFailed(_)) => {
+                // NM unreachable. Distinct from KernelError — actionable hint
+                // is "is NetworkManager running?" not "kernel hiccup."
+                return SetupCaptiveResponse::Refused {
+                    reason: RefusalReason::BackendUnavailable,
+                };
+            }
+        }
+
+        // 3. PolicyKit — only after the request is plausibly valid.
+        if let Err(err) = self.auth.check(ACTION_SETUP_CAPTIVE, sender) {
+            return SetupCaptiveResponse::Refused {
+                reason: refusal_for_auth_error(&err),
+            };
         }
 
         // 4. Single-session lock — refuse a concurrent setup before touching
@@ -297,7 +312,7 @@ mod tests {
     }
 
     #[test]
-    fn setup_with_nm_unreachable_returns_kernel_error() {
+    fn setup_with_nm_unreachable_returns_backend_unavailable() {
         let nm = FakeCaptiveCheck::new();
         nm.fail_dbus();
         let svc = GatepathHelperService::new(FakeNetnsOps::new(), FakeAuthorizer::allow_all(), nm);
@@ -305,16 +320,34 @@ mod tests {
         assert_eq!(
             resp,
             SetupCaptiveResponse::Refused {
-                reason: RefusalReason::KernelError,
+                reason: RefusalReason::BackendUnavailable,
             },
         );
         assert!(!svc.is_active());
     }
 
     #[test]
-    fn setup_with_unknown_interface_returns_kernel_error() {
+    fn setup_with_pending_nm_state_returns_pending() {
+        let nm = FakeCaptiveCheck::new();
+        nm.say_pending("wlan0");
+        let svc = GatepathHelperService::new(FakeNetnsOps::new(), FakeAuthorizer::allow_all(), nm);
+        let resp = svc.setup_captive(&req("wlan0"), ":1.42");
+        assert_eq!(
+            resp,
+            SetupCaptiveResponse::Refused {
+                reason: RefusalReason::Pending,
+            },
+        );
+        // No auth check fires for pending — UI should retry shortly.
+        assert_eq!(svc.auth.checks().len(), 0);
+        assert!(!svc.is_active());
+    }
+
+    #[test]
+    fn setup_with_unknown_interface_returns_invalid_interface() {
         // FakeCaptiveCheck returns InterfaceNotFound for unseen interfaces;
-        // we map that to KernelError (never auto-grant on backend errors).
+        // service.rs maps that to InvalidInterface (same user-facing class
+        // as a malformed name from the validator).
         let nm = FakeCaptiveCheck::new();
         // Don't say anything about wlan0 → InterfaceNotFound.
         let svc = GatepathHelperService::new(FakeNetnsOps::new(), FakeAuthorizer::allow_all(), nm);
@@ -322,7 +355,7 @@ mod tests {
         assert_eq!(
             resp,
             SetupCaptiveResponse::Refused {
-                reason: RefusalReason::KernelError,
+                reason: RefusalReason::InvalidInterface,
             },
         );
     }
