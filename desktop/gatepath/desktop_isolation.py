@@ -88,6 +88,56 @@ class WaitInterrupted:
 WaitResult = Union[SubprocessExit, WaitTimeout, WaitInterrupted]
 
 
+def isolation_should_engage(
+    isolation: "Optional[DesktopIsolation]",
+    lookup: "Optional[CaptiveInterfaceLookup]",
+) -> bool:
+    """Return True iff the caller should attempt the isolated path.
+
+    Both inputs must be non-None AND the lookup must currently report a
+    captive interface. Pure-logic gate exposed for unit tests; the GTK
+    window duplicates the check inline so it can capture the interface
+    name returned by the lookup.
+    """
+    if isolation is None or lookup is None:
+        return False
+    return lookup.get_captive_interface() is not None
+
+
+# Forward-only type imports for the helper above. Done at the bottom of
+# the module so the rest of the file (which lives at the top of the
+# import graph) doesn't pull portal_monitor in eagerly.
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from gatepath.portal_monitor import CaptiveInterfaceLookup
+
+
+def wait_result_to_close_reason(result: WaitResult):
+    """Map a :py:class:`WaitResult` to a :py:class:`CloseReason`.
+
+    Pure function so callers can use it without depending on the rest of
+    the orchestrator. The mapping:
+
+    - ``SubprocessExit`` with ``is_clean`` → ``PORTAL_COMPLETED``
+    - ``SubprocessExit`` non-clean → ``ERROR``
+    - ``WaitTimeout`` → ``TIMEOUT``
+    - ``WaitInterrupted`` → ``USER_DISMISSED``
+    """
+    # Lazy import to avoid pulling portal_session in at module import.
+    from gatepath.portal_session import CloseReason  # noqa: PLC0415
+
+    if isinstance(result, SubprocessExit):
+        if result.is_clean:
+            return CloseReason.PORTAL_COMPLETED
+        return CloseReason.ERROR
+    if isinstance(result, WaitTimeout):
+        return CloseReason.TIMEOUT
+    if isinstance(result, WaitInterrupted):
+        return CloseReason.USER_DISMISSED
+    raise TypeError(f"unknown WaitResult: {result!r}")
+
+
 @dataclass(frozen=True)
 class DisengageSuccess:
     """Helper torn the active session down."""
