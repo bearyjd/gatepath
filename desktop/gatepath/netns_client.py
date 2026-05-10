@@ -221,27 +221,32 @@ class NetnsClient:
         self._proxy = proxy
 
     @classmethod
-    def connect(cls) -> "NetnsClient":
+    def connect(cls, *, bus=None) -> "NetnsClient":
         """Construct a real client backed by the system bus.
+
+        ``bus`` is an optional dasbus message-bus instance — if ``None``
+        the system bus is used. Integration tests inject a session bus
+        backed by a private `dbus-daemon` so they can exercise the wire
+        protocol without root.
 
         Raises :py:class:`HelperUnavailable` if dasbus or the system bus
         can't be reached, OR if the helper's bus name isn't registered.
         Caller should catch and degrade.
         """
-        try:
-            from dasbus.connection import SystemMessageBus  # noqa: PLC0415
-        except ImportError as exc:
-            raise HelperUnavailable(
-                f"dasbus not available: {exc}"
-            ) from exc
+        if bus is None:
+            try:
+                from dasbus.connection import SystemMessageBus  # noqa: PLC0415
+            except ImportError as exc:
+                raise HelperUnavailable(f"dasbus not available: {exc}") from exc
+            try:
+                bus = SystemMessageBus()
+            except Exception as exc:  # noqa: BLE001 — dasbus raises a few kinds
+                raise HelperUnavailable(f"system bus unreachable: {exc}") from exc
 
         try:
-            bus = SystemMessageBus()
             proxy = bus.get_proxy(BUS_NAME, OBJECT_PATH)
-        except Exception as exc:  # noqa: BLE001 — dasbus raises a few kinds
-            raise HelperUnavailable(
-                f"system bus unreachable: {exc}"
-            ) from exc
+        except Exception as exc:  # noqa: BLE001
+            raise HelperUnavailable(f"helper proxy unreachable: {exc}") from exc
 
         return cls(proxy)
 

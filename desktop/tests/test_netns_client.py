@@ -249,6 +249,39 @@ def test_teardown_captive_unknown_error_maps_to_unknown() -> None:
 # ── HelperUnavailable surface ────────────────────────────────────────────
 
 
+def test_connect_with_injected_bus_returns_client() -> None:
+    """Pin: NetnsClient.connect(bus=...) accepts a dasbus-style bus
+    object. Used by integration tests that spin up a session bus to
+    exercise the wire protocol without root.
+    """
+
+    class StubBus:
+        def __init__(self) -> None:
+            self.proxy_for: list[tuple[str, str]] = []
+
+        def get_proxy(self, bus_name: str, object_path: str):
+            self.proxy_for.append((bus_name, object_path))
+            return FakeProxy()
+
+    bus = StubBus()
+    client = NetnsClient.connect(bus=bus)
+
+    assert isinstance(client, NetnsClient)
+    # Pin the wire constants the production helper expects.
+    from gatepath.netns_client import BUS_NAME, OBJECT_PATH  # noqa: PLC0415
+
+    assert bus.proxy_for == [(BUS_NAME, OBJECT_PATH)]
+
+
+def test_connect_raises_helper_unavailable_when_bus_proxy_fails() -> None:
+    class FailingBus:
+        def get_proxy(self, bus_name: str, object_path: str):
+            raise RuntimeError("synthetic proxy failure")
+
+    with pytest.raises(HelperUnavailable):
+        NetnsClient.connect(bus=FailingBus())
+
+
 def test_helper_unavailable_is_subclass_of_exception() -> None:
     # Pin the public surface: callers catch this specific class to
     # decide "fall back to static UX". A future refactor that changed
