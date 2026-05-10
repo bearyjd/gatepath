@@ -7,9 +7,17 @@ module.  It is imported lazily inside GatepathApp.do_activate().
 from __future__ import annotations
 
 import logging
+import threading
 from typing import Callable, Optional
 
-from gatepath.portal_session import PortalSession
+from gatepath.desktop_isolation import (
+    DesktopIsolation,
+    EngageRefused,
+    EngageSuccess,
+    wait_result_to_close_reason,
+)
+from gatepath.portal_monitor import CaptiveInterfaceLookup
+from gatepath.portal_session import CloseReason, PortalSession
 from gatepath.session_controller import SessionController
 
 logger = logging.getLogger(__name__)
@@ -69,6 +77,8 @@ try:
             application: Adw.Application,
             probe_url: Optional[str] = None,
             session_controller: Optional[SessionController] = None,
+            isolation: Optional[DesktopIsolation] = None,
+            captive_interface_lookup: Optional[CaptiveInterfaceLookup] = None,
         ) -> None:
             super().__init__(application=application)
             self._probe_url = probe_url
@@ -79,6 +89,12 @@ try:
                 scheduler=GLibScheduler(),
                 on_close=self._on_session_closed,
             )
+            # Phase 5c.3: helper-driven isolation. Both must be present
+            # for the isolated path to engage; either ``None`` keeps the
+            # window on the existing in-process WebView path (matches the
+            # plan's degradation contract for Flatpak-only deployments).
+            self._isolation = isolation
+            self._captive_interface_lookup = captive_interface_lookup
             self.set_title("Gatepath")
             self.set_default_size(900, 650)
             self._build_ui()
@@ -111,9 +127,83 @@ try:
             [active_session] must be in PortalPhase.ACTIVE — the caller
             (controller wiring in app.py) builds it via `to_active()` before
             handing it here. The controller arms its own 10-minute timer.
+
+            Phase 5c.3: when both ``isolation`` and ``captive_interface_lookup``
+            were supplied at construction time AND the lookup returns an
+            interface, route through the helper-driven netns subprocess
+            instead of the in-process WebView. On engage refusal we
+            degrade to the in-process path (the existing default).
             """
             logger.info("Opening portal: %s", portal_url)
+            if self._try_open_portal_isolated(portal_url, active_session):
+                return
             self._controller.set_active(active_session)
+
+        def _try_open_portal_isolated(
+            self, portal_url: str, active_session: PortalSession
+        ) -> bool:
+            """Attempt the isolated path. Returns True iff the helper
+            engaged and the worker thread is now waiting for the
+            subprocess to exit. Returns False if isolation isn't
+            configured or the helper refused — caller should fall back
+            to the in-process path.
+            """
+            if self._isolation is None or self._captive_interface_lookup is None:
+                return False
+            interface = self._captive_interface_lookup.get_captive_interface()
+            if interface is None:
+                logger.info(
+                    "isolation configured but no captive interface visible; "
+                    "using in-process WebView"
+                )
+                return False
+            result = self._isolation.engage(portal_url, interface)
+            if isinstance(result, EngageRefused):
+                logger.info(
+                    "helper engage refused (stage=%s, reason=%s); "
+                    "using in-process WebView",
+                    result.stage,
+                    result.reason,
+                )
+                # If the refusal happened at the launch stage, the helper
+                # has the netns active — disengage so we don't leak it
+                # past this call.
+                if result.stage == "launch":
+                    self._isolation.disengage()
+                return False
+            assert isinstance(result, EngageSuccess)
+            logger.info(
+                "helper engaged: pid=%d netns=%s", result.pid, result.netns_path
+            )
+            self._controller.set_active(active_session)
+            self.set_visible(False)
+            threading.Thread(
+                target=self._wait_for_subprocess_thread,
+                name="gatepath-isolation-wait",
+                daemon=True,
+            ).start()
+            return True
+
+        def _wait_for_subprocess_thread(self) -> None:
+            """Worker-thread body: blocks on the helper's exit signal,
+            then bounces back to the GTK thread to close the session.
+            """
+            assert self._isolation is not None
+            wait_result = self._isolation.wait_for_subprocess()
+            close_reason = wait_result_to_close_reason(wait_result)
+            GLib.idle_add(self._on_subprocess_done, close_reason)
+
+        def _on_subprocess_done(self, close_reason: CloseReason) -> bool:
+            """GTK-thread continuation after the subprocess exits.
+
+            Returning False so GLib.idle_add doesn't repeat us.
+            """
+            logger.info("portal subprocess exited (close_reason=%s)", close_reason)
+            assert self._isolation is not None
+            self._controller.close(close_reason)
+            self._isolation.disengage()
+            self.set_visible(True)
+            return False
 
         def dismiss_session(self) -> None:
             """User-facing dismiss: route through controller (cancels timer + writes audit)."""
@@ -131,7 +221,7 @@ try:
                 completed_session.duration_seconds,
             )
 
-except (ImportError, ValueError):
+except (ImportError, ValueError, AttributeError):
     # PyGObject not installed — define a stub so the module is importable
     # (though instantiation would fail).
     class GatepathWindow:  # type: ignore[no-redef]
