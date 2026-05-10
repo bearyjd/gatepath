@@ -47,12 +47,14 @@
 
 pub mod audit_log;
 pub mod auth;
+pub mod caller_uid;
 pub mod dbus_service;
 pub mod name_watch;
 pub mod netns;
 pub mod network_manager;
 pub mod policykit;
 pub mod service;
+pub mod spawn;
 pub mod throttle;
 pub mod validation;
 
@@ -108,6 +110,20 @@ pub enum RefusalReason {
     /// retry after a brief delay; it should NOT prompt the user again.
     /// Closes the prompt-fatigue DoS the devil's advocate review flagged.
     Throttled,
+    /// Phase 5b.7: portal URL passed to `LaunchPortal` failed validation
+    /// (non-http(s) scheme, control bytes, or unparseable per RFC 3986).
+    InvalidPortalUrl,
+    /// Phase 5b.7: caller invoked `LaunchPortal` without a prior successful
+    /// `SetupCaptive`. Single-session enforcement.
+    NoActiveSession,
+    /// Phase 5b.7: caller's bus name doesn't match the sender that opened
+    /// the active session. Prevents one client from launching subprocesses
+    /// inside another client's session.
+    SenderMismatch,
+    /// Phase 5b.7: `setns`/`fork`/`execv` failed at the kernel level.
+    /// Distinct from `KernelError` so audit log differentiates netns
+    /// migration failure from process-spawn failure.
+    SpawnFailed,
 }
 
 impl RefusalReason {
@@ -125,8 +141,36 @@ impl RefusalReason {
             Self::KernelError => "kernel_error",
             Self::AlreadyActive => "already_active",
             Self::Throttled => "throttled",
+            Self::InvalidPortalUrl => "invalid_portal_url",
+            Self::NoActiveSession => "no_active_session",
+            Self::SenderMismatch => "sender_mismatch",
+            Self::SpawnFailed => "spawn_failed",
         }
     }
+}
+
+/// Request shape for the D-Bus method `LaunchPortal(portal_url: s) -> u`
+/// (Phase 5b.7). Helper validates the URL, confirms the active session
+/// belongs to the calling sender, and forks a subprocess into the
+/// gatepath netns.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LaunchPortalRequest {
+    pub portal_url: String,
+}
+
+/// Response shape for `LaunchPortal`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LaunchPortalResponse {
+    Success {
+        /// PID of the spawned subprocess. Caller can pass this to
+        /// `KillPortal` to terminate before exit. The helper independently
+        /// reaps the subprocess and emits `PortalSubprocessExited` when it
+        /// actually exits.
+        pid: u32,
+    },
+    Refused {
+        reason: RefusalReason,
+    },
 }
 
 /// Response shape for `TeardownCaptiveNetns`. No request payload — the helper

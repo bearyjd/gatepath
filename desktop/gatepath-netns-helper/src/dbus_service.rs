@@ -23,7 +23,10 @@ use crate::name_watch::NameWatcher;
 use crate::netns::NetnsOps;
 use crate::network_manager::CaptiveStateChecker;
 use crate::service::GatepathHelperService;
-use crate::{RefusalReason, SetupCaptiveRequest, SetupCaptiveResponse, TeardownCaptiveResponse};
+use crate::{
+    LaunchPortalRequest, LaunchPortalResponse, RefusalReason, SetupCaptiveRequest,
+    SetupCaptiveResponse, TeardownCaptiveResponse,
+};
 
 /// Stable D-Bus interface name. Bumping the `1` is the protocol-version
 /// signal; clients pinned to v1 keep working until we ship a v2 that
@@ -60,6 +63,14 @@ pub enum HelperError {
     /// Caller has exceeded the per-sender rate limit. UI should back off
     /// without prompting the user again.
     Throttled(String),
+    /// Phase 5b.7: portal URL failed validation (scheme, control byte, etc.).
+    InvalidPortalUrl(String),
+    /// Phase 5b.7: `LaunchPortal` called without a prior `SetupCaptive`.
+    NoActiveSession(String),
+    /// Phase 5b.7: caller is not the session owner.
+    SenderMismatch(String),
+    /// Phase 5b.7: `setns`/`fork`/`execv` failed.
+    SpawnFailed(String),
 }
 
 /// Extract the sender's bus name from the message header, refusing the call
@@ -80,7 +91,7 @@ fn sender_or_unauthorised(header: &zbus::message::Header<'_>) -> Result<String, 
 }
 
 impl HelperError {
-    fn from_setup_refusal(reason: RefusalReason) -> Self {
+    fn from_refusal(reason: RefusalReason) -> Self {
         match reason {
             RefusalReason::InvalidInterface => {
                 Self::InvalidInterface("interface name not usable".into())
@@ -96,6 +107,16 @@ impl HelperError {
             RefusalReason::Throttled => {
                 Self::Throttled("rate limit exceeded for this sender".into())
             }
+            RefusalReason::InvalidPortalUrl => {
+                Self::InvalidPortalUrl("portal URL failed validation".into())
+            }
+            RefusalReason::NoActiveSession => {
+                Self::NoActiveSession("no captive session active".into())
+            }
+            RefusalReason::SenderMismatch => {
+                Self::SenderMismatch("caller is not the session owner".into())
+            }
+            RefusalReason::SpawnFailed => Self::SpawnFailed("subprocess spawn failed".into()),
         }
     }
 }
@@ -150,9 +171,7 @@ impl<
             .map_err(|e| HelperError::KernelError(format!("join error: {e}")))?;
         match response {
             SetupCaptiveResponse::Success { netns_path } => Ok(netns_path),
-            SetupCaptiveResponse::Refused { reason } => {
-                Err(HelperError::from_setup_refusal(reason))
-            }
+            SetupCaptiveResponse::Refused { reason } => Err(HelperError::from_refusal(reason)),
         }
     }
 
@@ -176,4 +195,43 @@ impl<
             }
         }
     }
+
+    /// `LaunchPortal(portal_url: s) -> u`  (Phase 5b.7)
+    ///
+    /// Returns the spawned subprocess's PID on success, a typed D-Bus
+    /// error on refusal. The subprocess runs inside the gatepath netns
+    /// as the calling user. Helper independently observes the subprocess
+    /// exit and emits [`Self::portal_subprocess_exited`] as a signal.
+    async fn launch_portal(
+        &self,
+        portal_url: String,
+        #[zbus(header)] header: zbus::message::Header<'_>,
+    ) -> Result<u32, HelperError> {
+        let sender = sender_or_unauthorised(&header)?;
+        let request = LaunchPortalRequest { portal_url };
+        let inner = Arc::clone(&self.inner);
+        let response =
+            tokio::task::spawn_blocking(move || inner.launch_portal_subprocess(&request, &sender))
+                .await
+                .map_err(|e| HelperError::KernelError(format!("join error: {e}")))?;
+        match response {
+            LaunchPortalResponse::Success { pid } => Ok(pid),
+            LaunchPortalResponse::Refused { reason } => Err(HelperError::from_refusal(reason)),
+        }
+    }
+
+    /// `PortalSubprocessExited(pid: u, exit_code: i, signal_num: i)`
+    ///
+    /// Emitted by the helper when a previously-spawned portal subprocess
+    /// exits. `exit_code` is the normal exit code (or `-1` if signalled).
+    /// `signal_num` is the signal number (or `0` if exited normally).
+    /// Orchestrators subscribe to this signal to know when to call
+    /// `TeardownCaptive`.
+    #[zbus(signal)]
+    pub async fn portal_subprocess_exited(
+        signal_emitter: &zbus::object_server::SignalEmitter<'_>,
+        pid: u32,
+        exit_code: i32,
+        signal_num: i32,
+    ) -> zbus::Result<()>;
 }

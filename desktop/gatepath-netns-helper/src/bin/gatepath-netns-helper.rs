@@ -21,12 +21,14 @@ use std::time::Duration;
 
 use anyhow::Context;
 use gatepath_netns_helper::audit_log::FileAuditWriter;
+use gatepath_netns_helper::caller_uid::DbusCallerUidLookup;
 use gatepath_netns_helper::dbus_service::{BUS_NAME, DbusService, OBJECT_PATH};
 use gatepath_netns_helper::name_watch::LinuxNameWatcher;
 use gatepath_netns_helper::netns::LinuxNetnsOps;
 use gatepath_netns_helper::network_manager::NMCaptiveCheck;
 use gatepath_netns_helper::policykit::PolicyKitAuthorizer;
 use gatepath_netns_helper::service::GatepathHelperService;
+use gatepath_netns_helper::spawn::{LinuxSpawner, PORTAL_RUNNER_PATH};
 use gatepath_netns_helper::throttle::Throttle;
 use tokio::signal::unix::{SignalKind, signal};
 use tracing::{error, info, warn};
@@ -70,12 +72,22 @@ fn init_tracing() {
 
 async fn run() -> anyhow::Result<()> {
     // Build the production orchestrator. PolicyKit + NetworkManager +
-    // name-watcher + audit-log open failures here are fatal — we refuse to
-    // start without auth, the defence-in-depth captive check, the
-    // disconnect watch (5b.6 leak prevention), or a working audit log path.
+    // name-watcher + spawner + caller-uid + audit-log open failures here
+    // are fatal — we refuse to start without auth, the defence-in-depth
+    // captive check, the disconnect watch (5b.6), the privileged spawn
+    // capability (5b.7), or a working audit log path.
     let auth = PolicyKitAuthorizer::connect().context("connecting to PolicyKit")?;
     let captive_check = NMCaptiveCheck::connect().context("connecting to NetworkManager")?;
     let watcher = LinuxNameWatcher::connect().context("connecting to D-Bus for name watch")?;
+    if !std::path::Path::new(PORTAL_RUNNER_PATH).exists() {
+        anyhow::bail!(
+            "portal runner not installed at {PORTAL_RUNNER_PATH}; \
+             refusing to start without spawn target"
+        );
+    }
+    let spawner = LinuxSpawner::new(PORTAL_RUNNER_PATH);
+    let caller_uid_lookup =
+        DbusCallerUidLookup::connect().context("connecting to D-Bus for UID lookup")?;
     let ops = LinuxNetnsOps::new();
     let throttle = Throttle::new(THROTTLE_LIMIT, THROTTLE_WINDOW);
     let audit = FileAuditWriter::open(PathBuf::from(AUDIT_LOG_PATH))
@@ -87,9 +99,11 @@ async fn run() -> anyhow::Result<()> {
         captive_check,
         throttle,
         watcher,
+        Box::new(spawner),
+        Box::new(caller_uid_lookup),
         Box::new(audit),
     ));
-    let dbus_service = DbusService::new(service);
+    let dbus_service = DbusService::new(Arc::clone(&service));
 
     let conn = connection::Builder::system()
         .context("system bus builder")?
@@ -107,10 +121,55 @@ async fn run() -> anyhow::Result<()> {
         "registered on system bus"
     );
 
-    // Per-session disconnect handling lives in the orchestrator now (5b.6):
-    // the name watcher fires an auto-teardown when the requesting sender's
-    // connection drops, even if we keep running for other clients. Helper
-    // process lifetime is governed by SIGTERM/SIGINT here.
+    // Bridge: subprocess exit (delivered on the spawner's wait-thread) →
+    // D-Bus PortalSubprocessExited signal (emitted on the tokio reactor).
+    // The wait-thread can't be async; we route via an unbounded channel.
+    let (exit_tx, mut exit_rx) =
+        tokio::sync::mpsc::unbounded_channel::<gatepath_netns_helper::spawn::SpawnExit>();
+    let conn_for_signal = conn.clone();
+    tokio::spawn(async move {
+        while let Some(exit) = exit_rx.recv().await {
+            let exit_code = exit.exit_code.unwrap_or(-1);
+            let signal_num = exit.signal.unwrap_or(0);
+            let object_server = conn_for_signal.object_server();
+            let iface_ref =
+                match object_server
+                    .interface::<_, DbusService<
+                        LinuxNetnsOps,
+                        PolicyKitAuthorizer,
+                        NMCaptiveCheck,
+                        LinuxNameWatcher,
+                    >>(OBJECT_PATH)
+                    .await
+                {
+                    Ok(r) => r,
+                    Err(e) => {
+                        warn!(error = %e, "interface ref unavailable; dropping signal");
+                        continue;
+                    }
+                };
+            if let Err(e) = DbusService::<
+                LinuxNetnsOps,
+                PolicyKitAuthorizer,
+                NMCaptiveCheck,
+                LinuxNameWatcher,
+            >::portal_subprocess_exited(
+                iface_ref.signal_emitter(), exit.pid, exit_code, signal_num
+            )
+            .await
+            {
+                warn!(error = %e, "PortalSubprocessExited emit failed");
+            }
+        }
+    });
+
+    let exit_tx_for_cb = exit_tx.clone();
+    service.set_external_exit_callback(Some(std::sync::Arc::new(
+        move |exit: gatepath_netns_helper::spawn::SpawnExit| {
+            let _ = exit_tx_for_cb.send(exit);
+        },
+    )));
+
     wait_for_shutdown(&conn).await
 }
 
