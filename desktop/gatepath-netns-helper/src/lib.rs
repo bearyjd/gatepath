@@ -47,6 +47,7 @@
 
 pub mod audit_log;
 pub mod auth;
+pub mod backstop;
 pub mod caller_uid;
 pub mod dbus_service;
 pub mod name_watch;
