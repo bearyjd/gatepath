@@ -12,10 +12,13 @@ import pytest
 from gatepath.netns_client import (
     ERROR_PREFIX,
     HelperUnavailable,
+    LaunchPortalRefused,
+    LaunchPortalSuccess,
     NetnsClient,
     RefusalReason,
     SetupRefused,
     SetupSuccess,
+    SubprocessExit,
     TeardownRefused,
     TeardownSuccess,
     _dbus_error_name,
@@ -45,8 +48,10 @@ class FakeProxy:
     def __init__(self) -> None:
         self.setup_result: object = "/var/run/netns/gatepath"
         self.teardown_result: object = None
+        self.launch_result: object = 12345  # default success PID
         self.setup_calls: list[str] = []
         self.teardown_calls: int = 0
+        self.launch_calls: list[str] = []
 
     def SetupCaptive(self, interface_name: str) -> str:  # noqa: N802
         self.setup_calls.append(interface_name)
@@ -59,6 +64,13 @@ class FakeProxy:
         self.teardown_calls += 1
         if isinstance(self.teardown_result, BaseException):
             raise self.teardown_result
+
+    def LaunchPortal(self, portal_url: str) -> int:  # noqa: N802
+        self.launch_calls.append(portal_url)
+        if isinstance(self.launch_result, BaseException):
+            raise self.launch_result
+        assert isinstance(self.launch_result, int)
+        return self.launch_result
 
 
 # ── RefusalReason mapping ────────────────────────────────────────────────
@@ -242,3 +254,85 @@ def test_helper_unavailable_is_subclass_of_exception() -> None:
     # decide "fall back to static UX". A future refactor that changed
     # the base class would silently break those callers.
     assert issubclass(HelperUnavailable, Exception)
+
+
+# ── Phase 5c.2 launch_portal ─────────────────────────────────────────────
+
+
+def test_launch_portal_success_returns_pid() -> None:
+    proxy = FakeProxy()
+    proxy.launch_result = 4242
+    client = NetnsClient(proxy)
+
+    result = client.launch_portal("http://captive.example/login")
+
+    assert result == LaunchPortalSuccess(pid=4242)
+    assert proxy.launch_calls == ["http://captive.example/login"]
+
+
+@pytest.mark.parametrize(
+    ("error_suffix", "expected_reason"),
+    [
+        ("InvalidPortalUrl", RefusalReason.INVALID_PORTAL_URL),
+        ("NoActiveSession", RefusalReason.NO_ACTIVE_SESSION),
+        ("SenderMismatch", RefusalReason.SENDER_MISMATCH),
+        ("SpawnFailed", RefusalReason.SPAWN_FAILED),
+        ("Unauthorised", RefusalReason.UNAUTHORISED),
+        ("BackendUnavailable", RefusalReason.BACKEND_UNAVAILABLE),
+    ],
+)
+def test_launch_portal_dbus_errors_map_to_typed_refusals(
+    error_suffix: str, expected_reason: RefusalReason
+) -> None:
+    proxy = FakeProxy()
+    proxy.launch_result = _DBusError(ERROR_PREFIX + error_suffix, "msg")
+    client = NetnsClient(proxy)
+
+    result = client.launch_portal("http://captive.example/")
+
+    assert isinstance(result, LaunchPortalRefused)
+    assert result.reason == expected_reason
+    assert "msg" in result.detail
+
+
+def test_launch_portal_transport_error_maps_to_unknown() -> None:
+    proxy = FakeProxy()
+    proxy.launch_result = RuntimeError("connection reset by peer")
+    client = NetnsClient(proxy)
+
+    result = client.launch_portal("http://captive.example/")
+
+    assert isinstance(result, LaunchPortalRefused)
+    assert result.reason == RefusalReason.UNKNOWN
+
+
+def test_launch_portal_zero_pid_maps_to_unknown() -> None:
+    proxy = FakeProxy()
+    proxy.launch_result = 0
+    client = NetnsClient(proxy)
+
+    result = client.launch_portal("http://captive.example/")
+
+    assert isinstance(result, LaunchPortalRefused)
+    assert result.reason == RefusalReason.UNKNOWN
+
+
+def test_launch_portal_negative_pid_maps_to_unknown() -> None:
+    proxy = FakeProxy()
+    proxy.launch_result = -1
+    client = NetnsClient(proxy)
+
+    result = client.launch_portal("http://captive.example/")
+
+    assert isinstance(result, LaunchPortalRefused)
+    assert result.reason == RefusalReason.UNKNOWN
+
+
+# ── SubprocessExit clean check ───────────────────────────────────────────
+
+
+def test_subprocess_exit_is_clean_only_for_zero() -> None:
+    assert SubprocessExit(pid=1, exit_code=0, signal_num=0).is_clean
+    assert not SubprocessExit(pid=1, exit_code=1, signal_num=0).is_clean
+    assert not SubprocessExit(pid=1, exit_code=-1, signal_num=9).is_clean
+    assert not SubprocessExit(pid=1, exit_code=0, signal_num=15).is_clean
