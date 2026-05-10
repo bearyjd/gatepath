@@ -20,7 +20,7 @@ thiserror = "1"
 anyhow = "1"
 # zbus 5 is the current major; native tokio integration without an extra crate.
 zbus = { version = "5", default-features = false, features = ["tokio", "blocking-api"] }
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "sync"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 # Audit log (5b.5): serde for the entry struct, serde_json for one-line-per-entry
@@ -29,9 +29,27 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 chrono = { version = "0.4", default-features = false, features = ["clock", "serde"] }
+# Subprocess spawn (5b.7): direct syscalls for setns/setresuid/fork/execv —
+# preferred over shelling out to nsenter, which would add a PATH-resolved
+# binary to the privileged surface. URL parsing for portal-URL validation
+# at the spawn boundary uses the same RFC 3986 grammar the rest of the
+# stack assumes.
+nix = { version = "0.29", features = ["sched", "process", "user", "fs"] }
+url = "2"
+# libc for `_exit(2)` directly: nix doesn't wrap it because it's
+# async-signal-safe ONLY in the very specific post-fork-pre-exec context
+# we use it. `std::process::exit` runs destructors and is NOT
+# async-signal-safe; using it after fork in a multi-threaded program
+# would be unsound.
+libc = "0.2"
 
 [lints.rust]
-unsafe_code = "forbid"
+# `deny` (not `forbid`) so individual call sites can opt in with
+# `#[allow(unsafe_code)]` and a written SAFETY justification. Phase 5b.7's
+# `spawn.rs` needs `unsafe { fork() }` and post-fork `unsafe { libc::_exit }`
+# — the latter is the only async-signal-safe exit available, and using
+# `std::process::exit` after fork in a multi-threaded program is unsound.
+unsafe_code = "deny"
 
 [lints.clippy]
 all = "warn"

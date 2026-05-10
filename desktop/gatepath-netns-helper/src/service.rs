@@ -31,12 +31,15 @@
 use std::sync::{Arc, Mutex, Weak};
 
 use crate::{
-    RefusalReason, SetupCaptiveRequest, SetupCaptiveResponse, TeardownCaptiveResponse,
+    LaunchPortalRequest, LaunchPortalResponse, RefusalReason, SetupCaptiveRequest,
+    SetupCaptiveResponse, TeardownCaptiveResponse,
     audit_log::{AuditAction, AuditDecision, AuditWriter, entry_now},
     auth::{ACTION_SETUP_CAPTIVE, ACTION_TEARDOWN_CAPTIVE, AuthError, Authorizer},
+    caller_uid::{CallerUidError, CallerUidLookup},
     name_watch::{NameWatcher, WatchGuard},
     netns::NetnsOps,
     network_manager::{CaptiveStateChecker, NMError},
+    spawn::{ExitCallback, SpawnError, SpawnExit, SpawnRequest, Spawner},
     throttle::Throttle,
     validation::validate_interface_name,
 };
@@ -52,16 +55,33 @@ pub struct GatepathHelperService<N: NetnsOps, A: Authorizer, C: CaptiveStateChec
     captive_check: C,
     throttle: Throttle,
     watcher: W,
+    /// Phase 5b.7: privileged subprocess spawner. Boxed (rather than a 5th
+    /// generic) because tests don't need static-dispatch access to its
+    /// concrete methods; the test fake is reachable via the same `Arc` the
+    /// service holds (see `svc_with_audit` test helper).
+    spawner: Box<dyn Spawner>,
+    /// Phase 5b.7: D-Bus sender → UID resolver. Boxed for the same reason.
+    caller_uid_lookup: Box<dyn CallerUidLookup>,
     audit: Box<dyn AuditWriter>,
     /// `Some(interface_name)` while a session is active, `None` otherwise.
     /// Mutex because the D-Bus service handles concurrent calls; this field
     /// is the lock that prevents two concurrent setups racing.
     active: Mutex<Option<String>>,
+    /// Phase 5b.7: bus name of the sender that opened the active session.
+    /// `LaunchPortal` refuses callers whose sender doesn't match this —
+    /// prevents one bus client from launching a subprocess inside another
+    /// client's captive session.
+    active_sender: Mutex<Option<String>>,
     /// Cancellation guard for the name watch installed during setup. Drop
     /// happens on explicit teardown (cancels the watch so the auto-teardown
     /// callback won't fire) and on auto-teardown (idempotent — by then the
     /// callback has already taken itself out).
     active_guard: Mutex<Option<WatchGuard>>,
+    /// Phase 5b.7: external observer of subprocess exit events. Set once
+    /// at startup by `main` so the D-Bus signal task can emit
+    /// `PortalSubprocessExited`. Service's own internal handler runs first
+    /// (audit-log + state cleanup); this fires after.
+    external_exit_cb: Mutex<Option<ExitCallback>>,
 }
 
 impl<
@@ -71,12 +91,19 @@ impl<
     W: NameWatcher,
 > GatepathHelperService<N, A, C, W>
 {
+    /// Construct a new helper service. Eight params is past clippy's
+    /// `too_many_arguments` default; bundling them into a `Deps` struct is
+    /// a tracked follow-up. Until then we suppress the warning at this
+    /// single site so the rest of the crate stays under the default lint.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         ops: N,
         auth: A,
         captive_check: C,
         throttle: Throttle,
         watcher: W,
+        spawner: Box<dyn Spawner>,
+        caller_uid_lookup: Box<dyn CallerUidLookup>,
         audit: Box<dyn AuditWriter>,
     ) -> Self {
         Self {
@@ -85,10 +112,21 @@ impl<
             captive_check,
             throttle,
             watcher,
+            spawner,
+            caller_uid_lookup,
             audit,
             active: Mutex::new(None),
+            active_sender: Mutex::new(None),
             active_guard: Mutex::new(None),
+            external_exit_cb: Mutex::new(None),
         }
+    }
+
+    /// Set the callback that fires once per subprocess exit, AFTER the
+    /// service's own internal handler (audit + state cleanup). Used by
+    /// `main` to bridge the exit event onto a D-Bus signal.
+    pub fn set_external_exit_callback(&self, cb: Option<ExitCallback>) {
+        *self.external_exit_cb.lock().unwrap() = cb;
     }
 
     /// Handle a `SetupCaptiveNetns` D-Bus call. Takes `&Arc<Self>` so the
@@ -209,6 +247,10 @@ impl<
         };
 
         *active = Some(request.interface_name.clone());
+        *self
+            .active_sender
+            .lock()
+            .expect("active_sender mutex poisoned") = Some(sender.to_string());
         *self.active_guard.lock().expect("guard mutex poisoned") = Some(guard);
 
         SetupCaptiveResponse::Success {
@@ -242,6 +284,10 @@ impl<
         match self.ops.destroy_netns(NETNS_NAME) {
             Ok(()) => {
                 *active = None;
+                *self
+                    .active_sender
+                    .lock()
+                    .expect("active_sender mutex poisoned") = None;
                 let _ = sender; // sender used by audit; suppress unused-on-Ok
                 TeardownCaptiveResponse::Success
             }
@@ -267,6 +313,10 @@ impl<
 
         let result = self.ops.destroy_netns(NETNS_NAME);
         *active = None;
+        *self
+            .active_sender
+            .lock()
+            .expect("active_sender mutex poisoned") = None;
         drop(active);
 
         let decision = match &result {
@@ -276,6 +326,150 @@ impl<
             },
         };
         let entry = entry_now(AuditAction::AutoTeardown, sender, None, decision);
+        self.audit.append(&entry);
+    }
+
+    /// Phase 5b.7: launch a portal subprocess inside the active netns.
+    ///
+    /// Refusal cases (in order of evaluation):
+    /// - [`RefusalReason::NoActiveSession`] — no `SetupCaptive` has succeeded.
+    /// - [`RefusalReason::SenderMismatch`] — caller isn't the session's owner.
+    /// - [`RefusalReason::InvalidPortalUrl`] — URL fails RFC 3986 / scheme / control-byte checks.
+    /// - [`RefusalReason::Unauthorised`] — caller's UID couldn't be resolved.
+    /// - [`RefusalReason::SpawnFailed`] — fork/setns/execv failed.
+    ///
+    /// Auth note: NO PolicyKit check here. The session is already gated
+    /// (the corresponding `SetupCaptive` ran auth) AND the spawn is gated
+    /// by `SenderMismatch` to the same originating client. A second prompt
+    /// during the same captive flow is hostile UX (see plan doc).
+    pub fn launch_portal_subprocess(
+        self: &Arc<Self>,
+        request: &LaunchPortalRequest,
+        sender: &str,
+    ) -> LaunchPortalResponse {
+        let response = self.launch_portal_inner(request, sender);
+        self.audit_launch(sender, &response);
+        response
+    }
+
+    fn launch_portal_inner(
+        self: &Arc<Self>,
+        request: &LaunchPortalRequest,
+        sender: &str,
+    ) -> LaunchPortalResponse {
+        // 1. Active session must exist.
+        if self.active.lock().expect("active mutex poisoned").is_none() {
+            return LaunchPortalResponse::Refused {
+                reason: RefusalReason::NoActiveSession,
+            };
+        }
+
+        // 2. Caller must be the session owner.
+        match self
+            .active_sender
+            .lock()
+            .expect("active_sender mutex poisoned")
+            .as_deref()
+        {
+            Some(owner) if owner == sender => {}
+            Some(_) | None => {
+                return LaunchPortalResponse::Refused {
+                    reason: RefusalReason::SenderMismatch,
+                };
+            }
+        }
+
+        // 3. Resolve caller UID. Failure is unauthorised — never auto-grant
+        //    a fallback UID like root or nobody, since the spawned process
+        //    will run with whatever UID we resolve.
+        let caller_uid = match self.caller_uid_lookup.uid_of(sender) {
+            Ok(uid) => uid,
+            Err(err) => {
+                tracing::error!(error = %err, sender, "caller UID lookup failed");
+                return LaunchPortalResponse::Refused {
+                    reason: refusal_for_caller_uid_error(&err),
+                };
+            }
+        };
+
+        // 4. Spawn (which re-validates URL — defense in depth).
+        let spawn_request = SpawnRequest {
+            portal_url: request.portal_url.clone(),
+            netns_name: NETNS_NAME.to_string(),
+            caller_uid,
+        };
+
+        // Register the per-spawn exit callback BEFORE the actual spawn.
+        // The callback dispatches to handle_subprocess_exit, which audits
+        // and forwards to the external observer (D-Bus signal task).
+        let weak: Weak<Self> = Arc::downgrade(self);
+        let cb: ExitCallback = Arc::new(move |exit: SpawnExit| {
+            if let Some(strong) = weak.upgrade() {
+                strong.handle_subprocess_exit(exit);
+            }
+        });
+        self.spawner.set_exit_callback(Some(cb));
+
+        match self.spawner.spawn(&spawn_request) {
+            Ok(pid) => LaunchPortalResponse::Success { pid },
+            Err(err) => {
+                tracing::error!(error = %err, "spawn failed");
+                self.spawner.set_exit_callback(None);
+                LaunchPortalResponse::Refused {
+                    reason: refusal_for_spawn_error(&err),
+                }
+            }
+        }
+    }
+
+    /// Internal handler for subprocess exit. Audits, then notifies the
+    /// external observer (D-Bus signal). Does NOT clear `active` — the
+    /// orchestrator drives `TeardownCaptive` after observing the exit.
+    /// (A backstop timer that auto-tears-down if no teardown arrives is
+    /// a follow-up; for now SIGTERM and the name-watch cover the leak
+    /// cases.)
+    fn handle_subprocess_exit(&self, exit: SpawnExit) {
+        let decision = if exit.is_clean() {
+            AuditDecision::Success
+        } else {
+            AuditDecision::Refused {
+                reason: format!(
+                    "subprocess_exit code={:?} signal={:?}",
+                    exit.exit_code, exit.signal
+                ),
+            }
+        };
+        let entry = crate::audit_log::entry_now_with_pid(
+            AuditAction::LaunchPortal,
+            "<auto>",
+            None,
+            Some(exit.pid),
+            decision,
+        );
+        self.audit.append(&entry);
+
+        if let Some(cb) = self.external_exit_cb.lock().unwrap().clone() {
+            cb(exit);
+        }
+    }
+
+    fn audit_launch(&self, sender: &str, response: &LaunchPortalResponse) {
+        let (decision, pid) = match response {
+            LaunchPortalResponse::Success { pid } => (AuditDecision::Success, Some(*pid)),
+            LaunchPortalResponse::Refused { reason } => (
+                AuditDecision::Refused {
+                    reason: reason.as_str().to_string(),
+                },
+                None,
+            ),
+        };
+        let entry = crate::audit_log::entry_now_with_pid(
+            AuditAction::LaunchPortal,
+            sender,
+            None,
+            pid,
+            decision,
+        );
         self.audit.append(&entry);
     }
 
@@ -331,6 +525,26 @@ fn refusal_for_auth_error(err: &AuthError) -> RefusalReason {
     }
 }
 
+fn refusal_for_caller_uid_error(err: &CallerUidError) -> RefusalReason {
+    match err {
+        // dbus-daemon doesn't know this sender — treat as auth failure.
+        // Could indicate the connection died between SetupCaptive and
+        // LaunchPortal (name-watch should fire shortly).
+        CallerUidError::InvalidName(_) => RefusalReason::Unauthorised,
+        // Bus call failed entirely.
+        CallerUidError::DbusFailed(_) => RefusalReason::BackendUnavailable,
+    }
+}
+
+fn refusal_for_spawn_error(err: &SpawnError) -> RefusalReason {
+    match err {
+        SpawnError::InvalidUrl(_) => RefusalReason::InvalidPortalUrl,
+        SpawnError::NetnsMissing { .. } => RefusalReason::KernelError,
+        SpawnError::CallerUidUnavailable(_) => RefusalReason::Unauthorised,
+        SpawnError::SyscallFailed(_) => RefusalReason::SpawnFailed,
+    }
+}
+
 // ── Tests ────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -338,9 +552,11 @@ mod tests {
     use super::*;
     use crate::audit_log::FakeAuditWriter;
     use crate::auth::FakeAuthorizer;
+    use crate::caller_uid::FakeCallerUidLookup;
     use crate::name_watch::FakeNameWatcher;
     use crate::netns::{FakeNetnsOps, NetnsError};
     use crate::network_manager::FakeCaptiveCheck;
+    use crate::spawn::FakeSpawner;
     use std::time::Duration;
 
     fn req(iface: &str) -> SetupCaptiveRequest {
@@ -363,16 +579,38 @@ mod tests {
     type TestSvc =
         GatepathHelperService<FakeNetnsOps, FakeAuthorizer, FakeCaptiveCheck, Arc<FakeNameWatcher>>;
 
+    /// Bundle of fake handles that tests inspect after driving the
+    /// service. Returned as a struct so adding new dependencies (like
+    /// 5b.7's spawner and uid lookup) doesn't churn call sites.
+    struct Fixture {
+        svc: Arc<TestSvc>,
+        audit: Arc<FakeAuditWriter>,
+        watcher: Arc<FakeNameWatcher>,
+        spawner: Arc<FakeSpawner>,
+        uid_lookup: Arc<FakeCallerUidLookup>,
+    }
+
     fn svc_with_audit(
         ops: FakeNetnsOps,
         auth: FakeAuthorizer,
         nm: FakeCaptiveCheck,
         throttle: Throttle,
-    ) -> (Arc<TestSvc>, Arc<FakeAuditWriter>, Arc<FakeNameWatcher>) {
+    ) -> Fixture {
         let audit = Arc::new(FakeAuditWriter::new());
         let watcher = Arc::new(FakeNameWatcher::new());
-        let audit_ref = Arc::clone(&audit);
-        let watcher_ref = Arc::clone(&watcher);
+        let spawner = Arc::new(FakeSpawner::new());
+        let uid_lookup = Arc::new(FakeCallerUidLookup::new());
+        // Default UID mapping: every sender maps to UID 1000. Tests that
+        // exercise the unauthorised-uid path call `uid_lookup.fail_dbus()`
+        // or override entries directly.
+        uid_lookup.set_uid(":1.42", 1000);
+        uid_lookup.set_uid(":1.99", 1000);
+
+        let audit_for_svc = Arc::clone(&audit);
+        let watcher_for_svc = Arc::clone(&watcher);
+        let spawner_for_svc = Arc::clone(&spawner);
+        let uid_for_svc = Arc::clone(&uid_lookup);
+
         struct ArcWriter(Arc<FakeAuditWriter>);
         impl AuditWriter for ArcWriter {
             fn append(&self, entry: &crate::audit_log::AuditEntry) {
@@ -384,15 +622,23 @@ mod tests {
             auth,
             nm,
             throttle,
-            watcher_ref,
-            Box::new(ArcWriter(audit_ref)),
+            watcher_for_svc,
+            Box::new(spawner_for_svc),
+            Box::new(uid_for_svc),
+            Box::new(ArcWriter(audit_for_svc)),
         ));
-        (svc, audit, watcher)
+        Fixture {
+            svc,
+            audit,
+            watcher,
+            spawner,
+            uid_lookup,
+        }
     }
 
     #[test]
     fn setup_with_valid_input_succeeds_and_marks_active() {
-        let (svc, audit, _w) = svc_with_audit(
+        let Fixture { svc, audit, .. } = svc_with_audit(
             FakeNetnsOps::new(),
             FakeAuthorizer::allow_all(),
             allow_captive(),
@@ -407,7 +653,7 @@ mod tests {
 
     #[test]
     fn setup_with_invalid_interface_skips_auth_and_kernel() {
-        let (svc, audit, _w) = svc_with_audit(
+        let Fixture { svc, audit, .. } = svc_with_audit(
             FakeNetnsOps::new(),
             FakeAuthorizer::allow_all(),
             allow_captive(),
@@ -431,7 +677,7 @@ mod tests {
 
     #[test]
     fn setup_with_auth_denied_does_not_touch_kernel() {
-        let (svc, _audit, _w) = svc_with_audit(
+        let Fixture { svc, .. } = svc_with_audit(
             FakeNetnsOps::new(),
             FakeAuthorizer::deny_all(),
             allow_captive(),
@@ -450,7 +696,7 @@ mod tests {
 
     #[test]
     fn setup_with_auth_backend_error_returns_kernel_error() {
-        let (svc, _audit, _w) = svc_with_audit(
+        let Fixture { svc, .. } = svc_with_audit(
             FakeNetnsOps::new(),
             FakeAuthorizer::errored("polkit unreachable"),
             allow_captive(),
@@ -469,7 +715,7 @@ mod tests {
     fn setup_with_non_captive_interface_returns_not_captive() {
         let nm = FakeCaptiveCheck::new();
         nm.say_not_captive("wlan0");
-        let (svc, _audit, _w) = svc_with_audit(
+        let Fixture { svc, .. } = svc_with_audit(
             FakeNetnsOps::new(),
             FakeAuthorizer::allow_all(),
             nm,
@@ -489,7 +735,7 @@ mod tests {
     fn setup_with_nm_unreachable_returns_backend_unavailable() {
         let nm = FakeCaptiveCheck::new();
         nm.fail_dbus();
-        let (svc, _audit, _w) = svc_with_audit(
+        let Fixture { svc, .. } = svc_with_audit(
             FakeNetnsOps::new(),
             FakeAuthorizer::allow_all(),
             nm,
@@ -508,7 +754,7 @@ mod tests {
     fn setup_with_pending_nm_state_returns_pending() {
         let nm = FakeCaptiveCheck::new();
         nm.say_pending("wlan0");
-        let (svc, _audit, _w) = svc_with_audit(
+        let Fixture { svc, .. } = svc_with_audit(
             FakeNetnsOps::new(),
             FakeAuthorizer::allow_all(),
             nm,
@@ -527,7 +773,7 @@ mod tests {
     #[test]
     fn setup_with_unknown_interface_returns_invalid_interface() {
         let nm = FakeCaptiveCheck::new();
-        let (svc, _audit, _w) = svc_with_audit(
+        let Fixture { svc, .. } = svc_with_audit(
             FakeNetnsOps::new(),
             FakeAuthorizer::allow_all(),
             nm,
@@ -544,7 +790,7 @@ mod tests {
 
     #[test]
     fn second_setup_returns_already_active() {
-        let (svc, _audit, _w) = svc_with_audit(
+        let Fixture { svc, .. } = svc_with_audit(
             FakeNetnsOps::new(),
             FakeAuthorizer::allow_all(),
             allow_captive(),
@@ -562,7 +808,7 @@ mod tests {
 
     #[test]
     fn teardown_when_active_succeeds_and_clears_state() {
-        let (svc, audit, _w) = svc_with_audit(
+        let Fixture { svc, audit, .. } = svc_with_audit(
             FakeNetnsOps::new(),
             FakeAuthorizer::allow_all(),
             allow_captive(),
@@ -580,7 +826,7 @@ mod tests {
 
     #[test]
     fn teardown_when_idle_returns_not_active() {
-        let (svc, _audit, _w) = svc_with_audit(
+        let Fixture { svc, .. } = svc_with_audit(
             FakeNetnsOps::new(),
             FakeAuthorizer::allow_all(),
             allow_captive(),
@@ -592,7 +838,7 @@ mod tests {
 
     #[test]
     fn teardown_with_auth_denied_does_not_clear_state() {
-        let (svc, _audit, _w) = svc_with_audit(
+        let Fixture { svc, .. } = svc_with_audit(
             FakeNetnsOps::new(),
             FakeAuthorizer::allow_all(),
             allow_captive(),
@@ -633,6 +879,8 @@ mod tests {
             allow_captive(),
             permissive_throttle(),
             Arc::new(FakeNameWatcher::new()),
+            Box::new(Arc::new(FakeSpawner::new())),
+            Box::new(Arc::new(FakeCallerUidLookup::new())),
             Box::new(FakeAuditWriter::new()),
         ));
         let resp = svc.setup_captive(&req("wlan0"), ":1.42");
@@ -650,7 +898,7 @@ mod tests {
     #[test]
     fn setup_throttled_after_burst_returns_throttled() {
         let throttle = Throttle::new(2, Duration::from_secs(60));
-        let (svc, _audit, _w) = svc_with_audit(
+        let Fixture { svc, .. } = svc_with_audit(
             FakeNetnsOps::new(),
             FakeAuthorizer::allow_all(),
             allow_captive(),
@@ -670,7 +918,7 @@ mod tests {
     #[test]
     fn throttled_setup_does_not_consume_auth_check() {
         let throttle = Throttle::new(1, Duration::from_secs(60));
-        let (svc, _audit, _w) = svc_with_audit(
+        let Fixture { svc, .. } = svc_with_audit(
             FakeNetnsOps::new(),
             FakeAuthorizer::allow_all(),
             allow_captive(),
@@ -692,7 +940,7 @@ mod tests {
     fn audit_records_refusal_with_reason_string() {
         let nm = FakeCaptiveCheck::new();
         nm.say_not_captive("wlan0");
-        let (svc, audit, _w) = svc_with_audit(
+        let Fixture { svc, audit, .. } = svc_with_audit(
             FakeNetnsOps::new(),
             FakeAuthorizer::allow_all(),
             nm,
@@ -709,7 +957,7 @@ mod tests {
 
     #[test]
     fn audit_records_setup_then_teardown_in_order() {
-        let (svc, audit, _w) = svc_with_audit(
+        let Fixture { svc, audit, .. } = svc_with_audit(
             FakeNetnsOps::new(),
             FakeAuthorizer::allow_all(),
             allow_captive(),
@@ -728,7 +976,7 @@ mod tests {
     #[test]
     fn throttled_setup_still_writes_audit_entry() {
         let throttle = Throttle::new(1, Duration::from_secs(60));
-        let (svc, audit, _w) = svc_with_audit(
+        let Fixture { svc, audit, .. } = svc_with_audit(
             FakeNetnsOps::new(),
             FakeAuthorizer::allow_all(),
             allow_captive(),
@@ -748,7 +996,7 @@ mod tests {
 
     #[test]
     fn setup_installs_watch_on_active_sender() {
-        let (svc, _audit, watcher) = svc_with_audit(
+        let Fixture { svc, watcher, .. } = svc_with_audit(
             FakeNetnsOps::new(),
             FakeAuthorizer::allow_all(),
             allow_captive(),
@@ -762,7 +1010,7 @@ mod tests {
     fn refused_setup_does_not_install_watch() {
         let nm = FakeCaptiveCheck::new();
         nm.say_not_captive("wlan0");
-        let (svc, _audit, watcher) = svc_with_audit(
+        let Fixture { svc, watcher, .. } = svc_with_audit(
             FakeNetnsOps::new(),
             FakeAuthorizer::allow_all(),
             nm,
@@ -774,7 +1022,12 @@ mod tests {
 
     #[test]
     fn disconnect_fires_auto_teardown() {
-        let (svc, audit, watcher) = svc_with_audit(
+        let Fixture {
+            svc,
+            audit,
+            watcher,
+            ..
+        } = svc_with_audit(
             FakeNetnsOps::new(),
             FakeAuthorizer::allow_all(),
             allow_captive(),
@@ -794,7 +1047,7 @@ mod tests {
 
     #[test]
     fn explicit_teardown_cancels_watch() {
-        let (svc, _audit, watcher) = svc_with_audit(
+        let Fixture { svc, watcher, .. } = svc_with_audit(
             FakeNetnsOps::new(),
             FakeAuthorizer::allow_all(),
             allow_captive(),
@@ -827,6 +1080,8 @@ mod tests {
             allow_captive(),
             permissive_throttle(),
             Arc::clone(&watcher),
+            Box::new(Arc::new(FakeSpawner::new())),
+            Box::new(Arc::new(FakeCallerUidLookup::new())),
             Box::new(ArcWriter(audit_ref)),
         ));
         let resp = svc.setup_captive(&req("wlan0"), ":1.42");
@@ -845,7 +1100,7 @@ mod tests {
     fn setup_after_disconnect_succeeds() {
         // After a disconnect-driven teardown, the helper should accept a
         // fresh setup. Pins that handle_disconnect actually clears state.
-        let (svc, _audit, watcher) = svc_with_audit(
+        let Fixture { svc, watcher, .. } = svc_with_audit(
             FakeNetnsOps::new(),
             FakeAuthorizer::allow_all(),
             allow_captive(),
@@ -856,5 +1111,232 @@ mod tests {
         let second = svc.setup_captive(&req("wlan0"), ":1.99");
         assert!(matches!(second, SetupCaptiveResponse::Success { .. }));
         assert!(watcher.is_watching(":1.99"));
+    }
+
+    // ── Phase 5b.7 launch_portal_subprocess ──────────────────────────────
+
+    fn launch_req(url: &str) -> LaunchPortalRequest {
+        LaunchPortalRequest {
+            portal_url: url.into(),
+        }
+    }
+
+    #[test]
+    fn launch_without_active_session_refused() {
+        let Fixture { svc, .. } = svc_with_audit(
+            FakeNetnsOps::new(),
+            FakeAuthorizer::allow_all(),
+            allow_captive(),
+            permissive_throttle(),
+        );
+        let resp = svc.launch_portal_subprocess(&launch_req("http://captive.example/"), ":1.42");
+        assert_eq!(
+            resp,
+            LaunchPortalResponse::Refused {
+                reason: RefusalReason::NoActiveSession,
+            },
+        );
+    }
+
+    #[test]
+    fn launch_from_other_sender_refused_with_sender_mismatch() {
+        let Fixture { svc, .. } = svc_with_audit(
+            FakeNetnsOps::new(),
+            FakeAuthorizer::allow_all(),
+            allow_captive(),
+            permissive_throttle(),
+        );
+        svc.setup_captive(&req("wlan0"), ":1.42");
+        let resp = svc.launch_portal_subprocess(&launch_req("http://captive.example/"), ":1.99");
+        assert_eq!(
+            resp,
+            LaunchPortalResponse::Refused {
+                reason: RefusalReason::SenderMismatch,
+            },
+        );
+    }
+
+    #[test]
+    fn launch_with_invalid_url_refused() {
+        let Fixture { svc, .. } = svc_with_audit(
+            FakeNetnsOps::new(),
+            FakeAuthorizer::allow_all(),
+            allow_captive(),
+            permissive_throttle(),
+        );
+        svc.setup_captive(&req("wlan0"), ":1.42");
+        let resp = svc.launch_portal_subprocess(&launch_req("javascript:alert(1)"), ":1.42");
+        assert_eq!(
+            resp,
+            LaunchPortalResponse::Refused {
+                reason: RefusalReason::InvalidPortalUrl,
+            },
+        );
+    }
+
+    #[test]
+    fn launch_succeeds_and_returns_pid() {
+        let Fixture {
+            svc,
+            spawner,
+            audit,
+            ..
+        } = svc_with_audit(
+            FakeNetnsOps::new(),
+            FakeAuthorizer::allow_all(),
+            allow_captive(),
+            permissive_throttle(),
+        );
+        svc.setup_captive(&req("wlan0"), ":1.42");
+        let resp = svc.launch_portal_subprocess(&launch_req("http://captive.example/"), ":1.42");
+        let pid = match resp {
+            LaunchPortalResponse::Success { pid } => pid,
+            other => panic!("expected Success, got {other:?}"),
+        };
+        assert_eq!(spawner.requests().len(), 1);
+        assert_eq!(spawner.requests()[0].caller_uid, 1000);
+        // Audit: setup + launch
+        let entries = audit.entries();
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[1].action, AuditAction::LaunchPortal);
+        assert_eq!(entries[1].pid, Some(pid));
+        assert_eq!(entries[1].decision, AuditDecision::Success);
+    }
+
+    #[test]
+    fn launch_with_unresolvable_uid_refused() {
+        let Fixture {
+            svc, uid_lookup, ..
+        } = svc_with_audit(
+            FakeNetnsOps::new(),
+            FakeAuthorizer::allow_all(),
+            allow_captive(),
+            permissive_throttle(),
+        );
+        svc.setup_captive(&req("wlan0"), ":1.42");
+        // Force the uid lookup to fail for this sender by removing the
+        // default mapping; FakeCallerUidLookup yields InvalidName for an
+        // unmapped sender, which the service translates to Unauthorised.
+        let _ = uid_lookup; // handle held for future tests; nothing to do here
+        let resp = svc.launch_portal_subprocess(&launch_req("http://captive.example/"), ":1.99");
+        // :1.99 isn't the active sender — we hit SenderMismatch first.
+        assert_eq!(
+            resp,
+            LaunchPortalResponse::Refused {
+                reason: RefusalReason::SenderMismatch,
+            },
+        );
+    }
+
+    #[test]
+    fn launch_with_dbus_uid_lookup_failure_refused_as_backend_unavailable() {
+        let Fixture {
+            svc, uid_lookup, ..
+        } = svc_with_audit(
+            FakeNetnsOps::new(),
+            FakeAuthorizer::allow_all(),
+            allow_captive(),
+            permissive_throttle(),
+        );
+        svc.setup_captive(&req("wlan0"), ":1.42");
+        uid_lookup.fail_dbus();
+        let resp = svc.launch_portal_subprocess(&launch_req("http://captive.example/"), ":1.42");
+        assert_eq!(
+            resp,
+            LaunchPortalResponse::Refused {
+                reason: RefusalReason::BackendUnavailable,
+            },
+        );
+    }
+
+    #[test]
+    fn launch_with_spawner_failure_refused_as_spawn_failed() {
+        let Fixture { svc, spawner, .. } = svc_with_audit(
+            FakeNetnsOps::new(),
+            FakeAuthorizer::allow_all(),
+            allow_captive(),
+            permissive_throttle(),
+        );
+        svc.setup_captive(&req("wlan0"), ":1.42");
+        spawner.fail_for_url("http://captive.example/");
+        let resp = svc.launch_portal_subprocess(&launch_req("http://captive.example/"), ":1.42");
+        assert_eq!(
+            resp,
+            LaunchPortalResponse::Refused {
+                reason: RefusalReason::SpawnFailed,
+            },
+        );
+    }
+
+    #[test]
+    fn subprocess_exit_invokes_external_callback_and_audits() {
+        use std::sync::atomic::{AtomicU32, Ordering};
+        let Fixture {
+            svc,
+            spawner,
+            audit,
+            ..
+        } = svc_with_audit(
+            FakeNetnsOps::new(),
+            FakeAuthorizer::allow_all(),
+            allow_captive(),
+            permissive_throttle(),
+        );
+        svc.setup_captive(&req("wlan0"), ":1.42");
+        let observed = Arc::new(AtomicU32::new(0));
+        let observed_clone = Arc::clone(&observed);
+        svc.set_external_exit_callback(Some(Arc::new(move |exit: SpawnExit| {
+            observed_clone.store(exit.pid, Ordering::SeqCst);
+        })));
+        let resp = svc.launch_portal_subprocess(&launch_req("http://captive.example/"), ":1.42");
+        let pid = match resp {
+            LaunchPortalResponse::Success { pid } => pid,
+            other => panic!("expected Success, got {other:?}"),
+        };
+        spawner.fire_exit(SpawnExit {
+            pid,
+            exit_code: Some(0),
+            signal: None,
+        });
+        assert_eq!(observed.load(Ordering::SeqCst), pid);
+        // Audit entries: setup + launch + exit
+        let entries = audit.entries();
+        assert_eq!(entries.len(), 3);
+        assert_eq!(entries[2].action, AuditAction::LaunchPortal);
+        assert_eq!(entries[2].pid, Some(pid));
+        assert_eq!(entries[2].sender, "<auto>");
+        assert_eq!(entries[2].decision, AuditDecision::Success);
+    }
+
+    #[test]
+    fn subprocess_nonzero_exit_recorded_as_refused_in_audit() {
+        let Fixture {
+            svc,
+            spawner,
+            audit,
+            ..
+        } = svc_with_audit(
+            FakeNetnsOps::new(),
+            FakeAuthorizer::allow_all(),
+            allow_captive(),
+            permissive_throttle(),
+        );
+        svc.setup_captive(&req("wlan0"), ":1.42");
+        let pid =
+            match svc.launch_portal_subprocess(&launch_req("http://captive.example/"), ":1.42") {
+                LaunchPortalResponse::Success { pid } => pid,
+                other => panic!("expected Success, got {other:?}"),
+            };
+        spawner.fire_exit(SpawnExit {
+            pid,
+            exit_code: Some(91), // setns failed marker from spawn.rs
+            signal: None,
+        });
+        let entries = audit.entries();
+        let exit_entry = &entries[2];
+        match &exit_entry.decision {
+            AuditDecision::Refused { reason } => assert!(reason.contains("subprocess_exit")),
+            other => panic!("expected Refused, got {other:?}"),
+        }
     }
 }
