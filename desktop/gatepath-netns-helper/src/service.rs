@@ -65,6 +65,30 @@ impl BackstopConfig {
     }
 }
 
+/// Aggregates all dependencies needed to construct a
+/// [`GatepathHelperService`]. Reduces the constructor to a single
+/// argument and lets call sites use struct-literal syntax (with field
+/// names) so the dependency graph is readable at a glance.
+///
+/// Generic over the same trait params as the service itself; the boxed
+/// fields cover dependencies tests don't need static-dispatch access to.
+pub struct Deps<
+    N: NetnsOps + Send + Sync + 'static,
+    A: Authorizer + Send + Sync + 'static,
+    C: CaptiveStateChecker + Send + Sync + 'static,
+    W: NameWatcher,
+> {
+    pub ops: N,
+    pub auth: A,
+    pub captive_check: C,
+    pub throttle: Throttle,
+    pub watcher: W,
+    pub spawner: Box<dyn Spawner>,
+    pub caller_uid_lookup: Box<dyn CallerUidLookup>,
+    pub backstop: BackstopConfig,
+    pub audit: Box<dyn AuditWriter>,
+}
+
 /// Fixed netns name. Helper only ever manages one captive session at a time
 /// (Gatepath only has one in flight), so a constant is sufficient.
 pub const NETNS_NAME: &str = "gatepath";
@@ -123,22 +147,20 @@ impl<
     W: NameWatcher,
 > GatepathHelperService<N, A, C, W>
 {
-    /// Construct a new helper service. Nine params is past clippy's
-    /// `too_many_arguments` default; bundling them into a `Deps` struct is
-    /// a tracked follow-up. Until then we suppress the warning at this
-    /// single site so the rest of the crate stays under the default lint.
-    #[allow(clippy::too_many_arguments)]
-    pub fn new(
-        ops: N,
-        auth: A,
-        captive_check: C,
-        throttle: Throttle,
-        watcher: W,
-        spawner: Box<dyn Spawner>,
-        caller_uid_lookup: Box<dyn CallerUidLookup>,
-        backstop: BackstopConfig,
-        audit: Box<dyn AuditWriter>,
-    ) -> Self {
+    /// Construct a new helper service from a fully-specified [`Deps`].
+    /// Field names at the call site keep the dependency graph readable.
+    pub fn new(deps: Deps<N, A, C, W>) -> Self {
+        let Deps {
+            ops,
+            auth,
+            captive_check,
+            throttle,
+            watcher,
+            spawner,
+            caller_uid_lookup,
+            backstop,
+            audit,
+        } = deps;
         Self {
             ops,
             auth,
@@ -724,20 +746,20 @@ mod tests {
                 self.0.append(entry);
             }
         }
-        let svc = Arc::new(GatepathHelperService::new(
+        let svc = Arc::new(GatepathHelperService::new(Deps {
             ops,
             auth,
-            nm,
+            captive_check: nm,
             throttle,
-            watcher_for_svc,
-            Box::new(spawner_for_svc),
-            Box::new(uid_for_svc),
-            BackstopConfig {
+            watcher: watcher_for_svc,
+            spawner: Box::new(spawner_for_svc),
+            caller_uid_lookup: Box::new(uid_for_svc),
+            backstop: BackstopConfig {
                 timer: Box::new(backstop_for_svc),
                 duration: Duration::from_secs(30),
             },
-            Box::new(ArcWriter(audit_for_svc)),
-        ));
+            audit: Box::new(ArcWriter(audit_for_svc)),
+        }));
         Fixture {
             svc,
             audit,
@@ -985,20 +1007,20 @@ mod tests {
         let exploding = ExplodingMoveFake {
             inner: FakeNetnsOps::new(),
         };
-        let svc = Arc::new(GatepathHelperService::new(
-            exploding,
-            FakeAuthorizer::allow_all(),
-            allow_captive(),
-            permissive_throttle(),
-            Arc::new(FakeNameWatcher::new()),
-            Box::new(Arc::new(FakeSpawner::new())),
-            Box::new(Arc::new(FakeCallerUidLookup::new())),
-            BackstopConfig {
+        let svc = Arc::new(GatepathHelperService::new(Deps {
+            ops: exploding,
+            auth: FakeAuthorizer::allow_all(),
+            captive_check: allow_captive(),
+            throttle: permissive_throttle(),
+            watcher: Arc::new(FakeNameWatcher::new()),
+            spawner: Box::new(Arc::new(FakeSpawner::new())),
+            caller_uid_lookup: Box::new(Arc::new(FakeCallerUidLookup::new())),
+            backstop: BackstopConfig {
                 timer: Box::new(Arc::new(crate::backstop::FakeBackstop::new())),
                 duration: Duration::from_secs(30),
             },
-            Box::new(FakeAuditWriter::new()),
-        ));
+            audit: Box::new(FakeAuditWriter::new()),
+        }));
         let resp = svc.setup_captive(&req("wlan0"), ":1.42");
         assert_eq!(
             resp,
@@ -1190,20 +1212,20 @@ mod tests {
                 self.0.append(entry);
             }
         }
-        let svc = Arc::new(GatepathHelperService::new(
-            FakeNetnsOps::new(),
-            FakeAuthorizer::allow_all(),
-            allow_captive(),
-            permissive_throttle(),
-            Arc::clone(&watcher),
-            Box::new(Arc::new(FakeSpawner::new())),
-            Box::new(Arc::new(FakeCallerUidLookup::new())),
-            BackstopConfig {
+        let svc = Arc::new(GatepathHelperService::new(Deps {
+            ops: FakeNetnsOps::new(),
+            auth: FakeAuthorizer::allow_all(),
+            captive_check: allow_captive(),
+            throttle: permissive_throttle(),
+            watcher: Arc::clone(&watcher),
+            spawner: Box::new(Arc::new(FakeSpawner::new())),
+            caller_uid_lookup: Box::new(Arc::new(FakeCallerUidLookup::new())),
+            backstop: BackstopConfig {
                 timer: Box::new(Arc::new(crate::backstop::FakeBackstop::new())),
                 duration: Duration::from_secs(30),
             },
-            Box::new(ArcWriter(audit_ref)),
-        ));
+            audit: Box::new(ArcWriter(audit_ref)),
+        }));
         let resp = svc.setup_captive(&req("wlan0"), ":1.42");
         assert_eq!(
             resp,
