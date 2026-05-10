@@ -27,7 +27,7 @@ use gatepath_netns_helper::name_watch::LinuxNameWatcher;
 use gatepath_netns_helper::netns::LinuxNetnsOps;
 use gatepath_netns_helper::network_manager::NMCaptiveCheck;
 use gatepath_netns_helper::policykit::PolicyKitAuthorizer;
-use gatepath_netns_helper::service::{BackstopConfig, GatepathHelperService};
+use gatepath_netns_helper::service::{BackstopConfig, Deps, GatepathHelperService};
 use gatepath_netns_helper::spawn::{LinuxSpawner, PORTAL_RUNNER_PATH};
 use gatepath_netns_helper::throttle::Throttle;
 use tokio::signal::unix::{SignalKind, signal};
@@ -93,17 +93,17 @@ async fn run() -> anyhow::Result<()> {
     let audit = FileAuditWriter::open(PathBuf::from(AUDIT_LOG_PATH))
         .with_context(|| format!("opening audit log at {AUDIT_LOG_PATH}"))?;
     info!(audit_log = AUDIT_LOG_PATH, "audit log opened");
-    let service = Arc::new(GatepathHelperService::new(
+    let service = Arc::new(GatepathHelperService::new(Deps {
         ops,
         auth,
         captive_check,
         throttle,
         watcher,
-        Box::new(spawner),
-        Box::new(caller_uid_lookup),
-        BackstopConfig::production(),
-        Box::new(audit),
-    ));
+        spawner: Box::new(spawner),
+        caller_uid_lookup: Box::new(caller_uid_lookup),
+        backstop: BackstopConfig::production(),
+        audit: Box::new(audit),
+    }));
     let dbus_service = DbusService::new(Arc::clone(&service));
 
     let conn = connection::Builder::system()
