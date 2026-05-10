@@ -328,12 +328,20 @@ class DbusIsolationSignals:
     if dasbus or the bus is unavailable.
     """
 
-    def __init__(self) -> None:
-        try:
-            from dasbus.connection import SystemMessageBus  # noqa: PLC0415
-        except ImportError as exc:
-            raise RuntimeError(f"dasbus not available: {exc}") from exc
-        self._bus = SystemMessageBus()
+    def __init__(self, bus=None) -> None:
+        """Construct a signals subscriber.
+
+        ``bus`` is an optional dasbus message-bus instance; ``None`` (the
+        default) uses the system bus. Integration tests inject a session
+        bus to exercise the signal-subscription path without root.
+        """
+        if bus is None:
+            try:
+                from dasbus.connection import SystemMessageBus  # noqa: PLC0415
+            except ImportError as exc:
+                raise RuntimeError(f"dasbus not available: {exc}") from exc
+            bus = SystemMessageBus()
+        self._bus = bus
         self._proxy = None  # constructed on first subscribe
 
     def subscribe(self, callback) -> Subscription:  # type: ignore[no-untyped-def]
