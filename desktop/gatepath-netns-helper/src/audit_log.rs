@@ -44,6 +44,10 @@ pub struct AuditEntry {
     /// Present for setup; absent for teardown.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub interface: Option<String>,
+    /// Phase 5b.7: present on `LaunchPortal` success and on subprocess-
+    /// exit audit entries. Absent everywhere else.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pid: Option<u32>,
     pub decision: AuditDecision,
 }
 
@@ -56,6 +60,10 @@ pub enum AuditAction {
     /// from `TeardownCaptive` so an operator reading the log can tell the
     /// helper cleaned up after a UI crash vs the user clicking "done".
     AutoTeardown,
+    /// Privileged subprocess spawn into the gatepath netns (Phase 5b.7).
+    /// Records pid on success; refusal records reason in the `decision`
+    /// field as usual.
+    LaunchPortal,
 }
 
 /// Decision recorded in the audit log. `Refused` carries the
@@ -152,11 +160,24 @@ pub fn entry_now(
     interface: Option<String>,
     decision: AuditDecision,
 ) -> AuditEntry {
+    entry_now_with_pid(action, sender, interface, None, decision)
+}
+
+/// Variant of [`entry_now`] that records a subprocess pid. Used by the
+/// `LaunchPortal` audit path (Phase 5b.7).
+pub fn entry_now_with_pid(
+    action: AuditAction,
+    sender: impl Into<String>,
+    interface: Option<String>,
+    pid: Option<u32>,
+    decision: AuditDecision,
+) -> AuditEntry {
     AuditEntry {
         timestamp_utc: chrono::Utc::now().to_rfc3339(),
         action,
         sender: sender.into(),
         interface,
+        pid,
         decision,
     }
 }
@@ -206,6 +227,7 @@ mod tests {
             action: AuditAction::SetupCaptive,
             sender: ":1.42".into(),
             interface: Some("wlan0".into()),
+            pid: None,
             decision: AuditDecision::Success,
         }
     }
