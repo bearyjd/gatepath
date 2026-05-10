@@ -1,0 +1,23 @@
+#!/bin/sh
+#
+# portal-webview-runner — invoked by gatepath-netns-helper(1) AFTER it has
+# setns'd into the gatepath netns and dropped privilege to the calling
+# user's UID. The helper's `PORTAL_RUNNER_PATH` constant points at
+# /usr/lib/gatepath/portal-webview-runner; distro packaging (.deb/.rpm)
+# installs THIS shell wrapper there.
+#
+# We do NOT exec python3 -m directly from the helper because the helper's
+# spawn passes a fixed-shape argv ([runner_path, portal_url]) — adding
+# `-m gatepath.portal_webview_runner` would require argv hardcoding in
+# the helper itself, expanding the trust surface for no benefit. The
+# wrapper is owned by the same packaging that owns the helper, so the
+# trust boundary is unchanged.
+#
+# argv:
+#   $1 — portal URL (already validated by the helper via url::Url RFC 3986)
+#
+# Exit codes:
+#   0  — window closed cleanly (sign-in or user dismiss)
+#   1  — portal URL re-validation failed in the runner
+#   2  — GTK/WebKit modules unavailable
+exec /usr/bin/python3 -m gatepath.portal_webview_runner "$@"

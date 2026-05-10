@@ -12,9 +12,19 @@ from __future__ import annotations
 import logging
 import threading
 import time
-from typing import Callable, Optional
+from typing import Callable, Optional, Protocol, runtime_checkable
 
 logger = logging.getLogger(__name__)
+
+# NM_CONNECTIVITY_PORTAL — matches the helper's `NM_CONNECTIVITY_PORTAL = 2`.
+# A device whose `Connectivity` property returns this value is currently
+# behind a captive portal, per NetworkManager's own classification.
+NM_CONNECTIVITY_PORTAL = 2
+
+# DEVICE_TYPE_WIFI — matches the helper's interface validator (which
+# accepts only WiFi-prefix names). NetworkManager's NMDeviceType enum:
+# 2 = WiFi.
+NM_DEVICE_TYPE_WIFI = 2
 
 # Polling interval when using the fallback poller (seconds).
 _DEFAULT_POLL_INTERVAL = 30.0
@@ -88,6 +98,86 @@ def _make_probe_fn(probe_url: Optional[str] = None) -> Callable[[], Optional[str
         return None
 
     return _probe
+
+
+@runtime_checkable
+class CaptiveInterfaceLookup(Protocol):
+    """Returns the name of the WiFi interface currently flagged captive
+    by NetworkManager, or ``None`` if there isn't one.
+
+    Real impl is :py:class:`NMCaptiveInterfaceLookup` (lazy dasbus); tests
+    inject a fake. Helper uses the same NM `Connectivity` property server-
+    side, so what this returns matches what `helper.SetupCaptive` will
+    accept (modulo race windows that the helper re-checks).
+    """
+
+    def get_captive_interface(self) -> Optional[str]:
+        ...
+
+
+class NMCaptiveInterfaceLookup:
+    """Production captive-interface lookup via NetworkManager over dasbus.
+
+    Lazy import: dasbus is loaded on the first :py:meth:`get_captive_interface`
+    call so the module stays importable in environments without it (CI test
+    nodes that don't ship dasbus, etc.).
+    """
+
+    def __init__(self) -> None:
+        self._proxy = None
+
+    def get_captive_interface(self) -> Optional[str]:
+        try:
+            if self._proxy is None:
+                from dasbus.connection import SystemMessageBus  # noqa: PLC0415
+
+                bus = SystemMessageBus()
+                self._proxy = bus.get_proxy(
+                    service_name="org.freedesktop.NetworkManager",
+                    object_path="/org/freedesktop/NetworkManager",
+                    interface_name="org.freedesktop.NetworkManager",
+                )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("NetworkManager unreachable: %s", exc)
+            return None
+
+        try:
+            device_paths = self._proxy.GetDevices()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("NM GetDevices failed: %s", exc)
+            return None
+
+        for path in device_paths:
+            iface = _check_device_for_captive(path)
+            if iface is not None:
+                return iface
+        return None
+
+
+def _check_device_for_captive(device_path: str) -> Optional[str]:
+    """Inspect one NM Device object. Returns the interface name iff the
+    device is a WiFi device flagged `NM_CONNECTIVITY_PORTAL`. Returns
+    ``None`` otherwise (wrong device type, not captive, lookup error)."""
+    try:
+        from dasbus.connection import SystemMessageBus  # noqa: PLC0415
+
+        bus = SystemMessageBus()
+        device = bus.get_proxy(
+            service_name="org.freedesktop.NetworkManager",
+            object_path=device_path,
+            interface_name="org.freedesktop.NetworkManager.Device",
+        )
+        if device.DeviceType != NM_DEVICE_TYPE_WIFI:
+            return None
+        if device.Connectivity != NM_CONNECTIVITY_PORTAL:
+            return None
+        iface = device.Interface
+        if isinstance(iface, str) and iface:
+            return iface
+        return None
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("NM device %s lookup failed: %s", device_path, exc)
+        return None
 
 
 def start_nm_monitor(
