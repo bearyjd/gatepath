@@ -29,12 +29,14 @@
 //! with a malicious interface name.
 
 use std::sync::{Arc, Mutex, Weak};
+use std::time::Duration;
 
 use crate::{
     LaunchPortalRequest, LaunchPortalResponse, RefusalReason, SetupCaptiveRequest,
     SetupCaptiveResponse, TeardownCaptiveResponse,
     audit_log::{AuditAction, AuditDecision, AuditWriter, entry_now},
     auth::{ACTION_SETUP_CAPTIVE, ACTION_TEARDOWN_CAPTIVE, AuthError, Authorizer},
+    backstop::{BackstopGuard, BackstopTimer, DEFAULT_BACKSTOP_DURATION},
     caller_uid::{CallerUidError, CallerUidLookup},
     name_watch::{NameWatcher, WatchGuard},
     netns::NetnsOps,
@@ -43,6 +45,25 @@ use crate::{
     throttle::Throttle,
     validation::validate_interface_name,
 };
+
+/// Bundles the backstop timer with its duration so the service ctor
+/// stays at a manageable arg count. Production wiring uses
+/// [`StdThreadBackstop`] + [`DEFAULT_BACKSTOP_DURATION`]; tests inject a
+/// `FakeBackstop` and a short duration.
+pub struct BackstopConfig {
+    pub timer: Box<dyn BackstopTimer>,
+    pub duration: Duration,
+}
+
+impl BackstopConfig {
+    /// Production default: [`crate::backstop::StdThreadBackstop`] + 30s.
+    pub fn production() -> Self {
+        Self {
+            timer: Box::new(crate::backstop::StdThreadBackstop::new()),
+            duration: DEFAULT_BACKSTOP_DURATION,
+        }
+    }
+}
 
 /// Fixed netns name. Helper only ever manages one captive session at a time
 /// (Gatepath only has one in flight), so a constant is sufficient.
@@ -82,6 +103,17 @@ pub struct GatepathHelperService<N: NetnsOps, A: Authorizer, C: CaptiveStateChec
     /// `PortalSubprocessExited`. Service's own internal handler runs first
     /// (audit-log + state cleanup); this fires after.
     external_exit_cb: Mutex<Option<ExitCallback>>,
+    /// Phase 5b.8: backstop timer for auto-teardown if the orchestrator
+    /// fails to call `TeardownCaptive` within `backstop_duration` of the
+    /// subprocess exit. Closes the residual leak window 5b.6's
+    /// name-watch can't see (orchestrator alive but stuck).
+    backstop_timer: Box<dyn BackstopTimer>,
+    backstop_duration: Duration,
+    /// Currently-armed backstop guard. Set in `handle_subprocess_exit`,
+    /// cleared (cancelling the timer) by both `teardown_captive_inner`
+    /// and `handle_disconnect`. Multiple takes are safe — Drop cancels
+    /// idempotently.
+    active_backstop: Mutex<Option<BackstopGuard>>,
 }
 
 impl<
@@ -91,7 +123,7 @@ impl<
     W: NameWatcher,
 > GatepathHelperService<N, A, C, W>
 {
-    /// Construct a new helper service. Eight params is past clippy's
+    /// Construct a new helper service. Nine params is past clippy's
     /// `too_many_arguments` default; bundling them into a `Deps` struct is
     /// a tracked follow-up. Until then we suppress the warning at this
     /// single site so the rest of the crate stays under the default lint.
@@ -104,6 +136,7 @@ impl<
         watcher: W,
         spawner: Box<dyn Spawner>,
         caller_uid_lookup: Box<dyn CallerUidLookup>,
+        backstop: BackstopConfig,
         audit: Box<dyn AuditWriter>,
     ) -> Self {
         Self {
@@ -119,6 +152,9 @@ impl<
             active_sender: Mutex::new(None),
             active_guard: Mutex::new(None),
             external_exit_cb: Mutex::new(None),
+            backstop_timer: backstop.timer,
+            backstop_duration: backstop.duration,
+            active_backstop: Mutex::new(None),
         }
     }
 
@@ -280,6 +316,13 @@ impl<
         // can't race in and fire after we've cleaned up. Drop happens
         // synchronously (the guard's cancel closure runs here).
         *self.active_guard.lock().expect("guard mutex poisoned") = None;
+        // Phase 5b.8: also cancel the backstop timer if it was armed by
+        // a prior subprocess exit. Drop sends on the cancel channel; the
+        // timer thread will see it and exit without firing the callback.
+        *self
+            .active_backstop
+            .lock()
+            .expect("backstop mutex poisoned") = None;
 
         match self.ops.destroy_netns(NETNS_NAME) {
             Ok(()) => {
@@ -310,6 +353,13 @@ impl<
         // signals matter. (The guard's cancel closure no-ops because the
         // callback we're running was already taken from cb_holder.)
         *self.active_guard.lock().expect("guard mutex poisoned") = None;
+        // Phase 5b.8: also cancel the backstop. If the disconnect raced
+        // in just after a subprocess exit (so a backstop was armed),
+        // cancelling here prevents the backstop from double-firing.
+        *self
+            .active_backstop
+            .lock()
+            .expect("backstop mutex poisoned") = None;
 
         let result = self.ops.destroy_netns(NETNS_NAME);
         *active = None;
@@ -422,13 +472,12 @@ impl<
         }
     }
 
-    /// Internal handler for subprocess exit. Audits, then notifies the
-    /// external observer (D-Bus signal). Does NOT clear `active` — the
-    /// orchestrator drives `TeardownCaptive` after observing the exit.
-    /// (A backstop timer that auto-tears-down if no teardown arrives is
-    /// a follow-up; for now SIGTERM and the name-watch cover the leak
-    /// cases.)
-    fn handle_subprocess_exit(&self, exit: SpawnExit) {
+    /// Internal handler for subprocess exit. Audits, notifies the external
+    /// observer (D-Bus signal), AND arms the 5b.8 backstop timer that will
+    /// auto-tear-down if `TeardownCaptive` doesn't arrive in time. Does
+    /// NOT itself clear `active` — the orchestrator drives `TeardownCaptive`
+    /// in the happy path.
+    fn handle_subprocess_exit(self: &Arc<Self>, exit: SpawnExit) {
         let decision = if exit.is_clean() {
             AuditDecision::Success
         } else {
@@ -451,6 +500,61 @@ impl<
         if let Some(cb) = self.external_exit_cb.lock().unwrap().clone() {
             cb(exit);
         }
+
+        // Phase 5b.8: schedule the backstop. If the orchestrator calls
+        // TeardownCaptive within `backstop_duration` (default 30s), the
+        // teardown path drops the guard and the timer is cancelled.
+        // Otherwise the timer fires fire_backstop_teardown, which audits
+        // and force-tears-down.
+        let weak: Weak<Self> = Arc::downgrade(self);
+        let cb: crate::backstop::BackstopCallback = Box::new(move || {
+            if let Some(strong) = weak.upgrade() {
+                strong.fire_backstop_teardown();
+            }
+        });
+        let guard = self.backstop_timer.schedule(self.backstop_duration, cb);
+        *self
+            .active_backstop
+            .lock()
+            .expect("backstop mutex poisoned") = Some(guard);
+    }
+
+    /// Force-teardown driven by the 5b.8 backstop. Fired when the
+    /// orchestrator hasn't called `TeardownCaptive` within the configured
+    /// duration of a subprocess exit. Idempotent: if the orchestrator's
+    /// teardown raced in just before the timer, this is a no-op.
+    fn fire_backstop_teardown(&self) {
+        let mut active = self.active.lock().expect("active mutex poisoned");
+        if active.is_none() {
+            return;
+        }
+
+        // Drop our own guard — the timer thread that fired us has already
+        // exited the loop, so the cancel is a no-op. Doing it here keeps
+        // the active state coherent: no dangling guard pointing at a dead
+        // thread.
+        *self
+            .active_backstop
+            .lock()
+            .expect("backstop mutex poisoned") = None;
+        *self.active_guard.lock().expect("guard mutex poisoned") = None;
+
+        let result = self.ops.destroy_netns(NETNS_NAME);
+        *active = None;
+        *self
+            .active_sender
+            .lock()
+            .expect("active_sender mutex poisoned") = None;
+        drop(active);
+
+        let decision = match &result {
+            Ok(()) => AuditDecision::Success,
+            Err(err) => AuditDecision::Refused {
+                reason: format!("kernel_error: {err}"),
+            },
+        };
+        let entry = entry_now(AuditAction::AutoTeardown, "<backstop>", None, decision);
+        self.audit.append(&entry);
     }
 
     fn audit_launch(&self, sender: &str, response: &LaunchPortalResponse) {
@@ -588,6 +692,7 @@ mod tests {
         watcher: Arc<FakeNameWatcher>,
         spawner: Arc<FakeSpawner>,
         uid_lookup: Arc<FakeCallerUidLookup>,
+        backstop: Arc<crate::backstop::FakeBackstop>,
     }
 
     fn svc_with_audit(
@@ -600,6 +705,7 @@ mod tests {
         let watcher = Arc::new(FakeNameWatcher::new());
         let spawner = Arc::new(FakeSpawner::new());
         let uid_lookup = Arc::new(FakeCallerUidLookup::new());
+        let backstop = Arc::new(crate::backstop::FakeBackstop::new());
         // Default UID mapping: every sender maps to UID 1000. Tests that
         // exercise the unauthorised-uid path call `uid_lookup.fail_dbus()`
         // or override entries directly.
@@ -610,6 +716,7 @@ mod tests {
         let watcher_for_svc = Arc::clone(&watcher);
         let spawner_for_svc = Arc::clone(&spawner);
         let uid_for_svc = Arc::clone(&uid_lookup);
+        let backstop_for_svc = Arc::clone(&backstop);
 
         struct ArcWriter(Arc<FakeAuditWriter>);
         impl AuditWriter for ArcWriter {
@@ -625,6 +732,10 @@ mod tests {
             watcher_for_svc,
             Box::new(spawner_for_svc),
             Box::new(uid_for_svc),
+            BackstopConfig {
+                timer: Box::new(backstop_for_svc),
+                duration: Duration::from_secs(30),
+            },
             Box::new(ArcWriter(audit_for_svc)),
         ));
         Fixture {
@@ -633,6 +744,7 @@ mod tests {
             watcher,
             spawner,
             uid_lookup,
+            backstop,
         }
     }
 
@@ -881,6 +993,10 @@ mod tests {
             Arc::new(FakeNameWatcher::new()),
             Box::new(Arc::new(FakeSpawner::new())),
             Box::new(Arc::new(FakeCallerUidLookup::new())),
+            BackstopConfig {
+                timer: Box::new(Arc::new(crate::backstop::FakeBackstop::new())),
+                duration: Duration::from_secs(30),
+            },
             Box::new(FakeAuditWriter::new()),
         ));
         let resp = svc.setup_captive(&req("wlan0"), ":1.42");
@@ -1082,6 +1198,10 @@ mod tests {
             Arc::clone(&watcher),
             Box::new(Arc::new(FakeSpawner::new())),
             Box::new(Arc::new(FakeCallerUidLookup::new())),
+            BackstopConfig {
+                timer: Box::new(Arc::new(crate::backstop::FakeBackstop::new())),
+                duration: Duration::from_secs(30),
+            },
             Box::new(ArcWriter(audit_ref)),
         ));
         let resp = svc.setup_captive(&req("wlan0"), ":1.42");
@@ -1338,5 +1458,175 @@ mod tests {
             AuditDecision::Refused { reason } => assert!(reason.contains("subprocess_exit")),
             other => panic!("expected Refused, got {other:?}"),
         }
+    }
+
+    // ── Phase 5b.8 backstop integration ──────────────────────────────────
+
+    #[test]
+    fn subprocess_exit_arms_backstop_with_configured_duration() {
+        let Fixture {
+            svc,
+            spawner,
+            backstop,
+            ..
+        } = svc_with_audit(
+            FakeNetnsOps::new(),
+            FakeAuthorizer::allow_all(),
+            allow_captive(),
+            permissive_throttle(),
+        );
+        svc.setup_captive(&req("wlan0"), ":1.42");
+        let pid =
+            match svc.launch_portal_subprocess(&launch_req("http://captive.example/"), ":1.42") {
+                LaunchPortalResponse::Success { pid } => pid,
+                other => panic!("expected Success, got {other:?}"),
+            };
+        assert_eq!(backstop.schedule_count(), 0);
+        spawner.fire_exit(SpawnExit {
+            pid,
+            exit_code: Some(0),
+            signal: None,
+        });
+        assert_eq!(backstop.schedule_count(), 1);
+        assert_eq!(backstop.last_duration(), Some(Duration::from_secs(30)));
+        assert!(backstop.has_pending());
+    }
+
+    #[test]
+    fn explicit_teardown_cancels_backstop() {
+        let Fixture {
+            svc,
+            spawner,
+            backstop,
+            ..
+        } = svc_with_audit(
+            FakeNetnsOps::new(),
+            FakeAuthorizer::allow_all(),
+            allow_captive(),
+            permissive_throttle(),
+        );
+        svc.setup_captive(&req("wlan0"), ":1.42");
+        let pid =
+            match svc.launch_portal_subprocess(&launch_req("http://captive.example/"), ":1.42") {
+                LaunchPortalResponse::Success { pid } => pid,
+                other => panic!("expected Success, got {other:?}"),
+            };
+        spawner.fire_exit(SpawnExit {
+            pid,
+            exit_code: Some(0),
+            signal: None,
+        });
+        assert!(backstop.has_pending());
+        // Orchestrator calls teardown — backstop should be cancelled.
+        let teardown = svc.teardown_captive(":1.42");
+        assert_eq!(teardown, TeardownCaptiveResponse::Success);
+        assert!(backstop.was_cancelled());
+        assert!(!backstop.has_pending());
+    }
+
+    #[test]
+    fn backstop_fire_force_tears_down_when_orchestrator_silent() {
+        let Fixture {
+            svc,
+            spawner,
+            backstop,
+            audit,
+            ..
+        } = svc_with_audit(
+            FakeNetnsOps::new(),
+            FakeAuthorizer::allow_all(),
+            allow_captive(),
+            permissive_throttle(),
+        );
+        svc.setup_captive(&req("wlan0"), ":1.42");
+        let pid =
+            match svc.launch_portal_subprocess(&launch_req("http://captive.example/"), ":1.42") {
+                LaunchPortalResponse::Success { pid } => pid,
+                other => panic!("expected Success, got {other:?}"),
+            };
+        spawner.fire_exit(SpawnExit {
+            pid,
+            exit_code: Some(0),
+            signal: None,
+        });
+        // Simulate orchestrator never calling teardown — fire backstop.
+        backstop.fire();
+        // Active state cleared.
+        assert!(!svc.is_active());
+        // Audit recorded with sender="<backstop>".
+        let entries = audit.entries();
+        let last = entries.last().expect("audit has entries");
+        assert_eq!(last.action, AuditAction::AutoTeardown);
+        assert_eq!(last.sender, "<backstop>");
+        assert_eq!(last.decision, AuditDecision::Success);
+    }
+
+    #[test]
+    fn backstop_fire_after_explicit_teardown_is_noop() {
+        let Fixture {
+            svc,
+            spawner,
+            backstop,
+            audit,
+            ..
+        } = svc_with_audit(
+            FakeNetnsOps::new(),
+            FakeAuthorizer::allow_all(),
+            allow_captive(),
+            permissive_throttle(),
+        );
+        svc.setup_captive(&req("wlan0"), ":1.42");
+        let pid =
+            match svc.launch_portal_subprocess(&launch_req("http://captive.example/"), ":1.42") {
+                LaunchPortalResponse::Success { pid } => pid,
+                other => panic!("expected Success, got {other:?}"),
+            };
+        spawner.fire_exit(SpawnExit {
+            pid,
+            exit_code: Some(0),
+            signal: None,
+        });
+        svc.teardown_captive(":1.42");
+        let audit_count_before = audit.entries().len();
+        // Backstop's pending callback was already cleared by the cancel,
+        // so fire() finds nothing. Even if a malicious test forced the
+        // pending back in, the no-active-session check would reject.
+        backstop.fire();
+        assert_eq!(audit.entries().len(), audit_count_before);
+        assert!(!svc.is_active());
+    }
+
+    #[test]
+    fn handle_disconnect_cancels_backstop() {
+        let Fixture {
+            svc,
+            spawner,
+            backstop,
+            watcher,
+            ..
+        } = svc_with_audit(
+            FakeNetnsOps::new(),
+            FakeAuthorizer::allow_all(),
+            allow_captive(),
+            permissive_throttle(),
+        );
+        svc.setup_captive(&req("wlan0"), ":1.42");
+        let pid =
+            match svc.launch_portal_subprocess(&launch_req("http://captive.example/"), ":1.42") {
+                LaunchPortalResponse::Success { pid } => pid,
+                other => panic!("expected Success, got {other:?}"),
+            };
+        spawner.fire_exit(SpawnExit {
+            pid,
+            exit_code: Some(0),
+            signal: None,
+        });
+        assert!(backstop.has_pending());
+        // UI process disconnects (5b.6 name-watch fires) — backstop must
+        // be cancelled too so we don't double-fire after the auto-teardown.
+        watcher.fire_disconnect(":1.42");
+        assert!(backstop.was_cancelled());
+        assert!(!backstop.has_pending());
+        assert!(!svc.is_active());
     }
 }
