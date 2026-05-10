@@ -51,6 +51,11 @@ class RefusalReason(Enum):
     ALREADY_ACTIVE = "already_active"
     THROTTLED = "throttled"
     NOT_ACTIVE = "not_active"
+    # Phase 5b.7 / 5c.2 — LaunchPortal refusal causes:
+    INVALID_PORTAL_URL = "invalid_portal_url"
+    NO_ACTIVE_SESSION = "no_active_session"
+    SENDER_MISMATCH = "sender_mismatch"
+    SPAWN_FAILED = "spawn_failed"
     UNKNOWN = "unknown"
 
     @classmethod
@@ -77,6 +82,10 @@ class RefusalReason(Enum):
             "AlreadyActive": cls.ALREADY_ACTIVE,
             "Throttled": cls.THROTTLED,
             "NotActive": cls.NOT_ACTIVE,
+            "InvalidPortalUrl": cls.INVALID_PORTAL_URL,
+            "NoActiveSession": cls.NO_ACTIVE_SESSION,
+            "SenderMismatch": cls.SENDER_MISMATCH,
+            "SpawnFailed": cls.SPAWN_FAILED,
         }
         return mapping.get(suffix, cls.UNKNOWN)
 
@@ -120,6 +129,50 @@ class TeardownRefused:
 TeardownResult = Union[TeardownSuccess, TeardownRefused]
 
 
+@dataclass(frozen=True)
+class LaunchPortalSuccess:
+    """Helper spawned the portal subprocess; PID is the new child."""
+
+    pid: int
+
+
+@dataclass(frozen=True)
+class LaunchPortalRefused:
+    """Helper refused the spawn. ``reason`` carries the typed cause.
+
+    Common causes (5b.7):
+      - ``NO_ACTIVE_SESSION`` — no prior `setup_captive` succeeded.
+      - ``SENDER_MISMATCH`` — caller isn't the session owner.
+      - ``INVALID_PORTAL_URL`` — URL failed RFC 3986 / scheme / control checks.
+      - ``SPAWN_FAILED`` — fork/setns/execv kernel-level failure.
+    """
+
+    reason: RefusalReason
+    detail: str = ""
+
+
+LaunchPortalResult = Union[LaunchPortalSuccess, LaunchPortalRefused]
+
+
+@dataclass(frozen=True)
+class SubprocessExit:
+    """Payload of the ``PortalSubprocessExited`` D-Bus signal.
+
+    ``exit_code`` is ``-1`` if the subprocess was killed by a signal, in which
+    case ``signal_num`` is the signal number. ``signal_num`` is ``0`` for a
+    normal exit.
+    """
+
+    pid: int
+    exit_code: int
+    signal_num: int
+
+    @property
+    def is_clean(self) -> bool:
+        """True iff the subprocess exited normally with code 0."""
+        return self.exit_code == 0 and self.signal_num == 0
+
+
 class HelperUnavailable(Exception):
     """The helper isn't reachable on the system bus.
 
@@ -145,6 +198,9 @@ class HelperProxy(Protocol):
         ...
 
     def TeardownCaptive(self) -> None:  # noqa: N802
+        ...
+
+    def LaunchPortal(self, portal_url: str) -> int:  # noqa: N802
         ...
 
 
@@ -229,6 +285,34 @@ class NetnsClient:
             return _classify_teardown_error(exc)
         return TeardownSuccess()
 
+    def launch_portal(self, portal_url: str) -> LaunchPortalResult:
+        """Ask the helper to spawn a portal subprocess in the active netns.
+
+        Returns :py:class:`LaunchPortalSuccess` carrying the spawned PID on
+        success. The orchestrator subscribes to the helper's
+        ``PortalSubprocessExited`` signal to know when the subprocess
+        actually exits — the PID is informational here (logging, kill
+        targeting if we add it later).
+
+        On refusal returns :py:class:`LaunchPortalRefused` with the typed
+        reason. Common refusals: ``NO_ACTIVE_SESSION`` (no prior
+        ``setup_captive``), ``SENDER_MISMATCH`` (different bus client),
+        ``INVALID_PORTAL_URL`` (failed RFC 3986 / scheme / control checks
+        in the helper).
+        """
+        try:
+            pid = self._proxy.LaunchPortal(portal_url)
+        except Exception as exc:  # noqa: BLE001
+            return _classify_launch_error(exc)
+
+        if not isinstance(pid, int) or pid <= 0:
+            logger.error("helper returned non-positive PID: %r", pid)
+            return LaunchPortalRefused(
+                reason=RefusalReason.UNKNOWN,
+                detail=f"helper returned malformed pid: {pid!r}",
+            )
+        return LaunchPortalSuccess(pid=pid)
+
 
 def _classify_setup_error(exc: BaseException) -> SetupRefused:
     """Convert a proxy exception into a typed :py:class:`SetupRefused`.
@@ -252,6 +336,16 @@ def _classify_teardown_error(exc: BaseException) -> TeardownRefused:
     if name is None:
         return TeardownRefused(reason=RefusalReason.UNKNOWN, detail=str(exc))
     return TeardownRefused(
+        reason=RefusalReason.from_dbus_error_name(name),
+        detail=str(exc),
+    )
+
+
+def _classify_launch_error(exc: BaseException) -> LaunchPortalRefused:
+    name = _dbus_error_name(exc)
+    if name is None:
+        return LaunchPortalRefused(reason=RefusalReason.UNKNOWN, detail=str(exc))
+    return LaunchPortalRefused(
         reason=RefusalReason.from_dbus_error_name(name),
         detail=str(exc),
     )
