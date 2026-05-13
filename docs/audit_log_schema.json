@@ -49,8 +49,12 @@
   ],
   "platform_specific_semantics": {
     "blocked_resource_requests": {
-      "android": "Count of resource sub-requests that the WebView refused to load (kernel-level shouldInterceptRequest).",
-      "desktop": "Count of resource sub-requests that matched a tracker domain. WebKitGTK's resource-load-started signal is informational; the request is logged but NOT cancelled. See SECURITY_MODEL.md."
+      "android": "Count of resource sub-requests that matched a tracker domain. Observed via WebViewClient.shouldInterceptRequest; counted, allowed to load. Field name retained for schema-version compatibility. See SECURITY_MODEL.md.",
+      "desktop": "Count of resource sub-requests that matched a tracker domain. Observed via WebKitGTK's resource-load-started signal; counted, allowed to load. Field name retained for schema-version compatibility. See SECURITY_MODEL.md."
+    },
+    "blocked_navigation_attempts": {
+      "android": "Count of off-domain navigations the WebView observed (not in the portal host's same-origin set). Counted, allowed to load. Field name retained for schema-version compatibility. See SECURITY_MODEL.md.",
+      "desktop": "Count of off-domain navigations the WebView observed. Counted, allowed to load. Field name retained for schema-version compatibility. See SECURITY_MODEL.md."
     }
   }
 }

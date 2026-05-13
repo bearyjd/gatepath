@@ -1,8 +1,10 @@
 # Gatepath Android
 
 Captive-portal handler for Android. Isolates portal sign-in traffic to the
-captive-portal network interface, blocks tracker/analytics requests in the
-portal WebView, and writes an append-only audit log.
+captive-portal network interface, **observes** tracker/analytics requests in
+the portal WebView (counted in the audit log; allowed to load so captive
+vendors' GA/GTM embeds don't break the Continue button), wipes cookies +
+DOM storage + cache on session close, and writes an append-only audit log.
 
 ## Build prerequisites
 
@@ -117,10 +119,18 @@ model. Key Android guarantees:
 - Portal and probe traffic bound to the captive-portal `Network` object via
   `ConnectivityManager.bindProcessToNetwork()` — kernel-enforced, cannot leak
   into VPN tunnel.
-- WebView: JS enabled (required for most portals), all other risky settings
-  disabled, cookies disabled, cache/history wiped on session close.
-- Off-domain navigations refused and counted.
-- Tracker/analytics sub-requests blocked via `BlockedDomains` and counted.
+- WebView: JS enabled (required for most portals), file/content access disabled,
+  `databaseEnabled` off, form-data save off, cache mode `LOAD_NO_CACHE`. Cookies
+  and DOM storage (`sessionStorage` / `localStorage`) are **enabled during
+  sign-in** (captive vendors stash session nonces in them) and **wiped on
+  session close** via `CookieManager.removeAllCookies` + `WebStorage.deleteAllData`
+  + `clearCache` + `clearFormData` + `clearHistory`.
+- Off-domain navigations: **observed and counted, allowed to load** — captive
+  vendors POST sign-in forms to backend hosts different from the splash page;
+  hard-refusing them broke real-world sign-ins.
+- Tracker/analytics sub-requests: matched against `BlockedDomains` for the
+  audit-log counter, **allowed to load** — captive splash pages embed GA/GTM
+  whose `ReferenceError` on intercept breaks the Continue button.
 - Session auto-closes after 10 minutes.
 - Every session written to `filesDir/audit.jsonl` (app-private, not world-readable).
 

@@ -8,12 +8,30 @@ This document is normative. If the code disagrees with this document, the code i
 
 ## What Gatepath protects during a portal session
 
-- WebView/portal window navigation is restricted to the portal's origin domain only.
-- Third-party resource requests from the portal page are detected and counted on both
-  platforms. **Cancelling** the request is enforced on Android in-process via
-  `WebViewClient.shouldInterceptRequest` (a Java-side WebView callback) and **not**
-  on desktop — see "Desktop-specific limitations" below.
-- No portal page data (cookies, cache, localStorage) persists after session close.
+Gatepath's posture is **isolation by lifecycle**, not **isolation by capability**.
+Real captive portals from Meraki, Aruba, Cisco ISE, UniFi, Sky Admin and others
+actively rely on cross-host form POSTs, `sessionStorage` / `localStorage` nonces,
+and embedded analytics scripts during sign-in — disabling those things makes
+the Continue button silently do nothing. Gatepath lets the captive page function
+as the operator built it, and instead ensures **nothing it touches survives the
+session**.
+
+- The WebView runs with cookies, `sessionStorage`, and `localStorage` **enabled
+  during the session** and **wiped on session close**
+  (`DisposableEffect.onDispose`):
+  `CookieManager.removeAllCookies` + `CookieManager.flush` +
+  `WebStorage.deleteAllData` + `clearCache(true)` + `clearFormData` +
+  `clearHistory`.
+- Off-domain navigations and tracker subresource requests are **observed and
+  counted** (audit log) but **allowed to load**. Captive vendors POST sign-in
+  forms to backend hosts (e.g. `n143.network-auth.com`) different from the splash
+  page, and embed GA/GTM scripts whose `ReferenceError` on `gtag(...)` breaks
+  the Continue button. Hard-refusing these caused real-world sign-in failures.
+- Cleartext HTTP is permitted **for the captive flow** — portal sign-in pages
+  live on local-gateway IPs (RFC1918 / link-local) or on vendor cloud domains
+  the captive intercept redirects to; both are unreachable over HTTPS in
+  practice. Application code that touches sensitive endpoints stays HTTPS at
+  the call site; it does not fall back to cleartext silently.
 - Session is time-bounded: auto-closes after 10 minutes.
 - Every session is written to an append-only audit log
   (see [AUDIT_LOG_SCHEMA.md](AUDIT_LOG_SCHEMA.md)).
@@ -116,8 +134,8 @@ portal-window banner.
 | Portal operator capturing portal-window traffic | **Out** (unavoidable) |
 | Portal operator capturing your VPN/DNS traffic on Android | In — prevented |
 | Portal operator capturing your VPN/DNS traffic on desktop | **Partial** — warned, not prevented |
-| Portal page running tracking scripts | In — blocked + logged |
-| Portal page persisting cookies/cache after session | In — wiped |
-| Portal page navigating to off-domain phishing pages | In — refused |
+| Portal page running tracking scripts | **Partial** — allowed (captive vendors embed GA/GTM in splash pages and break on `gtag is not defined`); observed + counted; persistent state wiped on session close |
+| Portal page persisting cookies / `sessionStorage` / `localStorage` / cache after session | In — wiped via `CookieManager.removeAllCookies` + `WebStorage.deleteAllData` + `clearCache` |
+| Portal page navigating to off-domain phishing pages | **Partial** — allowed (captive vendors POST sign-in forms cross-host); observed + counted; 10-minute session window caps the exposure |
 | Operator-network attacker exploiting WebView vulns | Out (mitigated by platform updates) |
 | Bug in Gatepath's own state machine leaving session open | In — auto-timeout caps exposure at 10 min |

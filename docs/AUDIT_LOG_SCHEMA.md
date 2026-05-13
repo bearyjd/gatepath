@@ -47,8 +47,8 @@ currently defined version. Increment it for any breaking change.
 | `session_closed_utc` | `string \| null` (ISO 8601) | `null` only if the entry is for a session that never closed (should not happen for normal exit). |
 | `close_reason` | `"portal_completed" \| "user_dismissed" \| "timeout" \| "error" \| "aborted_pre_active"` | Non-null required. See enum below. |
 | `duration_seconds` | `int` | Whole seconds between open and close. `0` is valid for `aborted_pre_active`. |
-| `blocked_navigation_attempts` | `int` | Off-domain navigations the WebView refused. **Same meaning on both platforms.** |
-| `blocked_resource_requests` | `int` | **Platform-specific meaning** — see below. |
+| `blocked_navigation_attempts` | `int` | Off-domain navigations the WebView observed. **Same meaning on both platforms.** Field name retained for schema-version compatibility — see "Field-name caveat" below. |
+| `blocked_resource_requests` | `int` | Tracker-domain subresource requests the WebView observed. **Same meaning on both platforms** as of the cookie/DOM-storage rework — see "Field-name caveat" below. |
 
 ## `close_reason` enum
 
@@ -60,19 +60,30 @@ currently defined version. Increment it for any breaking change.
 | `error` | Unrecoverable error during an active session. |
 | `aborted_pre_active` | Session was terminated before the portal window opened — either by an involuntary event (network lost during `Detected` phase) or by the user dismissing the portal banner before opening the window. `duration_seconds` will be `0` and `session_closed_utc` will equal `session_opened_utc` (synthetic timestamps, both stamped at close time). `portal_domain` MAY be empty when the session never observed a portal URL (e.g., dismissal during `Monitoring`). For all other `close_reason` values, `portal_domain` is required and non-empty. |
 
-## Platform-specific field semantics
+## Field-name caveat: `blocked_*` is now "observed", not "refused"
 
-`blocked_resource_requests` does NOT mean the same thing on both platforms:
+Both `blocked_navigation_attempts` and `blocked_resource_requests` previously
+meant "the WebView refused to load this". After the cookie/DOM-storage rework
+(see `SECURITY_MODEL.md`), the WebView **allows** these to load but counts
+them in the audit log:
 
-- **Android:** count of resource sub-requests the WebView **refused to load** via
-  `WebViewClient.shouldInterceptRequest`. Each counted request was kernel-level cancelled.
-- **Desktop:** count of resource sub-requests that **matched** a tracker domain.
-  WebKitGTK's `resource-load-started` signal is informational only — the request is
-  observed and logged but **not cancelled**. See `SECURITY_MODEL.md` for why this
-  isn't enforced on desktop.
+- **Off-domain navigations** are allowed because captive vendors (Meraki,
+  Cisco ISE, UniFi, Aruba) POST sign-in forms to backend hosts on a different
+  hostname than the splash page. Hard-refusing cancelled the form submit and
+  broke real-world sign-ins.
+- **Tracker subresource requests** are allowed because captive splash pages
+  embed Google Analytics / Tag Manager whose `ReferenceError` on `gtag(...)`
+  killed the entire inline `<script>` block — including the Continue button's
+  click-handler binding. The page rendered but the button did nothing.
 
-If you build cross-platform analytics over these logs, normalise this field by platform
-or treat the desktop value as a different metric.
+The field names stay `blocked_*` to preserve schema version 1 (Android/desktop
+parity tests, existing log consumers). The semantics are now identical on
+both platforms: **count of observed requests, not cancelled requests**. The
+privacy boundary moved from "request prevention" to "lifecycle isolation" —
+cookies, `sessionStorage`, `localStorage`, and cache are wiped via
+`CookieManager.removeAllCookies` + `WebStorage.deleteAllData` +
+`clearCache(true)` on session close, so nothing the trackers set persists
+past the session.
 
 ## Reading
 
