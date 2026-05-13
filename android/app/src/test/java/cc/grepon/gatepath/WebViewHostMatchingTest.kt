@@ -8,10 +8,13 @@ import org.junit.Test
 /**
  * Regression tests for the WebView same-origin host-matching rule.
  *
- * This is the security boundary inside [cc.grepon.gatepath.ui.GatepathWebView]
- * that decides whether a captive-portal page is allowed to navigate or whether
- * the navigation gets blocked and counted. Pinning behavior on the JVM means
- * we don't have to wait until a regression makes it onto a phone.
+ * This is the off-domain detection helper inside
+ * [cc.grepon.gatepath.ui.GatepathWebView] that decides whether a navigation
+ * is same-origin or off-domain. Off-domain navigations are observed and
+ * counted in the audit log but allowed to load (captive vendors POST sign-in
+ * forms cross-host). The function under test is what makes that distinction
+ * — pinning its behavior on the JVM means we don't have to wait until a
+ * regression makes it onto a phone.
  */
 class WebViewHostMatchingTest {
 
@@ -57,9 +60,10 @@ class WebViewHostMatchingTest {
     }
 
     @Test
-    fun `blank portal host blocks every request - defensive`() {
-        // If we couldn't parse a portal host out of the redirect URL, refuse
-        // every request rather than risk allowing arbitrary navigation.
+    fun `blank portal host treats every request as off-domain - defensive`() {
+        // If we couldn't parse a portal host out of the redirect URL, count
+        // every request as off-domain rather than risk treating arbitrary
+        // hosts as same-origin (audit-log blindness).
         assertFalse(isSameOriginHost("anything.com", ""))
         assertFalse(isSameOriginHost("example.com", ""))
         // Pin the would-have-been bug: requestHost.endsWith(".") with empty
