@@ -1,36 +1,33 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  Block cleartext HTTP everywhere by default.
+  Captive portals are HTTP by their nature — they live at arbitrary IPs
+  on the local LAN (10.x, 172.16-31.x, 192.168.x) or on vendor cloud
+  domains the captive intercepts to (n143.network-auth.com,
+  splash.merakimx.com, etc.). HTTPS to those endpoints would fail TLS
+  validation against an unrelated cert. Captive sign-in cannot work
+  without cleartext.
 
-  Exception: the Android connectivity-check endpoint (Google's /generate_204
-  on connectivitycheck.gstatic.com) MUST be cleartext — captive portals work
-  by intercepting unencrypted HTTP probes and returning a 302 redirect to the
-  sign-in page. An HTTPS probe defeats the detection mechanism.
+  Android's network_security_config does NOT support IP-range matching
+  in <domain> entries — earlier attempts to whitelist 10.0.0.0,
+  172.16.0.0, and 192.168.0.0 here only matched those literal strings,
+  not the CIDR ranges they suggested. Result: the config silently
+  blocked every captive at any private IP, which manifested as
+  net::ERR_CLEARTEXT_NOT_PERMITTED in the WebView. The user-visible
+  symptom was "captive sign-in does nothing" or "cannot load" depending
+  on which URL the captive flow happened to hit.
 
-  Captive-portal IPs (RFC1918 / link-local) are also allowed cleartext because
-  portals on hotel/airport networks frequently serve their sign-in page from
-  the local gateway IP. Once the user has signed in, all subsequent traffic
-  goes back to HTTPS-only enforcement.
+  Permitting cleartext globally is the pragmatic fix. The threat model:
+  - Captive networks are inherently hostile. The user's installation of
+    Gatepath is the explicit opt-in to talking to them.
+  - All sensitive flows are HTTPS at the application layer (they don't
+    fall back to cleartext silently — calling code is HTTPS-only).
+  - The captive WebView clears cookies + WebStorage on dispose, so any
+    cleartext session state is bounded to the sign-in flow.
 -->
 <network-security-config>
-    <base-config cleartextTrafficPermitted="false">
+    <base-config cleartextTrafficPermitted="true">
         <trust-anchors>
             <certificates src="system" />
         </trust-anchors>
     </base-config>
-
-    <domain-config cleartextTrafficPermitted="true">
-        <domain includeSubdomains="true">connectivitycheck.gstatic.com</domain>
-        <domain includeSubdomains="false">100.100.100.100</domain>
-    </domain-config>
-
-    <!-- Captive-portal local-network ranges. The captive Network is bound
-         via bindProcessToNetwork; cleartext to portals on the local LAN is
-         required for portal sign-in pages. -->
-    <domain-config cleartextTrafficPermitted="true">
-        <domain includeSubdomains="true">10.0.0.0</domain>
-        <domain includeSubdomains="true">172.16.0.0</domain>
-        <domain includeSubdomains="true">192.168.0.0</domain>
-        <domain includeSubdomains="true">169.254.0.0</domain>
-    </domain-config>
 </network-security-config>

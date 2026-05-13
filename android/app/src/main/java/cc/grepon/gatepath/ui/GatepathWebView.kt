@@ -12,6 +12,7 @@ import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
 import android.webkit.WebSettings
+import android.webkit.WebStorage
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.compose.runtime.Composable
@@ -22,7 +23,6 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.viewinterop.AndroidView
 import cc.grepon.gatepath.BuildConfig
 import cc.grepon.gatepath.network.BlockedDomains
-import java.io.ByteArrayInputStream
 import java.net.URI
 
 private const val TAG = "GatepathWebView"
@@ -70,13 +70,46 @@ fun GatepathWebView(
                 javaScriptEnabled = true
                 allowFileAccess = false
                 allowContentAccess = false
-                domStorageEnabled = false
+                // domStorageEnabled is REQUIRED by many captive portals
+                // (Cisco Meraki, Aruba, Sky Admin) — they stash session
+                // nonces in sessionStorage/localStorage during the
+                // sign-in flow. Cleared on dispose below.
+                domStorageEnabled = true
                 databaseEnabled = false
                 @Suppress("DEPRECATION")
                 saveFormData = false
                 cacheMode = WebSettings.LOAD_NO_CACHE
+                // Many captive portals (Meraki splash flows in particular)
+                // call window.open(...) from the Continue handler. With
+                // javaScriptCanOpenWindowsAutomatically=true and
+                // setSupportMultipleWindows=false (the WebView default),
+                // window.open replaces the current page — which is what
+                // the captive flow expects.
+                //
+                // Setting setSupportMultipleWindows=true would route every
+                // window.open through WebChromeClient.onCreateWindow; if
+                // that's not overridden the default returns false and the
+                // new window is silently blocked. Don't set it without
+                // adding the handler.
+                javaScriptCanOpenWindowsAutomatically = true
+                setSupportMultipleWindows(false)
+                // Captive splash pages frequently mix HTTP and HTTPS
+                // resources (the splash is HTTPS, included scripts are
+                // sometimes HTTP). Default NEVER_ALLOW silently drops
+                // those scripts → page renders but JS handlers don't
+                // bind. COMPATIBILITY_MODE matches stock browser.
+                mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
             }
-            CookieManager.getInstance().setAcceptCookie(false)
+            // Cookies are REQUIRED for almost every captive portal —
+            // sign-in pages set a session cookie on the redirect, then
+            // expect it back on form submit. Disabling cookies caused
+            // sign-in attempts to fail with the portal's own
+            // "bad request — error parsing required information" 4xx
+            // (server side couldn't find the session). We clear all
+            // cookies on dispose so nothing persists past the session.
+            val cookieManager = CookieManager.getInstance()
+            cookieManager.setAcceptCookie(true)
+            cookieManager.setAcceptThirdPartyCookies(this, true)
             webViewClient = buildWebViewClient(portalHost, onBlockedNavigation, onBlockedResource)
             // Diagnostic-only WebChromeClient: forward console.log / console.error
             // from the captive portal page into logcat. Captive portal sign-in
@@ -114,6 +147,14 @@ fun GatepathWebView(
             connectivityManager.bindProcessToNetwork(null)
             webView.clearCache(true)
             webView.clearHistory()
+            // Clear the session-scoped state we enabled for the portal
+            // sign-in: cookies (set by the captive page) and DOM storage
+            // (sessionStorage / localStorage). Both flushed so nothing
+            // from the portal persists past this session.
+            CookieManager.getInstance().removeAllCookies(null)
+            CookieManager.getInstance().flush()
+            webView.clearFormData()
+            WebStorage.getInstance().deleteAllData()
         }
     }
 
@@ -167,13 +208,26 @@ private fun buildWebViewClient(
     ): Boolean {
         val requestHost = runCatching { request.url.host ?: "" }.getOrDefault("")
         val isSameOrigin = WebViewHostMatching.isSameOriginHost(requestHost, portalHost)
-        return if (isSameOrigin) {
-            false // allow WebView to load it
-        } else {
-            Log.d(TAG, "Blocking off-domain navigation to ${request.url.forLog()} (portal host=$portalHost)")
+        // Cisco Meraki, UniFi, Cisco ISE, and several other captive
+        // vendors POST the "Continue" / sign-in form to a backend on a
+        // DIFFERENT host than the splash page (eg splash on the AP IP,
+        // grant POST to n143.network-auth.com). Hard-blocking off-domain
+        // navigation cancelled those form submits → user saw "nothing
+        // happens" on Continue. Stock Android captive handler allows
+        // these navigations; we now match that.
+        //
+        // We still count off-domain navigations so the audit log records
+        // them, but we let the WebView follow them. Subresource trackers
+        // are still blocked via shouldInterceptRequest below — that's
+        // the layer that does the real privacy work.
+        if (!isSameOrigin) {
+            Log.d(
+                TAG,
+                "Off-domain main-frame navigation to ${request.url.forLog()} (portal host=$portalHost) — allowing for captive flow",
+            )
             onBlockedNavigation()
-            true // blocked
         }
+        return false // always let the WebView load it
     }
 
     override fun shouldInterceptRequest(
@@ -184,14 +238,24 @@ private fun buildWebViewClient(
             request.url.host?.lowercase() ?: return null
         }.getOrNull() ?: return null
 
-        return if (BlockedDomains.isBlocked(host)) {
+        // Meraki, Aruba, Sky and many other captive splash pages embed
+        // Google Analytics / Tag Manager. Returning an empty 200 for
+        // those scripts caused the page's inline init script to throw
+        // on the first `gtag(...)` call (ReferenceError), which killed
+        // ALL subsequent JS in that <script> block — including the
+        // Continue button's click-handler binding. Result: tap did
+        // nothing. Stock Android captive handler doesn't intercept
+        // these requests at all and works.
+        //
+        // We log + count the request so the audit log records what
+        // would have been blocked, but we let the WebView load it. The
+        // captive session is short-lived and we clear cookies +
+        // WebStorage on dispose, so persistent tracking is bounded to
+        // the sign-in flow.
+        if (BlockedDomains.isBlocked(host)) {
+            Log.d(TAG, "Tracker subresource ${request.url.forLog()} — allowing for captive flow")
             onBlockedResource()
-            emptyResponse()
-        } else {
-            null
         }
+        return null
     }
-
-    private fun emptyResponse(): WebResourceResponse =
-        WebResourceResponse("text/plain", "utf-8", ByteArrayInputStream(ByteArray(0)))
 }
