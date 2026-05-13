@@ -1,0 +1,44 @@
+# Exclude developer-machine build outputs and editor state from every
+# image build context. These artifacts are very large, change every
+# session, and — most importantly for the E2E harness — would otherwise
+# overlay onto the container's Rust target/ cache and confuse Cargo with
+# stale artifacts from a different rustc version.
+
+# Rust
+**/target/
+**/*.rs.bk
+
+# Python
+**/__pycache__/
+**/*.py[cod]
+**/.pytest_cache/
+**/.ruff_cache/
+**/.mypy_cache/
+**/.venv/
+**/venv/
+**/*.egg-info/
+
+# Gradle / Android
+**/.gradle/
+**/.kotlin/
+**/build/
+
+# Flatpak
+**/.flatpak-builder/
+
+# Editor + tooling state
+**/.idea/
+**/.vscode/
+**/.omc/
+**/.claude/
+
+# Git
+.git/
+.gitignore
+
+# Test artifacts (writing test outputs into the build context would also
+# poison the cache loop)
+tests/e2e-docker/artifacts/
+
+# OS noise
+**/.DS_Store
