@@ -1,0 +1,77 @@
+name: gatepath-e2e
+
+networks:
+  captive_net:
+    driver: bridge
+    ipam:
+      config:
+        # Subnet only — no `gateway:` declaration. Setting one makes
+        # netavark assign 172.30.0.2 to the bridge interface as well as
+        # the gateway container that pins ipv4_address: 172.30.0.2,
+        # which causes ARP responses to come from whichever wins the
+        # race — usually the bridge, which has no listener on :80, so
+        # the client's TCP SYNs get RST'd. By omitting `gateway:`,
+        # only the captive-gateway container owns .2, and the client's
+        # entrypoint installs its own default route via .2 after the
+        # iface rename (it would anyway, to recover from the L3 churn).
+        - subnet: 172.30.0.0/24
+
+services:
+  captive-gateway:
+    container_name: gatepath-e2e-gateway
+    build:
+      # Build context is the repo root so we can COPY the existing
+      # mockportal/ tree without a sibling-dir hack.
+      context: ../..
+      dockerfile: tests/e2e-docker/gateway/Dockerfile
+    networks:
+      captive_net:
+        ipv4_address: 172.30.0.2
+    # Publish :80 to the host so the orchestrator can curl /log + /reset
+    # without needing to enter the rootless network namespace.
+    ports:
+      - "18080:80"
+    cap_add:
+      # dnsmasq needs NET_ADMIN to bind :53/:67 on the captive iface in
+      # rootless podman.
+      - NET_ADMIN
+    environment:
+      # First probe → 302 /portal; second probe → 204 validated. Matches
+      # the natural post-login flow with no extra round-trips.
+      PORTAL_COMPLETE_AFTER: "1"
+
+  gatepath-client:
+    container_name: gatepath-e2e-client
+    build:
+      context: ../..
+      dockerfile: tests/e2e-docker/client/Dockerfile
+    networks:
+      captive_net:
+        ipv4_address: 172.30.0.3
+    dns:
+      # Force the captive gateway as the resolver — the entrypoint also
+      # rewrites /etc/resolv.conf, but setting it here means even pre-
+      # entrypoint resolver use lands on the hijack.
+      - 172.30.0.2
+    depends_on:
+      - captive-gateway
+    # See client/Dockerfile + entrypoint.sh for why we need these.
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+      - SYS_ADMIN
+    security_opt:
+      # setns(2) into a root-owned netns is filtered by podman's default
+      # seccomp profile in rootless mode. unconfined is the most honest
+      # toggle — Flatpak production deployments hit the same syscall via
+      # the helper running as system-bus-activated root.
+      - seccomp=unconfined
+      - label=disable
+    # The host runner copies artefacts out of /tmp after the scenario
+    # finishes; mounting a host directory keeps the artefacts visible
+    # without a separate `podman cp`.
+    volumes:
+      - ./artifacts:/tmp/artifacts:Z
+    # `test` runs the scenario and exits with its rc; `wait` keeps the
+    # container alive for interactive `podman exec` debugging.
+    command: ["test"]

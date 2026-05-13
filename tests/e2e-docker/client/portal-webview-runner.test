@@ -1,0 +1,41 @@
+#!/bin/sh
+# Test-mode portal-webview-runner — installed at the path the helper's
+# compile-time PORTAL_RUNNER_PATH constant points at.
+#
+# The helper's spawn flow lands here with:
+#   * the gatepath netns as our network namespace
+#   * the calling user's UID (1000 / tester) — privilege already dropped
+#   * argv = [this script, portal_url]
+#
+# wlan0 was moved into this netns naked (kernel strips L3 config on
+# `ip link set ... netns ...`). We bring it up and pin a static IP on
+# the captive subnet so the WebView can reach the gateway. /usr/sbin/ip
+# carries cap_net_admin+ep (see Dockerfile setcap step) so the
+# unprivileged caller UID can run these commands.
+#
+# In production, the wrapper here is `exec /usr/bin/python3 -m
+# gatepath.portal_webview_runner "$@"` — distros own this script, so
+# substituting a test variant is the same install-time surface.
+set -eu
+
+PORTAL_URL="$1"
+
+/usr/sbin/ip link set dev lo up || true
+/usr/sbin/ip link set dev wlan0 up
+/usr/sbin/ip addr add 172.30.0.220/24 dev wlan0
+/usr/sbin/ip route add default via 172.30.0.2 dev wlan0
+
+# We inherit env from dbus-daemon's activation, which DOES NOT have
+# DISPLAY (dbus started before the entrypoint exported it). Pin it
+# here. Same story for HOME — the helper drops to uid 1000 but
+# inherits dbus-daemon's HOME=/. GTK/WebKit insist on a writable HOME
+# for cookie/cache storage; we hand them a temporary one.
+export DISPLAY="${DISPLAY:-:99}"
+export HOME="${HOME:-/home/tester}"
+export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/1000}"
+# Silence the AT-SPI bridge probe that WebKit fires unconditionally —
+# without a session bus running an AT-SPI registry, it spends ~5s
+# timing out and clogs the log.
+export NO_AT_BRIDGE=1
+
+exec /usr/bin/python3 -m gatepath.portal_webview_runner "$PORTAL_URL"
