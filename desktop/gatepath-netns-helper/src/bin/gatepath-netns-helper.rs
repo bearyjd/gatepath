@@ -76,9 +76,30 @@ async fn run() -> anyhow::Result<()> {
     // are fatal — we refuse to start without auth, the defence-in-depth
     // captive check, the disconnect watch (5b.6), the privileged spawn
     // capability (5b.7), or a working audit log path.
-    let auth = PolicyKitAuthorizer::connect().context("connecting to PolicyKit")?;
-    let captive_check = NMCaptiveCheck::connect().context("connecting to NetworkManager")?;
-    let watcher = LinuxNameWatcher::connect().context("connecting to D-Bus for name watch")?;
+    //
+    // The four `connect()` calls construct `zbus::blocking::Connection`s,
+    // which internally `block_on` an async future. With zbus's `tokio`
+    // feature enabled, that path tries to start a tokio runtime — and
+    // since we're already inside `#[tokio::main]`'s multi-thread runtime,
+    // `Runtime::new()` panics with "Cannot start a runtime from within
+    // a runtime". Move the blocking init to a dedicated worker thread
+    // so the inner `block_on` runs on a clean stack with no ambient
+    // tokio runtime. The Rust unit suite never caught this because the
+    // production `connect()` paths are replaced with fakes; the bug only
+    // surfaces when the daemon actually starts.
+    let (auth, captive_check, watcher, caller_uid_lookup) =
+        tokio::task::spawn_blocking(|| -> anyhow::Result<_> {
+            let auth = PolicyKitAuthorizer::connect().context("connecting to PolicyKit")?;
+            let captive_check =
+                NMCaptiveCheck::connect().context("connecting to NetworkManager")?;
+            let watcher =
+                LinuxNameWatcher::connect().context("connecting to D-Bus for name watch")?;
+            let caller_uid_lookup =
+                DbusCallerUidLookup::connect().context("connecting to D-Bus for UID lookup")?;
+            Ok((auth, captive_check, watcher, caller_uid_lookup))
+        })
+        .await
+        .context("spawn_blocking for blocking-zbus init panicked")??;
     if !std::path::Path::new(PORTAL_RUNNER_PATH).exists() {
         anyhow::bail!(
             "portal runner not installed at {PORTAL_RUNNER_PATH}; \
@@ -86,8 +107,6 @@ async fn run() -> anyhow::Result<()> {
         );
     }
     let spawner = LinuxSpawner::new(PORTAL_RUNNER_PATH);
-    let caller_uid_lookup =
-        DbusCallerUidLookup::connect().context("connecting to D-Bus for UID lookup")?;
     let ops = LinuxNetnsOps::new();
     let throttle = Throttle::new(THROTTLE_LIMIT, THROTTLE_WINDOW);
     let audit = FileAuditWriter::open(PathBuf::from(AUDIT_LOG_PATH))
