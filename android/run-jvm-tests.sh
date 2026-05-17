@@ -72,6 +72,14 @@ KOTLINX_SERIALIZATION_CORE="$JAR_DIR/kotlinx-serialization-core-jvm-1.7.3.jar"
 JUNIT_JAR="$JAR_DIR/junit-4.13.2.jar"
 HAMCREST_JAR="$JAR_DIR/hamcrest-core-1.3.jar"
 COROUTINES_TEST="$JAR_DIR/kotlinx-coroutines-test-jvm-1.9.0.jar"
+# androidx.lifecycle 2.8.x is multiplatform; the -jvm variants are pure JVM
+# jars without Android-only methods, suitable for plain-JVM tests of
+# LifecycleObserver/LifecycleRegistry consumers (e.g. BindWatchdogTest).
+# core-common is needed transitively by LifecycleRegistry at runtime (it
+# provides FastSafeIterableMap).
+LIFECYCLE_COMMON="$JAR_DIR/lifecycle-common-jvm-2.8.7.jar"
+LIFECYCLE_RUNTIME="$JAR_DIR/lifecycle-runtime-jvm-2.8.7.jar"
+ARCH_CORE_COMMON="$JAR_DIR/core-common-2.2.0.jar"
 
 download_jar() {
     local url="$1"
@@ -83,6 +91,8 @@ download_jar() {
 }
 
 MAVEN="https://repo1.maven.org/maven2"
+# androidx artifacts are not on Maven Central; pull them from Google's mirror.
+GOOGLE_MAVEN="https://dl.google.com/dl/android/maven2"
 download_jar "$MAVEN/org/jetbrains/kotlin/kotlin-stdlib/2.0.21/kotlin-stdlib-2.0.21.jar" "$KOTLIN_STDLIB"
 download_jar "$MAVEN/org/jetbrains/kotlinx/kotlinx-coroutines-core-jvm/1.9.0/kotlinx-coroutines-core-jvm-1.9.0.jar" "$KOTLINX_COROUTINES"
 download_jar "$MAVEN/org/jetbrains/kotlinx/kotlinx-serialization-json-jvm/1.7.3/kotlinx-serialization-json-jvm-1.7.3.jar" "$KOTLINX_SERIALIZATION"
@@ -90,6 +100,9 @@ download_jar "$MAVEN/org/jetbrains/kotlinx/kotlinx-serialization-core-jvm/1.7.3/
 download_jar "$MAVEN/junit/junit/4.13.2/junit-4.13.2.jar" "$JUNIT_JAR"
 download_jar "$MAVEN/org/hamcrest/hamcrest-core/1.3/hamcrest-core-1.3.jar" "$HAMCREST_JAR"
 download_jar "$MAVEN/org/jetbrains/kotlinx/kotlinx-coroutines-test-jvm/1.9.0/kotlinx-coroutines-test-jvm-1.9.0.jar" "$COROUTINES_TEST"
+download_jar "$GOOGLE_MAVEN/androidx/lifecycle/lifecycle-common-jvm/2.8.7/lifecycle-common-jvm-2.8.7.jar" "$LIFECYCLE_COMMON"
+download_jar "$GOOGLE_MAVEN/androidx/lifecycle/lifecycle-runtime-jvm/2.8.7/lifecycle-runtime-jvm-2.8.7.jar" "$LIFECYCLE_RUNTIME"
+download_jar "$GOOGLE_MAVEN/androidx/arch/core/core-common/2.2.0/core-common-2.2.0.jar" "$ARCH_CORE_COMMON"
 
 # ── Compile ────────────────────────────────────────────────────────────────────
 
@@ -117,9 +130,10 @@ MAIN_SOURCES=(
     "$SRC_MAIN/cc/grepon/gatepath/diag/DiagnosticEngine.kt"
     "$SRC_MAIN/cc/grepon/gatepath/diag/PrivateDnsProbe.kt"
     "$SRC_MAIN/cc/grepon/gatepath/diag/HttpProbe.kt"
+    "$SRC_MAIN/cc/grepon/gatepath/BindWatchdog.kt"
 )
 
-MAIN_CP="$KOTLIN_STDLIB:$KOTLINX_COROUTINES:$KOTLINX_SERIALIZATION:$KOTLINX_SERIALIZATION_CORE"
+MAIN_CP="$KOTLIN_STDLIB:$KOTLINX_COROUTINES:$KOTLINX_SERIALIZATION:$KOTLINX_SERIALIZATION_CORE:$LIFECYCLE_COMMON:$LIFECYCLE_RUNTIME:$ARCH_CORE_COMMON"
 
 # Locate the kotlinx-serialization compiler plugin shipped with kotlinc.
 KOTLINC_HOME="$(dirname "$(dirname "$(command -v kotlinc)")")"
@@ -175,6 +189,7 @@ TEST_SOURCES=(
     "$SRC_TEST/cc/grepon/gatepath/AuditSchemaParityTest.kt"
     "$SRC_TEST/cc/grepon/gatepath/PortalProbeTest.kt"
     "$SRC_TEST/cc/grepon/gatepath/WebViewHostMatchingTest.kt"
+    "$SRC_TEST/cc/grepon/gatepath/BindWatchdogTest.kt"
     "$SRC_TEST/cc/grepon/gatepath/diag/DiagnosticEngineTest.kt"
     "$SRC_TEST/cc/grepon/gatepath/diag/PrivateDnsProbeTest.kt"
     "$SRC_TEST/cc/grepon/gatepath/diag/HttpProbeTest.kt"
