@@ -261,6 +261,23 @@ class MainViewModel @Inject constructor(
     }
 
     /**
+     * Debug-only: jump straight to PortalSession.Active with [portalUrl] and
+     * [network], bypassing the captive-portal detection pipeline. Lets the
+     * PortalScreen/WebView code path be exercised on devices whose system
+     * captive detection is unreachable (e.g. GrapheneOS hardcoded probe URLs).
+     *
+     * Skips the session manager and audit log on purpose — Dismiss returns to
+     * Idle without persisting anything. Callers must gate on BuildConfig.DEBUG.
+     */
+    fun debugForceActiveSession(portalUrl: String, network: Network) {
+        _activeNetwork.value = network
+        _session.value = PortalSession.Active(
+            portalUrl = portalUrl,
+            openedUtc = utcNow(),
+        )
+    }
+
+    /**
      * Closes the session with [requestedReason]. The manager may downgrade ERROR
      * to ABORTED_PRE_ACTIVE for pre-Active phases, so the actual close reason
      * comes from the resulting [PortalSession.Completed].
