@@ -6,31 +6,35 @@ the workaround (if any).
 
 ## Status
 
-### KNOWN-AND-001 — `BindWatchdog` lifecycle delivery is JVM-untested
-
-`android/app/src/main/java/cc/grepon/gatepath/GatepathApplication.kt` defines a
-`BindWatchdog` `DefaultLifecycleObserver` that fires its lambda on `onStop`.
-Verifying its delivery semantics (e.g. ON_PAUSE → ON_RESUME does NOT fire,
-only ON_STOP does) requires `androidx.lifecycle:lifecycle-runtime` on the JVM
-test classpath, which `run-jvm-tests.sh` does not currently provide.
-
-**Mitigation in code:** `BindWatchdog` is `internal`, takes a lambda not a
-`Context`, overrides only `onStop` (no `onPause`/`onResume`). Code review
-catches a regression to per-Activity callbacks; this is the structural
-guarantee until the test gap is closed.
-
-**To close:** add `androidx.lifecycle:lifecycle-common-jvm:2.8.7` and
-`lifecycle-runtime-jvm:2.8.7` from `https://dl.google.com/dl/android/maven2/`
-to `run-jvm-tests.sh`'s `download_jar` block, then add a
-`BindWatchdogTest.kt` that walks a `LifecycleRegistry` through ON_RESUME →
-ON_PAUSE → ON_RESUME (must not fire) and ON_STOP (must fire once).
-
-**Resolution:** unblocked when the test ships, or when `./gradlew :app:test`
-(which has the dependency natively) replaces `run-jvm-tests.sh` in CI.
+_No open blockers._
 
 ---
 
 ## Resolved
+
+### KNOWN-AND-001 (RESOLVED 2026-05-17) — `BindWatchdog` lifecycle delivery is JVM-tested
+
+`BindWatchdog` was extracted from `GatepathApplication.kt` into its own
+file (`android/app/src/main/java/cc/grepon/gatepath/BindWatchdog.kt`) so
+the JVM runner can compile it without the Android `Application` + Hilt
+deps. `run-jvm-tests.sh` now downloads
+`androidx.lifecycle:lifecycle-common-jvm:2.8.7`,
+`lifecycle-runtime-jvm:2.8.7`, and the transitive
+`androidx.arch.core:core-common:2.2.0` from
+`https://dl.google.com/dl/android/maven2/`.
+
+`BindWatchdogTest.kt` walks a `LifecycleRegistry` (constructed via
+`createUnsafe` to skip the main-thread assertion) through the documented
+scenarios:
+
+- `ON_RESUME → ON_PAUSE → ON_RESUME` (no `ON_STOP`) — lambda must NOT fire.
+- Full cycle ending in `ON_STOP` — lambda must fire exactly once.
+- Three back-to-back foreground/background cycles — lambda fires once per
+  `ON_STOP`.
+
+All three pass via `./gradlew :app:testDebugUnitTest`.
+
+---
 
 ### BLOCKER-AND-001 (RESOLVED 2026-05-05) — `kotlinc` was not on PATH
 
