@@ -69,7 +69,7 @@ class PortalProbeTest {
 
         private fun findRepoRoot(): java.io.File {
             // Walk up from the test class location to find the repo root (contains mockportal/)
-            var dir = java.io.File(System.getProperty("user.dir"))
+            var dir = java.io.File(System.getProperty("user.dir") ?: ".")
             repeat(5) {
                 if (java.io.File(dir, "mockportal").exists()) return dir
                 dir = dir.parentFile ?: return dir
