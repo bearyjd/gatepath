@@ -75,6 +75,10 @@ fun GatepathWebView(
                 // nonces in sessionStorage/localStorage during the
                 // sign-in flow. Cleared on dispose below.
                 domStorageEnabled = true
+                // databaseEnabled / saveFormData: deprecated no-ops (WebSQL removed
+                // from Chromium in API 33; saveFormData superseded by autofill in
+                // API 26). Kept set to false to preserve the explicit-defaults intent.
+                @Suppress("DEPRECATION")
                 databaseEnabled = false
                 @Suppress("DEPRECATION")
                 saveFormData = false
