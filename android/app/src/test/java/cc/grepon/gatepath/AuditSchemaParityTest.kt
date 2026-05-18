@@ -199,7 +199,7 @@ class AuditSchemaParityTest {
     }
 
     private fun findRepoRoot(): File {
-        var dir = File(System.getProperty("user.dir"))
+        var dir = File(System.getProperty("user.dir") ?: ".")
         repeat(5) {
             if (File(dir, "docs/audit_log_schema.json").exists()) return dir
             dir = dir.parentFile ?: return dir
