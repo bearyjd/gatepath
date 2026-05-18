@@ -41,6 +41,7 @@ EXPECTED_STEPS = [
     "connect",
     "reset_settings",
     "install",
+    "disable_stock_handler",
     "reset_gateway",
     "set_probe_urls",
     "cycle_wifi",
@@ -54,6 +55,7 @@ EXPECTED_STEPS = [
     "pull_audit_log",
     "fetch_gateway_log",
     "cleanup_settings",
+    "enable_stock_handler",
     "disconnect",
 ]
 

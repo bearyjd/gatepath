@@ -60,6 +60,18 @@ CAPTIVE_KEYS = (
 AUDIT_LOG_RELATIVE = "files/audit_log.jsonl"
 APP_PACKAGE = "cc.grepon.gatepath"
 
+# AOSP stock captive-portal handler. With both Gatepath and the stock app
+# registered, the system either silently dispatches to the stock app or
+# shows a chooser — both modes blocked the test on the first PR #40 CI run
+# (artifact: pick_chooser recorded chooser_shown=False, then
+# wait_portal_screen timed out because the intent went to the stock app).
+# Disabling the stock package leaves Gatepath as the only handler so the
+# system auto-dispatches the CAPTIVE_PORTAL intent directly to
+# CaptivePortalActivity with no UI gate. Requires `adb root` (userdebug
+# emulator images support it; production images do not — step records the
+# outcome and continues either way).
+STOCK_HANDLER_PKG = "com.android.captiveportallogin"
+
 
 # ── Step helpers ──────────────────────────────────────────────────────────────
 
@@ -108,6 +120,26 @@ def step_install(state: dict) -> dict:
     return {"apk_path": state["apk_path"]}
 
 
+def step_disable_stock_handler(state: dict) -> dict:
+    """Disable com.android.captiveportallogin so Gatepath is the only
+    handler for CAPTIVE_PORTAL intents. See STOCK_HANDLER_PKG comment for
+    rationale. Best-effort: skip on production images where `adb root`
+    fails, recording the outcome rather than blocking the run."""
+    serial = state["serial"]
+    root_result = adb_helper.adb(serial, "root", check=False, timeout=15)
+    if root_result.returncode != 0 or "cannot run as root" in (root_result.stdout + root_result.stderr).lower():
+        return {"rooted": False, "disabled": False, "note": "adb root unavailable"}
+    # adb root restarts adbd as root; wait for it to come back.
+    adb_helper.adb(None, "wait-for-device", timeout=30, check=False)
+    # `pm disable` requires the running-user form on modern Android.
+    disable_out = adb_helper.shell(
+        serial, f"pm disable-user --user 0 {STOCK_HANDLER_PKG}",
+        timeout=15, check=False,
+    )
+    disabled = "new state: disabled" in disable_out.lower()
+    return {"rooted": True, "disabled": disabled, "pm_output": disable_out[:120]}
+
+
 def step_reset_gateway(state: dict) -> dict:
     body = _http(f"{state['mockportal_from_host_url']}/reset", method="POST")
     return {"response": body.decode("utf-8", errors="replace")[:80]}
@@ -145,19 +177,36 @@ def step_wait_for_captive(state: dict) -> dict:
 
 
 def step_tap_notification(state: dict) -> dict:
+    """Open the notification shade and tap the captive 'Sign in' notification.
+
+    With the stock handler disabled (step_disable_stock_handler), the
+    system auto-dispatches the CAPTIVE_PORTAL intent directly to
+    CaptivePortalActivity — no user tap required. In that case the
+    notification may not exist at all, or wait_portal_screen will see
+    the activity start before tap_notification can find anything.
+    Either way, missing the notification is NOT a failure.
+    """
     serial = state["serial"]
-    # Expand the notification shade.
+    # If the CaptivePortalActivity is already running (auto-dispatch path),
+    # skip the notification dance entirely.
+    fg = adb_helper.shell(serial, "dumpsys activity activities | grep -E 'mResumedActivity|topResumedActivityRecord' | head -3", timeout=10, check=False)
+    if APP_PACKAGE in fg and "CaptivePortalActivity" in fg:
+        return {"auto_dispatched": True, "tapped": False}
     adb_helper.shell(serial, "cmd statusbar expand-notifications", timeout=10)
     time.sleep(1.5)
-    # Find a notification mentioning "Sign in" (varies by locale; English emu).
-    try:
-        node = uiautomator_helper.wait_for_text_contains(serial, "Sign in", timeout=20)
-    except RuntimeError:
-        # Some images word it differently — try "Wi-Fi" + "network"
-        node = uiautomator_helper.wait_for_text_contains(serial, "Wi-Fi", timeout=10)
-    x, y = uiautomator_helper.midpoint(node)
-    uiautomator_helper.tap(serial, x, y)
-    return {"tapped_at": [x, y]}
+    for fragment in ("Sign in", "Wi-Fi"):
+        try:
+            node = uiautomator_helper.wait_for_text_contains(serial, fragment, timeout=8)
+        except RuntimeError:
+            continue
+        x, y = uiautomator_helper.midpoint(node)
+        uiautomator_helper.tap(serial, x, y)
+        # Close the shade so it doesn't shadow follow-up UI dumps.
+        adb_helper.shell(serial, "cmd statusbar collapse", timeout=5, check=False)
+        return {"tapped_at": [x, y], "tapped": True, "matched": fragment}
+    # Notification not found — fine if system already auto-dispatched.
+    adb_helper.shell(serial, "cmd statusbar collapse", timeout=5, check=False)
+    return {"tapped": False, "note": "no Sign-in notification found; expecting auto-dispatch"}
 
 
 def step_pick_chooser(state: dict) -> dict:
@@ -262,6 +311,18 @@ def step_cleanup_settings(state: dict) -> dict:
     return {"deleted": list(CAPTIVE_KEYS)}
 
 
+def step_enable_stock_handler(state: dict) -> dict:
+    """Re-enable com.android.captiveportallogin so the device is left in a
+    clean state. Best-effort; skip if root wasn't acquired in the
+    matching disable step."""
+    serial = state["serial"]
+    out = adb_helper.shell(
+        serial, f"pm enable --user 0 {STOCK_HANDLER_PKG}",
+        timeout=15, check=False,
+    )
+    return {"enabled": "new state: enabled" in out.lower(), "pm_output": out[:120]}
+
+
 def step_disconnect(state: dict) -> dict:
     adb_helper.disconnect(state["emulator_addr"])
     return {"disconnected": True}
@@ -271,6 +332,7 @@ STEPS: list[Callable[[dict], dict]] = [
     step("connect", step_connect),
     step("reset_settings", step_reset_settings),
     step("install", step_install),
+    step("disable_stock_handler", step_disable_stock_handler),
     step("reset_gateway", step_reset_gateway),
     step("set_probe_urls", step_set_probe_urls),
     step("cycle_wifi", step_cycle_wifi),
@@ -284,6 +346,7 @@ STEPS: list[Callable[[dict], dict]] = [
     step("pull_audit_log", step_pull_audit_log),
     step("fetch_gateway_log", step_fetch_gateway_log),
     step("cleanup_settings", step_cleanup_settings),
+    step("enable_stock_handler", step_enable_stock_handler),
     step("disconnect", step_disconnect),
 ]
 
