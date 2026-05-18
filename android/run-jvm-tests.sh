@@ -72,13 +72,20 @@ KOTLINX_SERIALIZATION_CORE="$JAR_DIR/kotlinx-serialization-core-jvm-1.7.3.jar"
 JUNIT_JAR="$JAR_DIR/junit-4.13.2.jar"
 HAMCREST_JAR="$JAR_DIR/hamcrest-core-1.3.jar"
 COROUTINES_TEST="$JAR_DIR/kotlinx-coroutines-test-jvm-1.9.0.jar"
-# androidx.lifecycle 2.8.x is multiplatform; the -jvm variants are pure JVM
-# jars without Android-only methods, suitable for plain-JVM tests of
-# LifecycleObserver/LifecycleRegistry consumers (e.g. BindWatchdogTest).
+# androidx.lifecycle 2.8.x is multiplatform; the JVM-target artifacts are
+# pure JVM jars without Android-only methods, suitable for plain-JVM tests
+# of LifecycleObserver/LifecycleRegistry consumers (e.g. BindWatchdogTest).
 # core-common is needed transitively by LifecycleRegistry at runtime (it
 # provides FastSafeIterableMap).
+#
+# Naming asymmetry between the two artifacts at 2.8.7:
+#   lifecycle-common  ships a `-jvm` variant: lifecycle-common-jvm-2.8.7.jar
+#   lifecycle-runtime ships a `-desktop` variant: lifecycle-runtime-desktop-2.8.7.jar
+#                     (there is NO lifecycle-runtime-jvm-2.8.7 — 404 at
+#                     dl.google.com; the bare lifecycle-runtime-2.8.7.jar
+#                     is a KMP umbrella stub with no classes)
 LIFECYCLE_COMMON="$JAR_DIR/lifecycle-common-jvm-2.8.7.jar"
-LIFECYCLE_RUNTIME="$JAR_DIR/lifecycle-runtime-jvm-2.8.7.jar"
+LIFECYCLE_RUNTIME="$JAR_DIR/lifecycle-runtime-desktop-2.8.7.jar"
 ARCH_CORE_COMMON="$JAR_DIR/core-common-2.2.0.jar"
 
 download_jar() {
@@ -101,7 +108,7 @@ download_jar "$MAVEN/junit/junit/4.13.2/junit-4.13.2.jar" "$JUNIT_JAR"
 download_jar "$MAVEN/org/hamcrest/hamcrest-core/1.3/hamcrest-core-1.3.jar" "$HAMCREST_JAR"
 download_jar "$MAVEN/org/jetbrains/kotlinx/kotlinx-coroutines-test-jvm/1.9.0/kotlinx-coroutines-test-jvm-1.9.0.jar" "$COROUTINES_TEST"
 download_jar "$GOOGLE_MAVEN/androidx/lifecycle/lifecycle-common-jvm/2.8.7/lifecycle-common-jvm-2.8.7.jar" "$LIFECYCLE_COMMON"
-download_jar "$GOOGLE_MAVEN/androidx/lifecycle/lifecycle-runtime-jvm/2.8.7/lifecycle-runtime-jvm-2.8.7.jar" "$LIFECYCLE_RUNTIME"
+download_jar "$GOOGLE_MAVEN/androidx/lifecycle/lifecycle-runtime-desktop/2.8.7/lifecycle-runtime-desktop-2.8.7.jar" "$LIFECYCLE_RUNTIME"
 download_jar "$GOOGLE_MAVEN/androidx/arch/core/core-common/2.2.0/core-common-2.2.0.jar" "$ARCH_CORE_COMMON"
 
 # ── Compile ────────────────────────────────────────────────────────────────────
