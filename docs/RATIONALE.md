@@ -162,6 +162,11 @@ protected stack** during sign-in, kernel-enforced. It does not claim to make
 rendering a hostile page safe. (See [`SECURITY_MODEL.md`](SECURITY_MODEL.md) for
 the full in/out-of-scope table.)
 
+> This shared-kernel limitation is the main reason a **VM-passthrough backend**
+> is worth considering: a guest with its own kernel *does* contain a browser
+> RCE. The netns-vs-container-vs-VM tradeoff, and a read-only hardware checker,
+> are recorded in [`ISOLATION_BACKENDS.md`](ISOLATION_BACKENDS.md).
+
 ---
 
 ## 5. Meeting the "added complexity / attack surface" criticism head-on
@@ -239,4 +244,3 @@ re-establishing association/DHCP inside the namespace) are tracked in
 (`bindProcessToNetwork`) is implemented. This document is the rationale the
 implementation is being built toward; it does not assert the desktop path works
 today.
-</content>

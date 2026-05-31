@@ -252,5 +252,3 @@ real hardware, then package with sysext (or RPM).
 - For packaging, **systemd-sysext** is the recommended primary on Bazzite, with
   a **layered RPM** as the conventional alternative; a writable-path installer
   is for dev only.
-</content>
-</invoke>
