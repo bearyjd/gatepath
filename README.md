@@ -9,6 +9,10 @@ tunnel, encrypted DNS, or normal browsing traffic to the portal operator.
 
 > **Read first:** [`docs/SECURITY_MODEL.md`](docs/SECURITY_MODEL.md) — what Gatepath
 > does and does not protect, by platform.
+>
+> **Why this exists:** [`docs/RATIONALE.md`](docs/RATIONALE.md) — the problem, why the
+> obvious fixes (pause the VPN, split-tunnel) weaken your whole posture, why the
+> single-purpose compartment works, and an honest accounting of its costs.
 
 ## Repo layout
 
