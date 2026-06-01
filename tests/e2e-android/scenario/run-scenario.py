@@ -289,27 +289,26 @@ def _tap_captive_notification(serial: str) -> dict:
     container (not the bare title TextView, which doesn't fire the
     contentIntent). Tries the specific captive title first, then looser
     matches. Returns a result dict; tapped=False if nothing matched."""
-    root = uiautomator_helper.dump_ui(serial)
+    root = uiautomator_helper.dump_ui(serial, compressed=False)
     parents = uiautomator_helper.parent_map(root)
-    target = None
-    matched = None
-    for fragment in ("Sign in to", "Sign in", "sign in to network"):
-        node = uiautomator_helper.find_by_text_contains(root, fragment)
-        if node is not None:
-            target, matched = node, fragment
-            break
-    if target is None:
+    matches = uiautomator_helper.find_all_by_text_contains(root, "sign in")
+    if not matches:
         return {"tapped": False, "note": "no Sign-in notification found"}
-    click = uiautomator_helper.clickable_ancestor(target, parents)
-    node_to_tap = click if click is not None else target
-    x, y = uiautomator_helper.midpoint(node_to_tap)
-    uiautomator_helper.tap(serial, x, y)
-    return {
-        "tapped": True,
-        "matched": matched,
-        "tapped_at": [x, y],
-        "via_clickable_ancestor": click is not None,
-    }
+    # Tap EVERY 'Sign in' row this pass. The notifications are auto-grouped:
+    # tapping a collapsed group summary expands it (revealing children); a tap
+    # on a child fires its contentIntent. Hitting all of them each pass covers
+    # both states without having to detect which is which.
+    points: list[list[int]] = []
+    for node in matches:
+        click = uiautomator_helper.clickable_ancestor(node, parents) or node
+        try:
+            x, y = uiautomator_helper.midpoint(click)
+        except RuntimeError:
+            continue
+        uiautomator_helper.tap(serial, x, y)
+        points.append([x, y])
+        time.sleep(0.6)
+    return {"tapped": bool(points), "match_count": len(matches), "tapped_points": points}
 
 
 def _captive_signin_launched(serial: str) -> bool:
@@ -322,36 +321,36 @@ def _captive_signin_launched(serial: str) -> bool:
 
 
 def _shade_is_open(xml: str) -> bool:
-    """True if a UIAutomator dump shows the SystemUI notification shade
-    rather than the launcher. `cmd statusbar expand-notifications` silently
-    no-ops sometimes (round-3 dumped the launcher home screen), so we verify
-    before trying to tap."""
-    return "com.android.systemui" in xml and (
-        "notification_stack_scroller" in xml
-        or "expandableNotificationRow" in xml
-        or "Sign in" in xml
-    )
+    """True only if the dump shows an actual notification row.
+
+    NOT keyed on notification_panel / notification_stack_scroller: those ids
+    are present in fully-expanded Quick Settings too, which HIDES the
+    notification list (round-4 over-swiped into QS and passed this check while
+    no notification was tappable). Require a real row or the captive text."""
+    low = xml.lower()
+    return "expandablenotificationrow" in low or "sign in" in low
 
 
 def _open_notification_shade(serial: str, attempts: int = 6) -> bool:
     """Open the notification shade reliably, verifying via a UI dump.
 
-    Alternates the `cmd statusbar` command with a physical swipe-down from the
-    top edge — the statusbar command no-ops unpredictably, the swipe works
-    whenever the screen is on. Returns True once a dump confirms the shade."""
+    Alternates `cmd statusbar expand-notifications` (no-ops unpredictably) with
+    a *gentle* swipe to ~40% of the screen — a full-length pull opens Quick
+    Settings and hides the notifications. Verifies a notification row is
+    actually present before returning. Non-compressed dump so grouped child
+    rows aren't elided. pixel_6 profile is 1080x2400."""
     for i in range(attempts):
         if i % 2 == 0:
             adb_helper.shell(
                 serial, "cmd statusbar expand-notifications", timeout=10, check=False
             )
         else:
-            # Swipe down from the top edge (pixel_6 profile is 1080 wide).
             adb_helper.shell(
-                serial, "input swipe 540 8 540 1900 250", timeout=10, check=False
+                serial, "input swipe 540 8 540 1000 200", timeout=10, check=False
             )
         time.sleep(1.5)
         try:
-            xml = uiautomator_helper.dump_ui_xml(serial)
+            xml = uiautomator_helper.dump_ui_xml(serial, compressed=False)
         except Exception:  # noqa: BLE001 — keep retrying on a transient dump error
             continue
         if _shade_is_open(xml):

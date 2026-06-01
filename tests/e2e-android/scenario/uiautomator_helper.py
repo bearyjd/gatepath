@@ -22,24 +22,33 @@ from adb_helper import shell
 BOUNDS_RE = re.compile(r"\[(\d+),(\d+)\]\[(\d+),(\d+)\]")
 
 
-def dump_ui_xml(serial: str) -> str:
+def dump_ui_xml(serial: str, compressed: bool = True) -> str:
     """Raw UI-hierarchy XML as a string.
 
-    Uses --compressed to keep the XML small. Falls back to plain dump if
-    --compressed is rejected (some API levels). Strips any preamble line like
+    `compressed` keeps the XML small but elides nodes that don't affect layout
+    — including, on some builds, grouped notification child rows. Pass
+    compressed=False when you need every node (e.g. tapping a grouped
+    notification's children). Strips any preamble line like
     "UI hierchary dumped to: ..." some builds emit before the XML.
     """
+    flag = "--compressed " if compressed else ""
     try:
-        shell(serial, "uiautomator dump --compressed /sdcard/ui.xml", timeout=15)
+        shell(serial, f"uiautomator dump {flag}/sdcard/ui.xml", timeout=15)
     except RuntimeError:
         shell(serial, "uiautomator dump /sdcard/ui.xml", timeout=15)
     xml = shell(serial, "cat /sdcard/ui.xml", timeout=10)
     return xml[xml.index("<") :] if "<" in xml else xml
 
 
-def dump_ui(serial: str) -> ET.Element:
+def dump_ui(serial: str, compressed: bool = True) -> ET.Element:
     """Dump the current UI hierarchy and return the parsed root."""
-    return ET.fromstring(dump_ui_xml(serial))
+    return ET.fromstring(dump_ui_xml(serial, compressed=compressed))
+
+
+def find_all_by_text_contains(root: ET.Element, fragment: str) -> list[ET.Element]:
+    """Every node whose `text` contains `fragment` (case-insensitive)."""
+    needle = fragment.lower()
+    return [n for n in root.iter("node") if needle in n.attrib.get("text", "").lower()]
 
 
 def parent_map(root: ET.Element) -> dict[ET.Element, ET.Element]:
