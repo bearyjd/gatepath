@@ -466,22 +466,52 @@ def _capture_dispatch_diagnostics(state: dict) -> dict:
     return diag
 
 
-def step_wait_portal_screen(state: dict) -> dict:
+def step_launch_debug_portal(state: dict) -> dict:
+    """Open PortalScreen deterministically via the PR #34 debug intent.
+
+    Tapping the system captive notification proved unachievable on a headless
+    emulator (grouped/collapsed notifications, input tap never registers a
+    click, and brute-force tapping ANR'd SystemUI). MainActivity reads
+    `gatepath.debug.portal_url` (gated on BuildConfig.DEBUG — CI builds with
+    assembleDebug) and pushes the session straight to Active, loading the
+    portal URL in the same PortalScreen WebView the real flow uses. Requires an
+    active network, which cycle_wifi/wait_for_captive established."""
     serial = state["serial"]
-    # GatepathCaptive: "Handling captive portal for network ..." per
-    # CaptivePortalActivity.kt:87. Equivalent: PortalScreen's "Network
-    # Sign-In" title via UI dump. Watch logcat — cheaper, less flaky.
+    portal_url = f"{state['mockportal_host_url']}/portal"
+    out, err = adb_helper.shell_full(
+        serial,
+        f"am start -n {APP_PACKAGE}/.MainActivity "
+        f"--es gatepath.debug.portal_url '{portal_url}'",
+        timeout=20,
+        check=False,
+    )
+    return {"portal_url": portal_url, "am_output": (out or err).strip()[:200]}
+
+
+def step_wait_portal_screen(state: dict) -> dict:
+    """Confirm the debug intent opened PortalScreen.
+
+    MainActivity logs `GatepathMain` "Debug portal intent: opening <url> on
+    <net>" (MainActivity.kt:99) once it accepts the extra and forces the
+    session Active. If the device had no active network it logs
+    "no active network; ignored" instead — surface that distinctly."""
+    serial = state["serial"]
     deadline = time.monotonic() + 45
     while time.monotonic() < deadline:
-        log = adb_helper.shell(serial, "logcat -d -t 200 -s GatepathCaptive:I", timeout=10)
-        if "Handling captive portal" in log:
+        log = adb_helper.shell(
+            serial, "logcat -d -t 400 -s GatepathMain:I GatepathMain:W", timeout=10
+        )
+        if "Debug portal intent: opening" in log:
             return {"detected_in_logcat": True}
+        if "no active network" in log:
+            raise RuntimeError("debug portal intent ignored: no active network")
         time.sleep(1.5)
-    diag = _capture_dispatch_diagnostics(state)
-    raise RuntimeError(
-        "CaptivePortalActivity did not start within 45s; "
-        f"foreground={diag.get('foreground')!r} resolver={diag.get('resolver')!r}"
+    fg = _foreground(serial)
+    log = adb_helper.shell(serial, "logcat -d -t 400", timeout=15, check=False)
+    (state["artifacts_dir"] / "wait_portal_screen-diagnostics.txt").write_text(
+        f"foreground:\n{fg}\n\nlogcat tail:\n{log}\n"
     )
+    raise RuntimeError(f"PortalScreen did not open within 45s; foreground={fg[:200]!r}")
 
 
 def step_submit_login(state: dict) -> dict:
@@ -505,17 +535,50 @@ def step_submit_login(state: dict) -> dict:
     return {"mode": "ui", "outcome": "submitted"}
 
 
+def _wifi_netid(dump: str) -> str | None:
+    """Parse the WIFI network id from `dumpsys connectivity` — it appears as
+    `network{NNN}` on the same NetworkAgentInfo line as `ni{WIFI ...}`."""
+    for line in dump.splitlines():
+        if "ni{WIFI" in line:
+            m = re.search(r"network\{(\d+)\}", line)
+            if m:
+                return m.group(1)
+    return None
+
+
 def step_wait_validated(state: dict) -> dict:
+    """Wait for the captive WIFI network to gain NET_CAPABILITY_VALIDATED.
+
+    The mock flips /generate_204 from 302 to 204 after PORTAL_COMPLETE_AFTER=3
+    probes, so the network validates once NetworkMonitor re-probes enough. The
+    debug path has no CaptivePortal token to force an immediate re-probe (the
+    real flow's reportCaptivePortalDismissed), so we (a) give it a generous
+    window and (b) best-effort ask the framework to re-evaluate the SAME
+    network. We deliberately do NOT cycle wifi: a fresh network validates as
+    'never captive', which wouldn't drive the captive->validated transition
+    that makes CaptivePortalMonitor emit NetworkValidated and write the
+    portal_completed audit entry."""
     serial = state["serial"]
-    deadline = time.monotonic() + 30
+    window = 120
+    deadline = time.monotonic() + window
+    reevaluated = False
     while time.monotonic() < deadline:
         dump = adb_helper.shell(serial, "dumpsys connectivity", timeout=15)
-        # Find the WIFI NetworkAgentInfo line; check it has IS_VALIDATED.
         for line in dump.splitlines():
             if "ni{WIFI" in line and "IS_VALIDATED" in line and "CAPTIVE_PORTAL" not in line:
-                return {"validated_in_sec": int(30 - (deadline - time.monotonic()))}
-        time.sleep(2)
-    raise RuntimeError("WIFI network never reached IS_VALIDATED")
+                return {"validated_in_sec": int(window - (deadline - time.monotonic()))}
+        elapsed = window - (deadline - time.monotonic())
+        if not reevaluated and elapsed > 12:
+            netid = _wifi_netid(dump)
+            if netid:
+                adb_helper.shell(
+                    serial, f"cmd connectivity reevaluate {netid}", timeout=10, check=False
+                )
+            reevaluated = True
+        time.sleep(3)
+    dump = adb_helper.shell(serial, "dumpsys connectivity", timeout=15, check=False)
+    (state["artifacts_dir"] / "wait_validated-diagnostics.txt").write_text(dump)
+    raise RuntimeError(f"WIFI network never reached IS_VALIDATED within {window}s")
 
 
 def step_pull_logcat(state: dict) -> dict:
@@ -583,13 +646,11 @@ STEPS: list[Callable[[dict], dict]] = [
     step("connect", step_connect),
     step("reset_settings", step_reset_settings),
     step("install", step_install),
-    step("disable_stock_handler", step_disable_stock_handler),
     step("reset_gateway", step_reset_gateway),
     step("set_probe_urls", step_set_probe_urls),
     step("cycle_wifi", step_cycle_wifi),
     step("wait_for_captive", step_wait_for_captive),
-    step("tap_notification", step_tap_notification),
-    step("pick_chooser", step_pick_chooser),
+    step("launch_debug_portal", step_launch_debug_portal),
     step("wait_portal_screen", step_wait_portal_screen),
     step("submit_login", step_submit_login),
     step("wait_validated", step_wait_validated),
@@ -597,7 +658,6 @@ STEPS: list[Callable[[dict], dict]] = [
     step("pull_audit_log", step_pull_audit_log),
     step("fetch_gateway_log", step_fetch_gateway_log),
     step("cleanup_settings", step_cleanup_settings),
-    step("enable_stock_handler", step_enable_stock_handler),
     step("disconnect", step_disconnect),
 ]
 

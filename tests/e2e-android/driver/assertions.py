@@ -41,13 +41,11 @@ EXPECTED_STEPS = [
     "connect",
     "reset_settings",
     "install",
-    "disable_stock_handler",
     "reset_gateway",
     "set_probe_urls",
     "cycle_wifi",
     "wait_for_captive",
-    "tap_notification",
-    "pick_chooser",
+    "launch_debug_portal",
     "wait_portal_screen",
     "submit_login",
     "wait_validated",
@@ -55,7 +53,6 @@ EXPECTED_STEPS = [
     "pull_audit_log",
     "fetch_gateway_log",
     "cleanup_settings",
-    "enable_stock_handler",
     "disconnect",
 ]
 
