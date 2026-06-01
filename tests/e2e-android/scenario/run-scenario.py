@@ -321,6 +321,44 @@ def _captive_signin_launched(serial: str) -> bool:
     return "Handling captive portal" in log
 
 
+def _shade_is_open(xml: str) -> bool:
+    """True if a UIAutomator dump shows the SystemUI notification shade
+    rather than the launcher. `cmd statusbar expand-notifications` silently
+    no-ops sometimes (round-3 dumped the launcher home screen), so we verify
+    before trying to tap."""
+    return "com.android.systemui" in xml and (
+        "notification_stack_scroller" in xml
+        or "expandableNotificationRow" in xml
+        or "Sign in" in xml
+    )
+
+
+def _open_notification_shade(serial: str, attempts: int = 6) -> bool:
+    """Open the notification shade reliably, verifying via a UI dump.
+
+    Alternates the `cmd statusbar` command with a physical swipe-down from the
+    top edge — the statusbar command no-ops unpredictably, the swipe works
+    whenever the screen is on. Returns True once a dump confirms the shade."""
+    for i in range(attempts):
+        if i % 2 == 0:
+            adb_helper.shell(
+                serial, "cmd statusbar expand-notifications", timeout=10, check=False
+            )
+        else:
+            # Swipe down from the top edge (pixel_6 profile is 1080 wide).
+            adb_helper.shell(
+                serial, "input swipe 540 8 540 1900 250", timeout=10, check=False
+            )
+        time.sleep(1.5)
+        try:
+            xml = uiautomator_helper.dump_ui_xml(serial)
+        except Exception:  # noqa: BLE001 — keep retrying on a transient dump error
+            continue
+        if _shade_is_open(xml):
+            return True
+    return False
+
+
 def step_tap_notification(state: dict) -> dict:
     """Open the notification shade and tap the captive 'Sign in' notification
     to fire its (broadcast) contentIntent, dispatching to CaptivePortalActivity
@@ -335,12 +373,21 @@ def step_tap_notification(state: dict) -> dict:
     """
     serial = state["serial"]
     adb_helper.shell(serial, "input keyevent KEYCODE_WAKEUP", timeout=10, check=False)
+    adb_helper.shell(serial, "wm dismiss-keyguard", timeout=10, check=False)
     if _captive_signin_launched(serial):
+        state["captive_launched"] = True
         return {"auto_dispatched": True, "tapped": False, "launched": True}
 
-    adb_helper.shell(serial, "cmd statusbar expand-notifications", timeout=10)
-    time.sleep(2.0)
+    opened = _open_notification_shade(serial)
     _dump_notification_state(state, "pre_tap")
+    if not opened:
+        adb_helper.shell(serial, "cmd statusbar collapse", timeout=5, check=False)
+        return {
+            "tapped": False,
+            "shade_opened": False,
+            "launched": False,
+            "note": "notification shade did not open after retries",
+        }
 
     attempts: list[dict] = []
     launched = False
@@ -348,11 +395,9 @@ def step_tap_notification(state: dict) -> dict:
         tap = _tap_captive_notification(serial)
         attempts.append(tap)
         if not tap.get("tapped"):
-            # Shade not showing the notification (collapsed / not rendered yet)
-            # — re-expand and retry. Only here, so a productive group-expand
-            # tap isn't undone by re-expanding the whole shade.
-            adb_helper.shell(serial, "cmd statusbar expand-notifications", timeout=10, check=False)
-            time.sleep(1.5)
+            # Notification not visible — the shade may have closed (a stray
+            # tap, a group toggle). Re-open it (verified) and retry.
+            _open_notification_shade(serial, attempts=3)
             continue
         time.sleep(2.5)  # let the broadcast launch the activity
         if _captive_signin_launched(serial):
@@ -360,9 +405,11 @@ def step_tap_notification(state: dict) -> dict:
             break
 
     adb_helper.shell(serial, "cmd statusbar collapse", timeout=5, check=False)
+    state["captive_launched"] = launched
     return {
         "tapped": any(a.get("tapped") for a in attempts),
         "attempts": len(attempts),
+        "shade_opened": True,
         "last_tap": attempts[-1] if attempts else None,
         "launched": launched,
         "foreground_after": _foreground(serial)[:240],
@@ -370,9 +417,19 @@ def step_tap_notification(state: dict) -> dict:
 
 
 def step_pick_chooser(state: dict) -> dict:
+    """Pick 'Gatepath' from a disambiguation chooser, if one appeared.
+
+    With the stock handler disabled Gatepath is the sole handler, so there is
+    normally NO chooser and this is a no-op. Guard hard against tapping a stray
+    'Gatepath' label on the launcher (round-3 tapped the home-screen app icon
+    and launched MainActivity): only act when an Android resolver/chooser is
+    actually in the foreground, and skip entirely if dispatch already worked."""
     serial = state["serial"]
-    # If a chooser appears, pick "Gatepath". If not (Android remembered),
-    # this is a no-op.
+    if state.get("captive_launched"):
+        return {"chooser_shown": False, "skipped": "captive already launched"}
+    fg = _foreground(serial).lower()
+    if not any(k in fg for k in ("resolveractivity", "chooseractivity", "intentresolver")):
+        return {"chooser_shown": False, "note": "no resolver/chooser in foreground"}
     try:
         node = uiautomator_helper.wait_for_text(serial, "Gatepath", timeout=8)
     except RuntimeError:
