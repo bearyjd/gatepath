@@ -477,6 +477,13 @@ def step_launch_debug_portal(state: dict) -> dict:
     portal URL in the same PortalScreen WebView the real flow uses. Requires an
     active network, which cycle_wifi/wait_for_captive established."""
     serial = state["serial"]
+    # The emulator floods logcat with package-optimization spam after boot
+    # (~hundreds of lines/sec), which buries our app's lines under any bounded
+    # `-t` window and can rotate them out of the ring buffer entirely. Enlarge
+    # the buffer and clear it right before launch so wait_portal_screen reads a
+    # fresh, app-dominated log.
+    adb_helper.shell(serial, "logcat -G 8M", timeout=10, check=False)
+    adb_helper.shell(serial, "logcat -c", timeout=10, check=False)
     portal_url = f"{state['mockportal_host_url']}/portal"
     out, err = adb_helper.shell_full(
         serial,
@@ -496,20 +503,22 @@ def step_wait_portal_screen(state: dict) -> dict:
     session Active. If the device had no active network it logs
     "no active network; ignored" instead — surface that distinctly."""
     serial = state["serial"]
+    # launch_debug_portal cleared the buffer, so a full `-d` dump is fresh and
+    # app-dominated — no `-t` window to miss the line under spam. MainActivity
+    # logs "Debug portal intent: opening" (GatepathMain) once it accepts the
+    # extra, or "no active network; ignored" if there's no usable network.
     deadline = time.monotonic() + 45
     while time.monotonic() < deadline:
-        log = adb_helper.shell(
-            serial, "logcat -d -t 400 -s GatepathMain:I GatepathMain:W", timeout=10
-        )
+        log = adb_helper.shell(serial, "logcat -d", timeout=20, check=False)
         if "Debug portal intent: opening" in log:
             return {"detected_in_logcat": True}
-        if "no active network" in log:
+        if "Debug portal intent: no active network" in log:
             raise RuntimeError("debug portal intent ignored: no active network")
         time.sleep(1.5)
     fg = _foreground(serial)
-    log = adb_helper.shell(serial, "logcat -d -t 400", timeout=15, check=False)
+    log = adb_helper.shell(serial, "logcat -d", timeout=20, check=False)
     (state["artifacts_dir"] / "wait_portal_screen-diagnostics.txt").write_text(
-        f"foreground:\n{fg}\n\nlogcat tail:\n{log}\n"
+        f"foreground:\n{fg}\n\nfull logcat:\n{log}\n"
     )
     raise RuntimeError(f"PortalScreen did not open within 45s; foreground={fg[:200]!r}")
 
