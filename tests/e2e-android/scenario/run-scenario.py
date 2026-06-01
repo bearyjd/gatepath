@@ -251,37 +251,90 @@ def step_wait_for_captive(state: dict) -> dict:
     raise RuntimeError("captive portal not detected within 45s")
 
 
-def step_tap_notification(state: dict) -> dict:
-    """Open the notification shade and tap the captive 'Sign in' notification.
+def _foreground(serial: str) -> str:
+    """The currently focused window/activity, via dumpsys window. More
+    reliable across API levels than grepping `dumpsys activity activities`."""
+    out, _ = adb_helper.shell_full(
+        serial,
+        "dumpsys window 2>/dev/null | grep -E 'mCurrentFocus|mFocusedApp' | head -4",
+        timeout=10,
+        check=False,
+    )
+    return out.strip()
 
-    With the stock handler disabled (step_disable_stock_handler), the
-    system auto-dispatches the CAPTIVE_PORTAL intent directly to
-    CaptivePortalActivity — no user tap required. In that case the
-    notification may not exist at all, or wait_portal_screen will see
-    the activity start before tap_notification can find anything.
-    Either way, missing the notification is NOT a failure.
+
+def _dump_notification_state(state: dict, label: str) -> None:
+    """Persist the notification shade + the system's notification records to
+    artifacts. `dumpsys notification --noredact` reveals each notification's
+    contentIntent target — the authoritative answer to *why* tapping the
+    captive 'Sign in' notification did or did not launch Gatepath. Defensive:
+    never raises."""
+    serial = state["serial"]
+    art = state["artifacts_dir"]
+    try:
+        notif, _ = adb_helper.shell_full(
+            serial, "dumpsys notification --noredact", timeout=20, check=False
+        )
+        (art / f"notifications-{label}.txt").write_text(notif)
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        (art / f"shade-{label}.xml").write_text(uiautomator_helper.dump_ui_xml(serial))
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _tap_captive_notification(serial: str) -> dict:
+    """Find the captive 'Sign in' notification and tap its clickable
+    container (not the bare title TextView, which doesn't fire the
+    contentIntent). Tries the specific captive title first, then looser
+    matches. Returns a result dict; tapped=False if nothing matched."""
+    root = uiautomator_helper.dump_ui(serial)
+    parents = uiautomator_helper.parent_map(root)
+    target = None
+    matched = None
+    for fragment in ("Sign in to", "Sign in", "sign in to network"):
+        node = uiautomator_helper.find_by_text_contains(root, fragment)
+        if node is not None:
+            target, matched = node, fragment
+            break
+    if target is None:
+        return {"tapped": False, "note": "no Sign-in notification found"}
+    click = uiautomator_helper.clickable_ancestor(target, parents)
+    node_to_tap = click if click is not None else target
+    x, y = uiautomator_helper.midpoint(node_to_tap)
+    uiautomator_helper.tap(serial, x, y)
+    return {
+        "tapped": True,
+        "matched": matched,
+        "tapped_at": [x, y],
+        "via_clickable_ancestor": click is not None,
+    }
+
+
+def step_tap_notification(state: dict) -> dict:
+    """Open the notification shade and tap the captive 'Sign in' notification,
+    firing its contentIntent. With the stock handler disabled Gatepath is the
+    sole CAPTIVE_PORTAL handler, so the tap dispatches straight to
+    CaptivePortalActivity. Captures the notification + shade state before the
+    tap and the foreground window after, so a dispatch failure is diagnosable.
     """
     serial = state["serial"]
-    # If the CaptivePortalActivity is already running (auto-dispatch path),
+    # If CaptivePortalActivity is already foreground (auto-dispatch path),
     # skip the notification dance entirely.
-    fg = adb_helper.shell(serial, "dumpsys activity activities | grep -E 'mResumedActivity|topResumedActivityRecord' | head -3", timeout=10, check=False)
-    if APP_PACKAGE in fg and "CaptivePortalActivity" in fg:
+    if APP_PACKAGE in _foreground(serial) and "CaptivePortal" in _foreground(serial):
         return {"auto_dispatched": True, "tapped": False}
+
     adb_helper.shell(serial, "cmd statusbar expand-notifications", timeout=10)
-    time.sleep(1.5)
-    for fragment in ("Sign in", "Wi-Fi"):
-        try:
-            node = uiautomator_helper.wait_for_text_contains(serial, fragment, timeout=8)
-        except RuntimeError:
-            continue
-        x, y = uiautomator_helper.midpoint(node)
-        uiautomator_helper.tap(serial, x, y)
-        # Close the shade so it doesn't shadow follow-up UI dumps.
-        adb_helper.shell(serial, "cmd statusbar collapse", timeout=5, check=False)
-        return {"tapped_at": [x, y], "tapped": True, "matched": fragment}
-    # Notification not found — fine if system already auto-dispatched.
+    time.sleep(2.0)
+    _dump_notification_state(state, "pre_tap")
+
+    result = _tap_captive_notification(serial)
+
     adb_helper.shell(serial, "cmd statusbar collapse", timeout=5, check=False)
-    return {"tapped": False, "note": "no Sign-in notification found; expecting auto-dispatch"}
+    time.sleep(1.5)
+    result["foreground_after"] = _foreground(serial)[:240]
+    return result
 
 
 def step_pick_chooser(state: dict) -> dict:
@@ -306,13 +359,7 @@ def _capture_dispatch_diagnostics(state: dict) -> dict:
     serial = state["serial"]
     diag: dict[str, str] = {}
     try:
-        fg, _ = adb_helper.shell_full(
-            serial,
-            "dumpsys activity activities | "
-            "grep -E 'mResumedActivity|topResumedActivityRecord' | head -3",
-            timeout=10,
-            check=False,
-        )
+        fg = _foreground(serial)
         resolver, _ = adb_helper.shell_full(
             serial,
             f"cmd package resolve-activity --brief -a {CAPTIVE_PORTAL_ACTION} "
@@ -324,7 +371,8 @@ def _capture_dispatch_diagnostics(state: dict) -> dict:
         (state["artifacts_dir"] / "wait_portal_screen-diagnostics.txt").write_text(
             f"foreground:\n{fg}\n\nresolver:\n{resolver}\n\nlogcat tail:\n{log}\n"
         )
-        diag = {"foreground": fg.strip()[:200], "resolver": resolver.strip()[:200]}
+        _dump_notification_state(state, "on_timeout")
+        diag = {"foreground": fg[:200], "resolver": resolver.strip()[:200]}
     except Exception as e:  # noqa: BLE001 — diagnostics must not mask the timeout
         diag = {"diag_error": f"{type(e).__name__}: {e}"}
     return diag

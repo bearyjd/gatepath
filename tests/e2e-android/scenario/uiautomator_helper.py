@@ -22,22 +22,43 @@ from adb_helper import shell
 BOUNDS_RE = re.compile(r"\[(\d+),(\d+)\]\[(\d+),(\d+)\]")
 
 
-def dump_ui(serial: str) -> ET.Element:
-    """Dump the current UI hierarchy and return the parsed root.
+def dump_ui_xml(serial: str) -> str:
+    """Raw UI-hierarchy XML as a string.
 
     Uses --compressed to keep the XML small. Falls back to plain dump if
-    --compressed is rejected (some API levels).
+    --compressed is rejected (some API levels). Strips any preamble line like
+    "UI hierchary dumped to: ..." some builds emit before the XML.
     """
     try:
         shell(serial, "uiautomator dump --compressed /sdcard/ui.xml", timeout=15)
     except RuntimeError:
         shell(serial, "uiautomator dump /sdcard/ui.xml", timeout=15)
     xml = shell(serial, "cat /sdcard/ui.xml", timeout=10)
-    # Strip any preamble line like "UI hierchary dumped to: ..." that some
-    # uiautomator builds emit before the XML when run via `shell`.
-    if "<" in xml:
-        xml = xml[xml.index("<") :]
-    return ET.fromstring(xml)
+    return xml[xml.index("<") :] if "<" in xml else xml
+
+
+def dump_ui(serial: str) -> ET.Element:
+    """Dump the current UI hierarchy and return the parsed root."""
+    return ET.fromstring(dump_ui_xml(serial))
+
+
+def parent_map(root: ET.Element) -> dict[ET.Element, ET.Element]:
+    """child -> parent map (ElementTree nodes don't track parents)."""
+    return {child: parent for parent in root.iter("node") for child in parent}
+
+
+def clickable_ancestor(node: ET.Element, parents: dict) -> Optional[ET.Element]:
+    """Walk up from `node` to the nearest `clickable="true"` ancestor.
+
+    A notification's title TextView is usually not itself clickable — tapping
+    it does not fire the notification's contentIntent. The enclosing row is
+    the clickable target."""
+    cur: Optional[ET.Element] = node
+    while cur is not None:
+        if cur.attrib.get("clickable") == "true":
+            return cur
+        cur = parents.get(cur)
+    return None
 
 
 def find_by_text(root: ET.Element, text: str) -> Optional[ET.Element]:
