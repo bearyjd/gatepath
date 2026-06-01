@@ -570,21 +570,23 @@ def step_wait_validated(state: dict) -> dict:
     serial = state["serial"]
     window = 120
     deadline = time.monotonic() + window
-    reevaluated = False
     while time.monotonic() < deadline:
         dump = adb_helper.shell(serial, "dumpsys connectivity", timeout=15)
         for line in dump.splitlines():
             if "ni{WIFI" in line and "IS_VALIDATED" in line and "CAPTIVE_PORTAL" not in line:
                 return {"validated_in_sec": int(window - (deadline - time.monotonic()))}
-        elapsed = window - (deadline - time.monotonic())
-        if not reevaluated and elapsed > 12:
-            netid = _wifi_netid(dump)
-            if netid:
-                adb_helper.shell(
-                    serial, f"cmd connectivity reevaluate {netid}", timeout=10, check=False
-                )
-            reevaluated = True
-        time.sleep(3)
+        # submit_login authenticated the mock, so any re-probe now returns 204
+        # and the SAME network flips captive->validated. The system re-probes
+        # captive networks only slowly on its own, so nudge a re-evaluation of
+        # the same network each pass to reach 204 quickly. No-ops if the
+        # subcommand is unsupported (we then rely on the slow natural re-probe,
+        # which still happens within the window).
+        netid = _wifi_netid(dump)
+        if netid:
+            adb_helper.shell(
+                serial, f"cmd connectivity reevaluate {netid}", timeout=10, check=False
+            )
+        time.sleep(4)
     dump = adb_helper.shell(serial, "dumpsys connectivity", timeout=15, check=False)
     (state["artifacts_dir"] / "wait_validated-diagnostics.txt").write_text(dump)
     raise RuntimeError(f"WIFI network never reached IS_VALIDATED within {window}s")
