@@ -102,6 +102,25 @@ ends with the process — Android does not persist it across launches.
 - **Recommendation:** pause full-tunnel VPN before navigating a portal on desktop.
   Gatepath will remind you of this.
 
+### Native (non-Flatpak) netns helper — status
+
+A privileged helper (`desktop/gatepath-netns-helper/`) is intended to close this
+gap for native installs by moving the captive Wi-Fi interface into a dedicated
+network namespace and running the portal WebView inside it — the single-host
+analogue of Android's `bindProcessToNetwork()` (and of a Qubes DisposableVM).
+This would give a kernel-enforced no-leak guarantee even with a full-tunnel VPN
+active.
+
+**It is not yet functional on real hardware.** Two blockers gate it
+(see [`BLOCKERS.md`](BLOCKERS.md)): the helper moves the interface with
+`ip link set … netns`, which the wireless stack rejects (a Wi-Fi PHY must be
+moved with `iw phy … set netns`), and nothing re-establishes association/DHCP
+inside the namespace once the PHY is moved. Until both land, do **not** rely on
+the netns path for isolation; the guarantees in this document for desktop remain
+the Flatpak best-effort ones above. Deployment of the helper on atomic distros
+(e.g. Bazzite) is analysed in
+[`DESKTOP_NETNS_DEPLOYMENT.md`](DESKTOP_NETNS_DEPLOYMENT.md).
+
 ### Caveat — desktop tracker-resource requests are logged, not blocked
 
 On Android, `WebViewClient.shouldInterceptRequest` lets Gatepath cancel requests to
