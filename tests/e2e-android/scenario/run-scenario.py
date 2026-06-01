@@ -495,6 +495,21 @@ def step_launch_debug_portal(state: dict) -> dict:
     return {"portal_url": portal_url, "am_output": (out or err).strip()[:200]}
 
 
+def _gateway_has_portal_hit(state: dict) -> bool:
+    """True if the mock's request log shows a /portal GET from an Android UA —
+    the deterministic signal the PortalScreen WebView loaded the portal, and
+    exactly what the gateway.portal_hit assertion checks."""
+    try:
+        body = _http(f"{state['mockportal_from_host_url']}/log", timeout=5)
+        for e in json.loads(body):
+            ua = (e.get("headers") or {}).get("User-Agent", "")
+            if str(e.get("path", "")).startswith("/portal") and "Android" in ua:
+                return True
+    except Exception:  # noqa: BLE001 — polled; transient errors are fine
+        pass
+    return False
+
+
 def step_wait_portal_screen(state: dict) -> dict:
     """Confirm the debug intent opened PortalScreen.
 
@@ -503,24 +518,32 @@ def step_wait_portal_screen(state: dict) -> dict:
     session Active. If the device had no active network it logs
     "no active network; ignored" instead — surface that distinctly."""
     serial = state["serial"]
-    # launch_debug_portal cleared the buffer, so a full `-d` dump is fresh and
-    # app-dominated — no `-t` window to miss the line under spam. MainActivity
-    # logs "Debug portal intent: opening" (GatepathMain) once it accepts the
-    # extra, or "no active network; ignored" if there's no usable network.
-    deadline = time.monotonic() + 45
+    # Confirm the debug intent was accepted (MainActivity logs GatepathMain
+    # "Debug portal intent: opening"; "no active network" means it bailed),
+    # then wait for the WebView to actually fetch /portal — the mock's request
+    # log showing a /portal GET from an Android UA. Waiting for the real load
+    # (not just the launch log) verifies the page came up AND ensures it's up
+    # before submit_login/wait_validated can tear the session down.
+    deadline = time.monotonic() + 60
+    accepted = False
     while time.monotonic() < deadline:
-        log = adb_helper.shell(serial, "logcat -d", timeout=20, check=False)
-        if "Debug portal intent: opening" in log:
-            return {"detected_in_logcat": True}
-        if "Debug portal intent: no active network" in log:
-            raise RuntimeError("debug portal intent ignored: no active network")
-        time.sleep(1.5)
+        if not accepted:
+            log = adb_helper.shell(serial, "logcat -d", timeout=20, check=False)
+            if "Debug portal intent: no active network" in log:
+                raise RuntimeError("debug portal intent ignored: no active network")
+            accepted = "Debug portal intent: opening" in log
+        if _gateway_has_portal_hit(state):
+            return {"intent_accepted": accepted, "portal_loaded": True}
+        time.sleep(2)
     fg = _foreground(serial)
     log = adb_helper.shell(serial, "logcat -d", timeout=20, check=False)
     (state["artifacts_dir"] / "wait_portal_screen-diagnostics.txt").write_text(
-        f"foreground:\n{fg}\n\nfull logcat:\n{log}\n"
+        f"intent_accepted={accepted}\nforeground:\n{fg}\n\nfull logcat:\n{log}\n"
     )
-    raise RuntimeError(f"PortalScreen did not open within 45s; foreground={fg[:200]!r}")
+    raise RuntimeError(
+        f"portal WebView never fetched /portal within 60s "
+        f"(intent_accepted={accepted}); foreground={fg[:200]!r}"
+    )
 
 
 def step_submit_login(state: dict) -> dict:
