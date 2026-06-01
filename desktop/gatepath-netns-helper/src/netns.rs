@@ -169,6 +169,17 @@ impl NetnsOps for LinuxNetnsOps {
     }
 
     fn move_interface(&self, interface: &str, netns_name: &str) -> Result<(), NetnsError> {
+        // KNOWN BUG (BLOCKER-DESK-001, see docs/BLOCKERS.md): `ip link set
+        // dev <iface> netns` does NOT work for Wi-Fi interfaces. A wireless
+        // netdev is bound to its wiphy (PHY); the kernel rejects moving the
+        // netdev alone with -EOPNOTSUPP. The correct op is to move the whole
+        // PHY: `iw phy <phyN> set netns name <name>` (or the nl80211
+        // NL80211_CMD_SET_WIPHY_NETNS netlink call). This path is only
+        // exercised against FakeNetnsOps in the test suite, so the failure
+        // does not surface there. Do not treat the isolated session as
+        // functional on real hardware until this is fixed AND association +
+        // DHCP are re-established inside the netns (BLOCKER-DESK-002).
+        //
         // We trust callers to have run validation::validate_interface_name
         // and validate_netns_name first. We do NOT re-validate here because
         // these strings have to flow through to `ip` verbatim and any

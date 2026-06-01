@@ -1,26 +1,24 @@
 //! `gatepath-netns-helper` — privileged helper for Gatepath's desktop
 //! network-namespace isolation (Phase 5 of the diagnostic plan).
 //!
-//! # What this crate does (Phase 5a)
+//! # What this crate ships
 //!
-//! This is the **skeleton + interface-validation** slice. It ships:
+//! The full pipeline is implemented and unit-tested: D-Bus protocol types,
+//! strict interface-name validation, PolicyKit authorization on every method,
+//! NetworkManager captive re-checks, named-netns creation/teardown via
+//! `ip(8)`, the privileged spawn into the netns (`spawn.rs`), name-watch
+//! auto-teardown, the backstop timer, and schema-matching audit-log entries.
 //!
-//! - Public type definitions for the D-Bus protocol the Python orchestrator
-//!   will speak to (`SetupCaptiveRequest`, `SetupCaptiveResponse`,
-//!   `TeardownCaptiveResponse`).
-//! - Strict interface-name validation that refuses any non-WiFi or
-//!   VPN-shaped interface name. This is the security spec — when a future
-//!   Phase 5b ships the real syscalls, validation will gate every call.
-//! - Pure-logic unit tests with no system dependencies.
+//! # Known limitation — not yet functional on real Wi-Fi
 //!
-//! # What this crate will do (Phase 5b)
-//!
-//! - PolicyKit authorization on every D-Bus method (`zbus` + `polkit-sys`).
-//! - Actual netns creation and interface migration via `nix` syscalls.
-//! - NetworkManager integration to confirm the requested interface is
-//!   currently flagged as captive — argument validation is not enough on
-//!   its own; we re-check at every invocation.
-//! - Audit-log entries that match the cross-platform schema.
+//! The netns/interface-migration step (`netns.rs::move_interface`) uses
+//! `ip link set dev <iface> netns`, which the wireless stack rejects for a
+//! Wi-Fi PHY (see BLOCKER-DESK-001 in `docs/BLOCKERS.md`). A Wi-Fi interface
+//! must be moved with `iw phy <phyN> set netns`, and association + DHCP must
+//! then be re-established inside the netns (BLOCKER-DESK-002). The unit suite
+//! exercises the kernel surface through fakes, so these gaps do not surface in
+//! tests. Until both blockers are resolved, the isolated path is architected
+//! but not usable on real hardware.
 //!
 //! # Threat model
 //!

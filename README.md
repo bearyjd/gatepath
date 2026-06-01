@@ -9,6 +9,10 @@ tunnel, encrypted DNS, or normal browsing traffic to the portal operator.
 
 > **Read first:** [`docs/SECURITY_MODEL.md`](docs/SECURITY_MODEL.md) — what Gatepath
 > does and does not protect, by platform.
+>
+> **Why this exists:** [`docs/RATIONALE.md`](docs/RATIONALE.md) — the problem, why the
+> obvious fixes (pause the VPN, split-tunnel) weaken your whole posture, why the
+> single-purpose compartment works, and an honest accounting of its costs.
 
 ## Repo layout
 
@@ -28,7 +32,7 @@ and the security model. They share **no code** — see [`docs/ARCHITECTURE.md`](
 | Capability                                             | Android        | Desktop (Flatpak) |
 |--------------------------------------------------------|----------------|-------------------|
 | Detect captive portal                                  | NetworkCallback| NetworkManager D-Bus + urllib fallback |
-| Bind portal traffic to WiFi interface                  | Yes (kernel)   | **No** (Flatpak sandbox) |
+| Bind portal traffic to WiFi interface                  | Yes (kernel)   | **No** in Flatpak; native netns helper architected but **not yet functional** — see [`docs/BLOCKERS.md`](docs/BLOCKERS.md) |
 | Keep VPN tunnel active during portal session           | Yes            | Best-effort, **user warned** |
 | Block off-domain navigation in portal window           | Yes            | Yes |
 | Block analytics / tracker resource requests            | Yes            | Yes |
@@ -37,7 +41,11 @@ and the security model. They share **no code** — see [`docs/ARCHITECTURE.md`](
 | Append-only audit log                                  | Yes (JSONL)    | Yes (JSONL) |
 
 The desktop app is honest about what it cannot guarantee in a Flatpak sandbox — see
-the security model.
+the security model. A privileged netns helper (`desktop/gatepath-netns-helper/`) is
+intended to close the WiFi-binding gap for native (non-Flatpak) installs on Linux,
+including atomic distros like Bazzite; its current status, open blockers, and the
+deployment options are documented in
+[`docs/DESKTOP_NETNS_DEPLOYMENT.md`](docs/DESKTOP_NETNS_DEPLOYMENT.md).
 
 ## Build
 
