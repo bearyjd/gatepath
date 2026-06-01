@@ -6,25 +6,25 @@ function returning {"name", "ok", "data", "error"}; all steps aggregated
 into scenario-report.json under the artifacts dir.
 
 Step sequence:
-    1.  connect           — adb connect + wait for boot_completed=1
-    2.  reset_settings    — clear stale captive_portal_* globals
-    3.  install           — adb install -r <apk>
-    4.  reset_gateway     — POST /reset on the mockportal /log + counter
-    5.  set_probe_urls    — settings put global captive_portal_*_url <url>
-    6.  cycle_wifi        — svc wifi disable; sleep; svc wifi enable
-    7.  wait_for_captive  — poll for the "Sign in to Wi-Fi network" notif
-    8.  tap_notification  — expand panel, tap the notification
-    9.  pick_chooser      — wait for chooser, tap "Gatepath" (no-op if
-                            chooser absent because Android remembered)
-    10. wait_portal_screen— poll logcat for GatepathCaptive activity start
-    11. submit_login      — host-post mode: curl /login from host
-                            ui mode: input text + tap submit (less reliable)
-    12. wait_validated    — poll dumpsys connectivity for IS_VALIDATED
-    13. pull_logcat       — adb logcat -d > artifacts/logcat.txt
-    14. pull_audit_log    — adb pull audit_log.jsonl
-    15. fetch_gateway_log — curl /log → artifacts/gateway-log.json
-    16. cleanup_settings  — settings delete captive_portal_*
-    17. disconnect        — adb disconnect
+    1.  connect            — adb connect + wait for boot_completed=1
+    2.  reset_settings     — clear stale captive_portal_* globals
+    3.  install            — adb install -r <apk>
+    4.  reset_gateway      — POST /reset on the mockportal /log + counter
+    5.  set_probe_urls     — settings put global captive_portal_*_url <url>
+    6.  cycle_wifi         — svc wifi disable; sleep; svc wifi enable
+    7.  wait_for_captive   — poll dumpsys for the CAPTIVE_PORTAL capability
+    8.  launch_debug_portal— am start the PR #34 debug intent (deterministic;
+                             tapping the system notification is unworkable on a
+                             headless emulator — see the step docstring)
+    9.  wait_portal_screen — confirm the launch log, then wait for the WebView's
+                             /portal GET (Android UA) in the mock's request log
+    10. submit_login       — host-post mode: POST /login (authenticates the mock)
+    11. wait_validated     — poll dumpsys connectivity for IS_VALIDATED
+    12. pull_logcat        — adb logcat -d > artifacts/logcat.txt
+    13. pull_audit_log     — run-as cat files/audit.jsonl → artifacts/
+    14. fetch_gateway_log  — curl /log → artifacts/gateway-log.json
+    15. cleanup_settings   — settings delete captive_portal_*
+    16. disconnect         — adb disconnect
 
 A failed step short-circuits the rest with rc=1. scenario-report.json is
 written in a finally block regardless of failure.
@@ -44,7 +44,6 @@ from pathlib import Path
 from typing import Any, Callable
 
 import adb_helper
-import uiautomator_helper
 
 # Settings.Global keys we override. Restoration deletes the same set.
 CAPTIVE_KEYS = (
@@ -61,23 +60,6 @@ CAPTIVE_KEYS = (
 # the app is debuggable and the file lives in app-private storage.
 AUDIT_LOG_RELATIVE = "files/audit.jsonl"
 APP_PACKAGE = "cc.grepon.gatepath"
-
-# AOSP stock captive-portal handler. With both Gatepath and the stock app
-# registered, the system either silently dispatches to the stock app or
-# shows a chooser — both modes blocked the test on the first PR #40 CI run
-# (artifact: pick_chooser recorded chooser_shown=False, then
-# wait_portal_screen timed out because the intent went to the stock app).
-# Disabling the stock package leaves Gatepath as the only handler so the
-# system auto-dispatches the CAPTIVE_PORTAL intent directly to
-# CaptivePortalActivity with no UI gate. Requires `adb root` (userdebug
-# emulator images support it; production images do not — step records the
-# outcome and continues either way).
-STOCK_HANDLER_PKG = "com.android.captiveportallogin"
-
-# The implicit-intent action the system fires when the captive "Sign in"
-# notification is tapped. Gatepath's CaptivePortalActivity registers for it
-# (see AndroidManifest.xml). Used to enumerate competing handlers.
-CAPTIVE_PORTAL_ACTION = "android.net.conn.CAPTIVE_PORTAL"
 
 
 # ── Step helpers ──────────────────────────────────────────────────────────────
@@ -127,95 +109,6 @@ def step_install(state: dict) -> dict:
     return {"apk_path": state["apk_path"]}
 
 
-def _captive_portal_handlers(serial: str) -> list[str]:
-    """Package names of every activity registered for the CAPTIVE_PORTAL
-    sign-in intent, via `cmd package query-activities --brief` (one clean
-    `pkg/component` per line). Returns [] if nothing parseable comes back, in
-    which case the caller falls back to the known stock package."""
-    out, _ = adb_helper.shell_full(
-        serial,
-        f"cmd package query-activities --brief -a {CAPTIVE_PORTAL_ACTION} "
-        "-c android.intent.category.DEFAULT",
-        timeout=15,
-        check=False,
-    )
-    pkgs: list[str] = []
-    for line in out.splitlines():
-        m = re.fullmatch(r"([\w.]+)/[\w.$]+", line.strip())
-        if m and m.group(1) not in pkgs:
-            pkgs.append(m.group(1))
-    return pkgs
-
-
-def step_disable_stock_handler(state: dict) -> dict:
-    """Make Gatepath the sole CAPTIVE_PORTAL handler so the system
-    auto-dispatches the sign-in intent straight to CaptivePortalActivity.
-
-    With both Gatepath and the AOSP stock app registered, the system either
-    silently picks the stock app or shows a chooser — the first PR #40 CI run
-    hit the silent-stock path (pick_chooser: chooser_shown=False, then
-    wait_portal_screen timed out). We disable every non-Gatepath handler.
-
-    Requires `adb root` (userdebug emulator images support it; production
-    images do not). Best-effort: on a production image we record the outcome
-    and continue rather than blocking the run.
-    """
-    serial = state["serial"]
-    root_result = adb_helper.adb(serial, "root", check=False, timeout=15)
-    combined = (root_result.stdout + root_result.stderr).lower()
-    if root_result.returncode != 0 or "cannot run as root" in combined:
-        return {"rooted": False, "disabled": False, "note": "adb root unavailable"}
-
-    # adb root restarts adbd; wait until the *root* daemon is actually serving
-    # before issuing pm. A bare wait-for-device races the restart — that race
-    # was the original failure: pm ran against a half-restarted adbd and its
-    # output was lost, leaving the stock handler enabled.
-    if not adb_helper.wait_for_root(serial, timeout=30):
-        return {
-            "rooted": True,
-            "ready": False,
-            "disabled": False,
-            "note": "root adbd did not come back within 30s",
-        }
-
-    # Disable every handler of the sign-in intent except Gatepath, rather than
-    # hardcoding one package (robust to extra handlers / image differences).
-    handlers = _captive_portal_handlers(serial)
-    targets = [p for p in handlers if p != APP_PACKAGE] or [STOCK_HANDLER_PKG]
-
-    pm_results: dict[str, str] = {}
-    for pkg in targets:
-        out, err = adb_helper.shell_full(
-            serial, f"pm disable-user --user 0 {pkg}", timeout=15, check=False
-        )
-        msg = (out or err).strip()
-        if "new state: disabled" not in msg.lower():
-            time.sleep(1.0)  # one settle+retry for any residual flakiness
-            out, err = adb_helper.shell_full(
-                serial, f"pm disable-user --user 0 {pkg}", timeout=15, check=False
-            )
-            msg = (out or err).strip()
-        pm_results[pkg] = msg[:120]
-
-    # Verify against the disabled-package list — the authoritative signal,
-    # independent of how pm phrased its stdout.
-    disabled_list, _ = adb_helper.shell_full(
-        serial, "pm list packages -d", timeout=15, check=False
-    )
-    disabled_targets = [p for p in targets if p in disabled_list]
-    state["disabled_handlers"] = disabled_targets  # for re-enable in teardown
-
-    return {
-        "rooted": True,
-        "ready": True,
-        "handlers": handlers,
-        "targets": targets,
-        "pm_results": pm_results,
-        "disabled": len(disabled_targets) == len(targets) and bool(targets),
-        "disabled_targets": disabled_targets,
-    }
-
-
 def step_reset_gateway(state: dict) -> dict:
     body = _http(f"{state['mockportal_from_host_url']}/reset", method="POST")
     return {"response": body.decode("utf-8", errors="replace")[:80]}
@@ -262,209 +155,6 @@ def _foreground(serial: str) -> str:
         check=False,
     )
     return out.strip()
-
-
-def _dump_notification_state(state: dict, label: str) -> None:
-    """Persist the notification shade + the system's notification records to
-    artifacts. `dumpsys notification --noredact` reveals each notification's
-    contentIntent target — the authoritative answer to *why* tapping the
-    captive 'Sign in' notification did or did not launch Gatepath. Defensive:
-    never raises."""
-    serial = state["serial"]
-    art = state["artifacts_dir"]
-    try:
-        notif, _ = adb_helper.shell_full(
-            serial, "dumpsys notification --noredact", timeout=20, check=False
-        )
-        (art / f"notifications-{label}.txt").write_text(notif)
-    except Exception:  # noqa: BLE001
-        pass
-    try:
-        (art / f"shade-{label}.xml").write_text(uiautomator_helper.dump_ui_xml(serial))
-    except Exception:  # noqa: BLE001
-        pass
-
-
-def _tap_captive_notification(serial: str) -> dict:
-    """Find the captive 'Sign in' notification and tap its clickable
-    container (not the bare title TextView, which doesn't fire the
-    contentIntent). Tries the specific captive title first, then looser
-    matches. Returns a result dict; tapped=False if nothing matched."""
-    root = uiautomator_helper.dump_ui(serial, compressed=False)
-    parents = uiautomator_helper.parent_map(root)
-    matches = uiautomator_helper.find_all_by_text_contains(root, "sign in")
-    if not matches:
-        return {"tapped": False, "note": "no Sign-in notification found"}
-    # Tap EVERY 'Sign in' row this pass. The notifications are auto-grouped:
-    # tapping a collapsed group summary expands it (revealing children); a tap
-    # on a child fires its contentIntent. Hitting all of them each pass covers
-    # both states without having to detect which is which.
-    points: list[list[int]] = []
-    for node in matches:
-        click = uiautomator_helper.clickable_ancestor(node, parents) or node
-        try:
-            x, y = uiautomator_helper.midpoint(click)
-        except RuntimeError:
-            continue
-        uiautomator_helper.tap(serial, x, y)
-        points.append([x, y])
-        time.sleep(0.6)
-    return {"tapped": bool(points), "match_count": len(matches), "tapped_points": points}
-
-
-def _captive_signin_launched(serial: str) -> bool:
-    """True once CaptivePortalActivity has logged its start line — the same
-    signal wait_portal_screen waits on, used here to stop tapping early."""
-    log = adb_helper.shell(
-        serial, "logcat -d -t 200 -s GatepathCaptive:I", timeout=10, check=False
-    )
-    return "Handling captive portal" in log
-
-
-def _shade_is_open(xml: str) -> bool:
-    """True only if the dump shows an actual notification row.
-
-    NOT keyed on notification_panel / notification_stack_scroller: those ids
-    are present in fully-expanded Quick Settings too, which HIDES the
-    notification list (round-4 over-swiped into QS and passed this check while
-    no notification was tappable). Require a real row or the captive text."""
-    low = xml.lower()
-    return "expandablenotificationrow" in low or "sign in" in low
-
-
-def _open_notification_shade(serial: str, attempts: int = 6) -> bool:
-    """Open the notification shade reliably, verifying via a UI dump.
-
-    Alternates `cmd statusbar expand-notifications` (no-ops unpredictably) with
-    a *gentle* swipe to ~40% of the screen — a full-length pull opens Quick
-    Settings and hides the notifications. Verifies a notification row is
-    actually present before returning. Non-compressed dump so grouped child
-    rows aren't elided. pixel_6 profile is 1080x2400."""
-    for i in range(attempts):
-        if i % 2 == 0:
-            adb_helper.shell(
-                serial, "cmd statusbar expand-notifications", timeout=10, check=False
-            )
-        else:
-            adb_helper.shell(
-                serial, "input swipe 540 8 540 1000 200", timeout=10, check=False
-            )
-        time.sleep(1.5)
-        try:
-            xml = uiautomator_helper.dump_ui_xml(serial, compressed=False)
-        except Exception:  # noqa: BLE001 — keep retrying on a transient dump error
-            continue
-        if _shade_is_open(xml):
-            return True
-    return False
-
-
-def step_tap_notification(state: dict) -> dict:
-    """Open the notification shade and tap the captive 'Sign in' notification
-    to fire its (broadcast) contentIntent, dispatching to CaptivePortalActivity
-    (the sole handler once the stock app is disabled).
-
-    The captive notifications are auto-grouped (g:ranker_group); a collapsed
-    group swallows the first tap to *expand* rather than fire the child, so we
-    tap repeatedly — re-dumping between taps — until the activity launches.
-    SystemUI rows report clickable=false in UIAutomator (their click is handled
-    internally), so we tap the row's coordinates directly. Captures the shade +
-    notification records before tapping for diagnosis.
-    """
-    serial = state["serial"]
-    adb_helper.shell(serial, "input keyevent KEYCODE_WAKEUP", timeout=10, check=False)
-    adb_helper.shell(serial, "wm dismiss-keyguard", timeout=10, check=False)
-    if _captive_signin_launched(serial):
-        state["captive_launched"] = True
-        return {"auto_dispatched": True, "tapped": False, "launched": True}
-
-    opened = _open_notification_shade(serial)
-    _dump_notification_state(state, "pre_tap")
-    if not opened:
-        adb_helper.shell(serial, "cmd statusbar collapse", timeout=5, check=False)
-        return {
-            "tapped": False,
-            "shade_opened": False,
-            "launched": False,
-            "note": "notification shade did not open after retries",
-        }
-
-    attempts: list[dict] = []
-    launched = False
-    for _ in range(5):
-        tap = _tap_captive_notification(serial)
-        attempts.append(tap)
-        if not tap.get("tapped"):
-            # Notification not visible — the shade may have closed (a stray
-            # tap, a group toggle). Re-open it (verified) and retry.
-            _open_notification_shade(serial, attempts=3)
-            continue
-        time.sleep(2.5)  # let the broadcast launch the activity
-        if _captive_signin_launched(serial):
-            launched = True
-            break
-
-    adb_helper.shell(serial, "cmd statusbar collapse", timeout=5, check=False)
-    state["captive_launched"] = launched
-    return {
-        "tapped": any(a.get("tapped") for a in attempts),
-        "attempts": len(attempts),
-        "shade_opened": True,
-        "last_tap": attempts[-1] if attempts else None,
-        "launched": launched,
-        "foreground_after": _foreground(serial)[:240],
-    }
-
-
-def step_pick_chooser(state: dict) -> dict:
-    """Pick 'Gatepath' from a disambiguation chooser, if one appeared.
-
-    With the stock handler disabled Gatepath is the sole handler, so there is
-    normally NO chooser and this is a no-op. Guard hard against tapping a stray
-    'Gatepath' label on the launcher (round-3 tapped the home-screen app icon
-    and launched MainActivity): only act when an Android resolver/chooser is
-    actually in the foreground, and skip entirely if dispatch already worked."""
-    serial = state["serial"]
-    if state.get("captive_launched"):
-        return {"chooser_shown": False, "skipped": "captive already launched"}
-    fg = _foreground(serial).lower()
-    if not any(k in fg for k in ("resolveractivity", "chooseractivity", "intentresolver")):
-        return {"chooser_shown": False, "note": "no resolver/chooser in foreground"}
-    try:
-        node = uiautomator_helper.wait_for_text(serial, "Gatepath", timeout=8)
-    except RuntimeError:
-        return {"chooser_shown": False}
-    x, y = uiautomator_helper.midpoint(node)
-    uiautomator_helper.tap(serial, x, y)
-    return {"chooser_shown": True, "tapped_at": [x, y]}
-
-
-def _capture_dispatch_diagnostics(state: dict) -> dict:
-    """On a wait_portal_screen timeout, record what actually handled the
-    CAPTIVE_PORTAL intent. This step short-circuits the scenario, so the
-    dedicated pull_logcat step never runs — without this, a failed CI run
-    gives no clue whether the intent went to the stock app, a chooser, or
-    nowhere. Defensive: never raises (it runs on the failure path)."""
-    serial = state["serial"]
-    diag: dict[str, str] = {}
-    try:
-        fg = _foreground(serial)
-        resolver, _ = adb_helper.shell_full(
-            serial,
-            f"cmd package resolve-activity --brief -a {CAPTIVE_PORTAL_ACTION} "
-            "-c android.intent.category.DEFAULT",
-            timeout=10,
-            check=False,
-        )
-        log = adb_helper.shell(serial, "logcat -d -t 400", timeout=15, check=False)
-        (state["artifacts_dir"] / "wait_portal_screen-diagnostics.txt").write_text(
-            f"foreground:\n{fg}\n\nresolver:\n{resolver}\n\nlogcat tail:\n{log}\n"
-        )
-        _dump_notification_state(state, "on_timeout")
-        diag = {"foreground": fg[:200], "resolver": resolver.strip()[:200]}
-    except Exception as e:  # noqa: BLE001 — diagnostics must not mask the timeout
-        diag = {"diag_error": f"{type(e).__name__}: {e}"}
-    return diag
 
 
 def step_launch_debug_portal(state: dict) -> dict:
@@ -663,21 +353,6 @@ def step_cleanup_settings(state: dict) -> dict:
     for k in CAPTIVE_KEYS:
         adb_helper.settings_delete(state["serial"], "global", k)
     return {"deleted": list(CAPTIVE_KEYS)}
-
-
-def step_enable_stock_handler(state: dict) -> dict:
-    """Re-enable whatever the disable step turned off, leaving the device in a
-    clean state. Best-effort; falls back to the known stock package if the
-    disable step recorded nothing (e.g. root was unavailable)."""
-    serial = state["serial"]
-    targets = state.get("disabled_handlers") or [STOCK_HANDLER_PKG]
-    pm_results: dict[str, str] = {}
-    for pkg in targets:
-        out, err = adb_helper.shell_full(
-            serial, f"pm enable --user 0 {pkg}", timeout=15, check=False
-        )
-        pm_results[pkg] = (out or err).strip()[:120]
-    return {"targets": targets, "pm_results": pm_results}
 
 
 def step_disconnect(state: dict) -> dict:
