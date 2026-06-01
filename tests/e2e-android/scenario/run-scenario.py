@@ -54,11 +54,12 @@ CAPTIVE_KEYS = (
     "captive_portal_fallback_url",
 )
 
-# On-device path to Gatepath's audit log. Verified against
-# android/app/src/main/java/cc/grepon/gatepath/audit/AuditLog.kt (init at
-# Application.filesDir). Pulled via `adb shell run-as` because the app is
-# debuggable and the file is in app-private storage.
-AUDIT_LOG_RELATIVE = "files/audit_log.jsonl"
+# On-device path to Gatepath's audit log, relative to the app's data dir.
+# AuditLog.init() (audit/AuditLog.kt) creates AuditLogWriter(File(filesDir,
+# "audit.jsonl")), so the file is files/audit.jsonl — NOT audit_log.jsonl, which
+# is the artifact name we write host-side. Pulled via `adb shell run-as` since
+# the app is debuggable and the file lives in app-private storage.
+AUDIT_LOG_RELATIVE = "files/audit.jsonl"
 APP_PACKAGE = "cc.grepon.gatepath"
 
 # AOSP stock captive-portal handler. With both Gatepath and the stock app
@@ -625,19 +626,27 @@ def step_pull_logcat(state: dict) -> dict:
 
 def step_pull_audit_log(state: dict) -> dict:
     serial = state["serial"]
-    # Debug build is debuggable → run-as works.
-    try:
-        contents = adb_helper.shell(
-            serial,
-            f"run-as {APP_PACKAGE} cat {AUDIT_LOG_RELATIVE}",
-            timeout=10,
-            check=False,
-        )
-    except Exception as e:  # noqa: BLE001
-        contents = ""
-        err = str(e)
-    else:
-        err = None
+    # The audit entry is appended from a coroutine when NetworkValidated fires,
+    # which can land just after wait_validated returns. Poll for non-empty
+    # content for a few seconds so we don't race the async write. Debug build is
+    # debuggable → run-as works.
+    contents = ""
+    err: str | None = None
+    deadline = time.monotonic() + 10
+    while True:
+        try:
+            contents = adb_helper.shell(
+                serial,
+                f"run-as {APP_PACKAGE} cat {AUDIT_LOG_RELATIVE}",
+                timeout=10,
+                check=False,
+            )
+            err = None
+        except Exception as e:  # noqa: BLE001
+            contents, err = "", str(e)
+        if contents.strip() or time.monotonic() >= deadline:
+            break
+        time.sleep(1.0)
     out = state["artifacts_dir"] / "audit_log.jsonl"
     out.write_text(contents)
     return {"path": str(out), "size": len(contents), "error": err}
