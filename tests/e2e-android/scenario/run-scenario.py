@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 import time
 import urllib.error
@@ -71,6 +72,11 @@ APP_PACKAGE = "cc.grepon.gatepath"
 # emulator images support it; production images do not — step records the
 # outcome and continues either way).
 STOCK_HANDLER_PKG = "com.android.captiveportallogin"
+
+# The implicit-intent action the system fires when the captive "Sign in"
+# notification is tapped. Gatepath's CaptivePortalActivity registers for it
+# (see AndroidManifest.xml). Used to enumerate competing handlers.
+CAPTIVE_PORTAL_ACTION = "android.net.conn.CAPTIVE_PORTAL"
 
 
 # ── Step helpers ──────────────────────────────────────────────────────────────
@@ -120,24 +126,93 @@ def step_install(state: dict) -> dict:
     return {"apk_path": state["apk_path"]}
 
 
+def _captive_portal_handlers(serial: str) -> list[str]:
+    """Package names of every activity registered for the CAPTIVE_PORTAL
+    sign-in intent, via `cmd package query-activities --brief` (one clean
+    `pkg/component` per line). Returns [] if nothing parseable comes back, in
+    which case the caller falls back to the known stock package."""
+    out, _ = adb_helper.shell_full(
+        serial,
+        f"cmd package query-activities --brief -a {CAPTIVE_PORTAL_ACTION} "
+        "-c android.intent.category.DEFAULT",
+        timeout=15,
+        check=False,
+    )
+    pkgs: list[str] = []
+    for line in out.splitlines():
+        m = re.fullmatch(r"([\w.]+)/[\w.$]+", line.strip())
+        if m and m.group(1) not in pkgs:
+            pkgs.append(m.group(1))
+    return pkgs
+
+
 def step_disable_stock_handler(state: dict) -> dict:
-    """Disable com.android.captiveportallogin so Gatepath is the only
-    handler for CAPTIVE_PORTAL intents. See STOCK_HANDLER_PKG comment for
-    rationale. Best-effort: skip on production images where `adb root`
-    fails, recording the outcome rather than blocking the run."""
+    """Make Gatepath the sole CAPTIVE_PORTAL handler so the system
+    auto-dispatches the sign-in intent straight to CaptivePortalActivity.
+
+    With both Gatepath and the AOSP stock app registered, the system either
+    silently picks the stock app or shows a chooser — the first PR #40 CI run
+    hit the silent-stock path (pick_chooser: chooser_shown=False, then
+    wait_portal_screen timed out). We disable every non-Gatepath handler.
+
+    Requires `adb root` (userdebug emulator images support it; production
+    images do not). Best-effort: on a production image we record the outcome
+    and continue rather than blocking the run.
+    """
     serial = state["serial"]
     root_result = adb_helper.adb(serial, "root", check=False, timeout=15)
-    if root_result.returncode != 0 or "cannot run as root" in (root_result.stdout + root_result.stderr).lower():
+    combined = (root_result.stdout + root_result.stderr).lower()
+    if root_result.returncode != 0 or "cannot run as root" in combined:
         return {"rooted": False, "disabled": False, "note": "adb root unavailable"}
-    # adb root restarts adbd as root; wait for it to come back.
-    adb_helper.adb(None, "wait-for-device", timeout=30, check=False)
-    # `pm disable` requires the running-user form on modern Android.
-    disable_out = adb_helper.shell(
-        serial, f"pm disable-user --user 0 {STOCK_HANDLER_PKG}",
-        timeout=15, check=False,
+
+    # adb root restarts adbd; wait until the *root* daemon is actually serving
+    # before issuing pm. A bare wait-for-device races the restart — that race
+    # was the original failure: pm ran against a half-restarted adbd and its
+    # output was lost, leaving the stock handler enabled.
+    if not adb_helper.wait_for_root(serial, timeout=30):
+        return {
+            "rooted": True,
+            "ready": False,
+            "disabled": False,
+            "note": "root adbd did not come back within 30s",
+        }
+
+    # Disable every handler of the sign-in intent except Gatepath, rather than
+    # hardcoding one package (robust to extra handlers / image differences).
+    handlers = _captive_portal_handlers(serial)
+    targets = [p for p in handlers if p != APP_PACKAGE] or [STOCK_HANDLER_PKG]
+
+    pm_results: dict[str, str] = {}
+    for pkg in targets:
+        out, err = adb_helper.shell_full(
+            serial, f"pm disable-user --user 0 {pkg}", timeout=15, check=False
+        )
+        msg = (out or err).strip()
+        if "new state: disabled" not in msg.lower():
+            time.sleep(1.0)  # one settle+retry for any residual flakiness
+            out, err = adb_helper.shell_full(
+                serial, f"pm disable-user --user 0 {pkg}", timeout=15, check=False
+            )
+            msg = (out or err).strip()
+        pm_results[pkg] = msg[:120]
+
+    # Verify against the disabled-package list — the authoritative signal,
+    # independent of how pm phrased its stdout.
+    disabled_list, _ = adb_helper.shell_full(
+        serial, "pm list packages -d", timeout=15, check=False
     )
-    disabled = "new state: disabled" in disable_out.lower()
-    return {"rooted": True, "disabled": disabled, "pm_output": disable_out[:120]}
+    disabled_targets = [p for p in targets if p in disabled_list]
+    state["disabled_handlers"] = disabled_targets  # for re-enable in teardown
+
+    return {
+        "rooted": True,
+        "ready": True,
+        "handlers": handlers,
+        "targets": targets,
+        "pm_results": pm_results,
+        "disabled": len(disabled_targets) == len(targets) and bool(targets),
+        "disabled_targets": disabled_targets,
+    }
 
 
 def step_reset_gateway(state: dict) -> dict:
@@ -222,18 +297,55 @@ def step_pick_chooser(state: dict) -> dict:
     return {"chooser_shown": True, "tapped_at": [x, y]}
 
 
+def _capture_dispatch_diagnostics(state: dict) -> dict:
+    """On a wait_portal_screen timeout, record what actually handled the
+    CAPTIVE_PORTAL intent. This step short-circuits the scenario, so the
+    dedicated pull_logcat step never runs — without this, a failed CI run
+    gives no clue whether the intent went to the stock app, a chooser, or
+    nowhere. Defensive: never raises (it runs on the failure path)."""
+    serial = state["serial"]
+    diag: dict[str, str] = {}
+    try:
+        fg, _ = adb_helper.shell_full(
+            serial,
+            "dumpsys activity activities | "
+            "grep -E 'mResumedActivity|topResumedActivityRecord' | head -3",
+            timeout=10,
+            check=False,
+        )
+        resolver, _ = adb_helper.shell_full(
+            serial,
+            f"cmd package resolve-activity --brief -a {CAPTIVE_PORTAL_ACTION} "
+            "-c android.intent.category.DEFAULT",
+            timeout=10,
+            check=False,
+        )
+        log = adb_helper.shell(serial, "logcat -d -t 400", timeout=15, check=False)
+        (state["artifacts_dir"] / "wait_portal_screen-diagnostics.txt").write_text(
+            f"foreground:\n{fg}\n\nresolver:\n{resolver}\n\nlogcat tail:\n{log}\n"
+        )
+        diag = {"foreground": fg.strip()[:200], "resolver": resolver.strip()[:200]}
+    except Exception as e:  # noqa: BLE001 — diagnostics must not mask the timeout
+        diag = {"diag_error": f"{type(e).__name__}: {e}"}
+    return diag
+
+
 def step_wait_portal_screen(state: dict) -> dict:
     serial = state["serial"]
     # GatepathCaptive: "Handling captive portal for network ..." per
     # CaptivePortalActivity.kt:87. Equivalent: PortalScreen's "Network
     # Sign-In" title via UI dump. Watch logcat — cheaper, less flaky.
-    deadline = time.monotonic() + 30
+    deadline = time.monotonic() + 45
     while time.monotonic() < deadline:
         log = adb_helper.shell(serial, "logcat -d -t 200 -s GatepathCaptive:I", timeout=10)
         if "Handling captive portal" in log:
             return {"detected_in_logcat": True}
         time.sleep(1.5)
-    raise RuntimeError("CaptivePortalActivity did not start within 30s")
+    diag = _capture_dispatch_diagnostics(state)
+    raise RuntimeError(
+        "CaptivePortalActivity did not start within 45s; "
+        f"foreground={diag.get('foreground')!r} resolver={diag.get('resolver')!r}"
+    )
 
 
 def step_submit_login(state: dict) -> dict:
@@ -312,15 +424,18 @@ def step_cleanup_settings(state: dict) -> dict:
 
 
 def step_enable_stock_handler(state: dict) -> dict:
-    """Re-enable com.android.captiveportallogin so the device is left in a
-    clean state. Best-effort; skip if root wasn't acquired in the
-    matching disable step."""
+    """Re-enable whatever the disable step turned off, leaving the device in a
+    clean state. Best-effort; falls back to the known stock package if the
+    disable step recorded nothing (e.g. root was unavailable)."""
     serial = state["serial"]
-    out = adb_helper.shell(
-        serial, f"pm enable --user 0 {STOCK_HANDLER_PKG}",
-        timeout=15, check=False,
-    )
-    return {"enabled": "new state: enabled" in out.lower(), "pm_output": out[:120]}
+    targets = state.get("disabled_handlers") or [STOCK_HANDLER_PKG]
+    pm_results: dict[str, str] = {}
+    for pkg in targets:
+        out, err = adb_helper.shell_full(
+            serial, f"pm enable --user 0 {pkg}", timeout=15, check=False
+        )
+        pm_results[pkg] = (out or err).strip()[:120]
+    return {"targets": targets, "pm_results": pm_results}
 
 
 def step_disconnect(state: dict) -> dict:
@@ -396,6 +511,19 @@ def main() -> int:
                 report["rc"] = 1
                 break
     finally:
+        # Always capture logcat. The scenario short-circuits on the first
+        # failing step, so the dedicated pull_logcat step (near the end) never
+        # runs on a mid-scenario failure — without this a failed CI run yields
+        # no device logs to diagnose from.
+        serial = state.get("serial")
+        if serial:
+            try:
+                log = adb_helper.shell(
+                    serial, "logcat -d -t 3000", timeout=20, check=False
+                )
+                (state["artifacts_dir"] / "logcat.txt").write_text(log)
+            except Exception:  # noqa: BLE001 — diagnostics must never mask the rc
+                pass
         report_path = state["artifacts_dir"] / "scenario-report.json"
         report_path.write_text(json.dumps(report, indent=2))
         print(f"\nwrote {report_path}")

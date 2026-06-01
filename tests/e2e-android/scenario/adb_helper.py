@@ -73,6 +73,43 @@ def shell(serial: str, cmd: str, timeout: int = 30, check: bool = True) -> str:
     return r.stdout.rstrip("\r\n")
 
 
+def shell_full(
+    serial: str, cmd: str, timeout: int = 30, check: bool = False
+) -> tuple[str, str]:
+    """Run a shell command; return (stdout, stderr), both stripped.
+
+    Unlike shell(), this surfaces stderr. `pm`/`cmd` write their failure
+    messages to stderr, and discarding it (as shell() does) is exactly what
+    masked the stock-handler disable failure on the first PR #40 CI run, where
+    pm_output came back empty with no clue why.
+    """
+    r = adb(serial, "shell", cmd, timeout=timeout, check=check)
+    return r.stdout.rstrip("\r\n"), r.stderr.rstrip("\r\n")
+
+
+def wait_for_root(serial: str, timeout: int = 30) -> bool:
+    """Block until adbd is serving as root (uid 0) after `adb root`.
+
+    `adb root` restarts adbd: the device briefly goes offline and a bare
+    `adb wait-for-device` can match the *dying* daemon, so the next command
+    races a half-restarted adbd and silently returns nothing (the original
+    PR #40 failure — the `pm disable` ran into the void and its output was
+    lost). Polling `id -u` until it reports 0 is a positive signal that the
+    new root daemon is actually serving. Reconnects TCP targets, whose socket
+    the restart drops.
+    """
+    is_tcp = ":" in serial
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if is_tcp:
+            adb(None, "connect", serial, check=False, timeout=10)
+        r = adb(serial, "shell", "id", "-u", check=False, timeout=5)
+        if r.returncode == 0 and r.stdout.strip() == "0":
+            return True
+        time.sleep(1.0)
+    return False
+
+
 def settings_put(serial: str, namespace: str, key: str, value: str) -> None:
     """`settings put <namespace> <key> <value>`."""
     shell(serial, f"settings put {namespace} {key} '{value}'")
