@@ -312,29 +312,61 @@ def _tap_captive_notification(serial: str) -> dict:
     }
 
 
+def _captive_signin_launched(serial: str) -> bool:
+    """True once CaptivePortalActivity has logged its start line — the same
+    signal wait_portal_screen waits on, used here to stop tapping early."""
+    log = adb_helper.shell(
+        serial, "logcat -d -t 200 -s GatepathCaptive:I", timeout=10, check=False
+    )
+    return "Handling captive portal" in log
+
+
 def step_tap_notification(state: dict) -> dict:
-    """Open the notification shade and tap the captive 'Sign in' notification,
-    firing its contentIntent. With the stock handler disabled Gatepath is the
-    sole CAPTIVE_PORTAL handler, so the tap dispatches straight to
-    CaptivePortalActivity. Captures the notification + shade state before the
-    tap and the foreground window after, so a dispatch failure is diagnosable.
+    """Open the notification shade and tap the captive 'Sign in' notification
+    to fire its (broadcast) contentIntent, dispatching to CaptivePortalActivity
+    (the sole handler once the stock app is disabled).
+
+    The captive notifications are auto-grouped (g:ranker_group); a collapsed
+    group swallows the first tap to *expand* rather than fire the child, so we
+    tap repeatedly — re-dumping between taps — until the activity launches.
+    SystemUI rows report clickable=false in UIAutomator (their click is handled
+    internally), so we tap the row's coordinates directly. Captures the shade +
+    notification records before tapping for diagnosis.
     """
     serial = state["serial"]
-    # If CaptivePortalActivity is already foreground (auto-dispatch path),
-    # skip the notification dance entirely.
-    if APP_PACKAGE in _foreground(serial) and "CaptivePortal" in _foreground(serial):
-        return {"auto_dispatched": True, "tapped": False}
+    adb_helper.shell(serial, "input keyevent KEYCODE_WAKEUP", timeout=10, check=False)
+    if _captive_signin_launched(serial):
+        return {"auto_dispatched": True, "tapped": False, "launched": True}
 
     adb_helper.shell(serial, "cmd statusbar expand-notifications", timeout=10)
     time.sleep(2.0)
     _dump_notification_state(state, "pre_tap")
 
-    result = _tap_captive_notification(serial)
+    attempts: list[dict] = []
+    launched = False
+    for _ in range(5):
+        tap = _tap_captive_notification(serial)
+        attempts.append(tap)
+        if not tap.get("tapped"):
+            # Shade not showing the notification (collapsed / not rendered yet)
+            # — re-expand and retry. Only here, so a productive group-expand
+            # tap isn't undone by re-expanding the whole shade.
+            adb_helper.shell(serial, "cmd statusbar expand-notifications", timeout=10, check=False)
+            time.sleep(1.5)
+            continue
+        time.sleep(2.5)  # let the broadcast launch the activity
+        if _captive_signin_launched(serial):
+            launched = True
+            break
 
     adb_helper.shell(serial, "cmd statusbar collapse", timeout=5, check=False)
-    time.sleep(1.5)
-    result["foreground_after"] = _foreground(serial)[:240]
-    return result
+    return {
+        "tapped": any(a.get("tapped") for a in attempts),
+        "attempts": len(attempts),
+        "last_tap": attempts[-1] if attempts else None,
+        "launched": launched,
+        "foreground_after": _foreground(serial)[:240],
+    }
 
 
 def step_pick_chooser(state: dict) -> dict:
