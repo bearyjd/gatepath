@@ -1,8 +1,10 @@
 # Gatepath end-to-end harness (Android emulator)
 
 A Docker-based AOSP Android emulator that exercises the Gatepath captive-portal
-flow end-to-end — including the real system `CAPTIVE_PORTAL` intent dispatch
-to `CaptivePortalActivity` and the `PortalScreen` WebView. Sibling to
+flow end-to-end — captive detection, the `PortalScreen` WebView rendering the
+portal, off-domain blocking, and post-login network validation. Dispatch to the
+portal uses the `BuildConfig.DEBUG` debug intent, not the system notification
+(that's untappable on a headless emulator — see `HARNESS_NOTES.md`). Sibling to
 `tests/e2e-docker/` (which covers the desktop GTK path).
 
 ```
@@ -23,11 +25,10 @@ to `CaptivePortalActivity` and the `PortalScreen` WebView. Sibling to
 **Covered:**
 - `Settings.Global.captive_portal_*_url` override + Wi-Fi cycle → real
   AOSP `NetworkMonitor` probe → captive detection.
-- System dispatch of `android.net.conn.CAPTIVE_PORTAL` intent with the
-  parcelable `EXTRA_CAPTIVE_PORTAL` token (the part that PR #34's debug
-  intent path cannot synthesize).
-- `CaptivePortalActivity` → `bindProcessToNetwork` → `PortalScreen` →
-  `GatepathWebView` rendering the mockportal `/portal` page.
+- Debug-intent dispatch (`am ... --es gatepath.debug.portal_url`) →
+  `MainActivity` → `PortalScreen` → `GatepathWebView` rendering the mockportal
+  `/portal` page. (Tapping the system `CAPTIVE_PORTAL` notification is
+  unworkable on a headless emulator — see `HARNESS_NOTES.md`.)
 - Off-domain blocking — the portal HTML embeds
   `<script src=https://evil-tracker.example.com/track.js>` and a link to
   `https://external-site.example.com`; mockportal logs every Host header
@@ -36,6 +37,12 @@ to `CaptivePortalActivity` and the `PortalScreen` WebView. Sibling to
   cycle, ending with the WIFI network reaching `IS_VALIDATED`.
 
 **Not covered:**
+- **The real system `CAPTIVE_PORTAL` intent dispatch** to `CaptivePortalActivity`
+  with the parcelable `EXTRA_CAPTIVE_PORTAL` token. The grouped system
+  notification can't be tapped on a headless emulator (brute-forcing it ANRs
+  SystemUI), so the harness dispatches via the debug intent into `PortalScreen`.
+  Everything downstream of "PortalScreen showing the portal" is covered; the
+  system→activity plumbing is not. See `HARNESS_NOTES.md`.
 - **GrapheneOS or other privacy-fork images.** The budtmo image is AOSP,
   not Graphene — Graphene hardcodes captive-probe URLs (see
   `docs/TESTING_ANDROID.md` for the workaround on Graphene devices).
@@ -111,8 +118,7 @@ tests/e2e-android/
 │   └── entrypoint.sh                 # build_server(host=0.0.0.0, complete_after=1000)
 ├── scenario/
 │   ├── adb_helper.py                 # adb subprocess wrappers (stdlib)
-│   ├── uiautomator_helper.py         # dump-and-tap helpers (stdlib)
-│   ├── run-scenario.py               # the 17-step scenario
+│   ├── run-scenario.py               # the 16-step scenario (debug-intent dispatch)
 │   └── ci-script.sh                  # one-line wrapper for emulator-runner action
 ├── driver/
 │   └── assertions.py                 # 3-bucket host-side validator
@@ -139,9 +145,10 @@ tests/e2e-android/
 - **`uiautomator dump` is flaky on transitioning UIs.** The scenario adds
   short sleeps between actions; if a step times out, re-running usually
   recovers.
-- **Chooser dialog may not appear** if Android remembered Gatepath as the
-  default handler from a previous run. `pick_chooser` step is no-op in
-  that case — the intent goes straight to `CaptivePortalActivity`.
+- **The system captive notification is not driven.** It can't be reliably
+  tapped on a headless emulator (auto-grouped/collapsed; brute-forcing it ANRs
+  SystemUI), so dispatch goes through the `BuildConfig.DEBUG` debug intent into
+  `PortalScreen`. See `HARNESS_NOTES.md` for the full rationale.
 - **`--mode=ui` is brittle.** Use `--mode=host-post` (default) for
   deterministic CI runs.
 - **budtmo's `emulator_15.0` tag is Pro-only.** API matrix expansion
