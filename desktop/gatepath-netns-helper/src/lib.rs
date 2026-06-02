@@ -9,16 +9,26 @@
 //! `ip(8)`, the privileged spawn into the netns (`spawn.rs`), name-watch
 //! auto-teardown, the backstop timer, and schema-matching audit-log entries.
 //!
-//! # Known limitation — not yet functional on real Wi-Fi
+//! # Real-hardware status
 //!
-//! The netns/interface-migration step (`netns.rs::move_interface`) uses
-//! `ip link set dev <iface> netns`, which the wireless stack rejects for a
-//! Wi-Fi PHY (see BLOCKER-DESK-001 in `docs/BLOCKERS.md`). A Wi-Fi interface
-//! must be moved with `iw phy <phyN> set netns`, and association + DHCP must
-//! then be re-established inside the netns (BLOCKER-DESK-002). The unit suite
-//! exercises the kernel surface through fakes, so these gaps do not surface in
-//! tests. Until both blockers are resolved, the isolated path is architected
-//! but not usable on real hardware.
+//! The two operations that the unit suite's fakes used to hide are now
+//! implemented:
+//!
+//!   - **PHY move** (`netns.rs::move_interface`, was BLOCKER-DESK-001):
+//!     resolves the wiphy for the validated interface from sysfs and moves
+//!     the whole PHY with `iw phy <phyN> set netns name` — not the
+//!     netdev-only `ip link set ... netns` the wireless stack rejects.
+//!   - **In-netns connectivity** (`connectivity.rs`, was BLOCKER-DESK-002):
+//!     brings the link up, runs `wpa_supplicant` to re-associate to the
+//!     captive SSID, and runs a DHCP client to reacquire an address — then
+//!     tears all of that down with the session.
+//!
+//! Two caveats remain, both tracked in `docs/BLOCKERS.md`: the privileged
+//! exec paths (`iw`/`wpa_supplicant`/DHCP) are validated only on real Wi-Fi
+//! hardware via the `--ignored` integration tests (the unit suite covers
+//! command construction + orchestration through fakes), and **secured**
+//! captive networks (WPA2-PSK/EAP) are not yet supported — only open SSIDs,
+//! which is the overwhelming captive-portal case.
 //!
 //! # Threat model
 //!
@@ -47,6 +57,7 @@ pub mod audit_log;
 pub mod auth;
 pub mod backstop;
 pub mod caller_uid;
+pub mod connectivity;
 pub mod dbus_service;
 pub mod name_watch;
 pub mod netns;

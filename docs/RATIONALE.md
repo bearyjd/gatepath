@@ -237,10 +237,11 @@ is not a nicety — it is what makes the trade defensible.
 ## 7. Status
 
 The reasoning in §4 is a statement about the **design**. On the desktop, the
-netns path is architected and wired end-to-end but **not yet functional on real
-Wi-Fi hardware** — two implementation blockers (the wireless PHY move, and
-re-establishing association/DHCP inside the namespace) are tracked in
-[`BLOCKERS.md`](BLOCKERS.md). On Android, the equivalent guarantee
-(`bindProcessToNetwork`) is implemented. This document is the rationale the
-implementation is being built toward; it does not assert the desktop path works
-today.
+netns path is now implemented end-to-end — the wireless PHY move (`iw phy … set
+netns`) and in-netns association/DHCP re-establishment (`wpa_supplicant` + DHCP)
+both landed — but it is **not yet validated on real Wi-Fi hardware** and covers
+**open** captive networks only (BLOCKER-DESK-003 in
+[`BLOCKERS.md`](BLOCKERS.md)). On Android, the equivalent guarantee
+(`bindProcessToNetwork`) is implemented and shipping. This document is the
+rationale the implementation is being built toward; it does not assert the
+desktop path is hardware-verified today.
