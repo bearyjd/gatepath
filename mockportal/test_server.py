@@ -85,6 +85,23 @@ def test_login_redirects_to_probe(portal: str) -> None:
     assert resp.headers["Location"] == f"{portal}/generate_204"
 
 
+def test_login_authenticates_so_probe_validates(portal: str) -> None:
+    # Before login the probe is captive (302); after a successful /login the
+    # session is authenticated and every probe validates (204), regardless of
+    # the redirect counter. Models the real "captive until you sign in" flow.
+    assert _open(f"{portal}/generate_204").status == 302
+    _open(f"{portal}/login", method="POST", data=b"user=tester")
+    assert _open(f"{portal}/generate_204").status == 204
+    assert _open(f"{portal}/generate_204").status == 204
+
+
+def test_reset_clears_authentication(portal: str) -> None:
+    _open(f"{portal}/login", method="POST", data=b"user=tester")
+    assert _open(f"{portal}/generate_204").status == 204
+    _open(f"{portal}/reset", method="POST", data=b"")
+    assert _open(f"{portal}/generate_204").status == 302
+
+
 def test_reset_resets_counter(portal: str) -> None:
     for _ in range(3):
         _open(f"{portal}/generate_204")

@@ -81,3 +81,24 @@ works. If the active network is bare Wi-Fi, the portal URL must be
 reachable from a Wi-Fi-bound socket — Tailscale-only addresses will not
 resolve. Either host the portal on the Wi-Fi-reachable LAN, or join the
 phone to the same VPN.
+
+## Local emulator harness (AOSP)
+
+For full system-flow coverage — including the parts the debug intent
+skips (`CAPTIVE_PORTAL` parcelable, `ConnectivityManager.bindProcessToNetwork`,
+the chooser → activity → `reportCaptivePortalDismissed` round-trip) —
+use `tests/e2e-android/`. It boots an AOSP Android 14 emulator under
+Docker, points `Settings.Global.captive_portal_*_url` at a local
+mockportal reachable via `10.0.2.2:18080`, drives the chooser via
+UIAutomator, and asserts the full path against scenario / audit / gateway
+logs (mirrors `tests/e2e-docker/`'s shape).
+
+```sh
+(cd android && ANDROID_HOME="$ANDROID_HOME" ./gradlew :app:assembleDebug)
+cd tests/e2e-android && ./run-e2e.sh
+```
+
+Requires `/dev/kvm` on the host. CI uses
+`reactivecircus/android-emulator-runner` instead — see
+`.github/workflows/android-e2e.yml`. AOSP only; the GrapheneOS quirk
+above doesn't apply to emulator images.

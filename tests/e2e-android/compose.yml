@@ -1,0 +1,53 @@
+name: gatepath-e2e-android
+
+# Two-service stack for local dev:
+#   - mockportal-host: serves /generate_204, /portal, /login, /reset, /log
+#                      on port 18080. Reachable from inside the emulator
+#                      via 10.0.2.2:18080 (the QEMU host alias) AND from
+#                      the host via localhost:18080 (for the orchestrator
+#                      to POST /reset, GET /log).
+#   - emulator:        budtmo/docker-android image, free tier max API 34.
+#                      Requires /dev/kvm — there is no software-emu fallback
+#                      in the free tier. ADB at 5555.
+#
+# CI uses reactivecircus/android-emulator-runner instead of this compose
+# stack; the scenario script is the same. See .github/workflows/android-e2e.yml.
+
+services:
+  mockportal-host:
+    container_name: gatepath-e2e-mockportal
+    build:
+      # Build context is the repo root so we can COPY mockportal/ verbatim,
+      # matching tests/e2e-docker/gateway/Dockerfile.
+      context: ../..
+      dockerfile: tests/e2e-android/mockportal-host/Dockerfile
+    ports:
+      - "18080:18080"
+    environment:
+      # 1000 because Android NetworkMonitor fires multiple probes per
+      # evaluation (HTTP + HTTPS + fallback). complete_after=1 burns out
+      # after the first probe; subsequent probes return 204 and the system
+      # marks the network VALIDATED before captive can be detected.
+      PORTAL_COMPLETE_AFTER: "1000"
+
+  emulator:
+    container_name: gatepath-e2e-emulator
+    # Pin a specific version — free tier max is API 34 (Android 14).
+    # API 15+ requires the paid Pro tier; API matrix is a follow-up.
+    image: budtmo/docker-android:emulator_14.0
+    privileged: true
+    devices:
+      - /dev/kvm
+    ports:
+      # ADB. Upstream does NOT EXPOSE 5555 by default; this publish is
+      # required for `adb connect localhost:5555` from the host.
+      - "5555:5555"
+      # noVNC — for interactive debugging only. Browse http://localhost:6080
+      # to watch the emulator's screen mid-scenario.
+      - "6080:6080"
+    environment:
+      EMULATOR_DEVICE: "Samsung Galaxy S10"
+      WEB_VNC: "true"
+      APPIUM: "false"
+    depends_on:
+      - mockportal-host

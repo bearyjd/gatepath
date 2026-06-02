@@ -1,0 +1,97 @@
+name: android-e2e
+
+on:
+  pull_request:
+    paths:
+      - 'android/**'
+      - 'mockportal/**'
+      - 'tests/e2e-android/**'
+      - '.github/workflows/android-e2e.yml'
+  # Manual trigger for re-running without code changes (flake retry, etc.).
+  workflow_dispatch: {}
+
+jobs:
+  emulator-e2e:
+    name: Android emulator captive-portal E2E
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Enable KVM group perms
+        # Required for hardware acceleration on ubuntu-latest as of
+        # 2023-02-23 per reactivecircus/android-emulator-runner README.
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - uses: android-actions/setup-android@v3
+
+      - name: Cache Gradle
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ hashFiles('android/**/*.gradle*', 'android/gradle/libs.versions.toml') }}
+
+      - name: assembleDebug
+        working-directory: android
+        run: ./gradlew --no-daemon :app:assembleDebug
+
+      - name: Start mockportal-host
+        # The emulator-runner step that follows needs mockportal reachable
+        # at 10.0.2.2:18080 — same as the local Docker path. Bring it up
+        # via `docker compose` on the runner.
+        working-directory: tests/e2e-android
+        run: |
+          docker compose up -d mockportal-host
+          for i in $(seq 1 15); do
+            if curl -fsS -o /dev/null http://localhost:18080/generate_204; then
+              echo "mockportal-host is up"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "mockportal-host did not start" >&2
+          docker compose logs mockportal-host
+          exit 1
+
+      - name: Run emulator scenario
+        uses: reactivecircus/android-emulator-runner@v2.37.0
+        with:
+          api-level: 34
+          target: google_apis
+          arch: x86_64
+          profile: pixel_6
+          disable-animations: true
+          script: bash tests/e2e-android/scenario/ci-script.sh
+
+      - name: Run host-side assertions
+        if: always()
+        working-directory: tests/e2e-android
+        run: python3 driver/assertions.py artifacts
+
+      - name: Teardown mockportal-host
+        if: always()
+        working-directory: tests/e2e-android
+        run: docker compose down --volumes 2>&1 || true
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-android-artifacts
+          path: tests/e2e-android/artifacts/
+          if-no-files-found: warn
