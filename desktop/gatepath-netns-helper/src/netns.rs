@@ -8,11 +8,26 @@
 //!   3. Tear the netns down on portal sign-in or app exit.
 //!
 //! All three require `CAP_NET_ADMIN`, which is why this lives in the
-//! helper. The helper invokes them via `ip(8)` from `iproute2` rather than
-//! direct netlink — `iproute2` ships with every GNOME SDK runtime, the
-//! command shapes are well-understood, and the strict interface-name
+//! helper. Netns create/destroy use `ip(8)` from `iproute2`; the interface
+//! move uses `iw(8)` from the wireless tools. Both ship in standard runtimes,
+//! the command shapes are well-understood, and the strict interface-name
 //! validator (see [`super::validation`]) prevents argument injection at the
 //! one place where caller-supplied data enters a command line.
+//!
+//! ## Why the move uses `iw`, not `ip link`
+//!
+//! A wireless netdev (`wlan0`) is bound to its underlying PHY (`phyN`) and
+//! **cannot** be moved between network namespaces on its own:
+//! `ip link set dev wlan0 netns gatepath` returns `-EOPNOTSUPP` on real
+//! Wi-Fi hardware. The wireless stack requires moving the **whole PHY** via
+//! `iw phy <phyN> set netns name <name>` (the `nl80211`
+//! `NL80211_CMD_SET_WIPHY_NETNS` operation). [`LinuxNetnsOps::move_interface`]
+//! resolves the owning PHY for the validated interface from sysfs, then moves
+//! that PHY. (This closes BLOCKER-DESK-001; see `docs/BLOCKERS.md`.)
+//!
+//! Moving the PHY leaves the interface **unassociated and address-less** in
+//! the new netns — re-establishing connectivity (association + DHCP) is a
+//! separate concern handled by [`super::connectivity`].
 //!
 //! The [`NetnsOps`] trait abstracts the kernel surface so unit tests can
 //! drive the orchestrator without root. Production wiring uses
@@ -40,7 +55,9 @@ pub enum NetnsError {
     NotFound { name: String },
     #[error("`ip` command failed creating netns '{name}': {stderr}")]
     CreateFailed { name: String, stderr: String },
-    #[error("`ip` command failed moving interface '{interface}' into '{netns}': {stderr}")]
+    #[error("could not resolve the wiphy for interface '{interface}': {detail}")]
+    PhyResolutionFailed { interface: String, detail: String },
+    #[error("`iw` command failed moving interface '{interface}' (phy) into '{netns}': {stderr}")]
     MoveFailed {
         interface: String,
         netns: String,
@@ -64,13 +81,17 @@ pub trait NetnsOps {
     /// - [`NetnsError::CreateFailed`] if `ip` returned non-zero.
     fn create_netns(&self, name: &str) -> Result<PathBuf, NetnsError>;
 
-    /// Move the named WiFi interface from the host netns into the named
-    /// gatepath netns.
+    /// Move the named WiFi interface into the named gatepath netns by
+    /// relocating its owning PHY (see the module docs for why the whole PHY,
+    /// not the netdev, must move).
     ///
     /// # Errors
     ///
-    /// - [`NetnsError::MoveFailed`] if `ip` returned non-zero (usually
-    ///   because the interface name doesn't exist or the netns doesn't).
+    /// - [`NetnsError::PhyResolutionFailed`] if the interface has no
+    ///   resolvable wiphy (e.g. it isn't a wireless device, or it vanished
+    ///   between validation and this call).
+    /// - [`NetnsError::MoveFailed`] if `iw` returned non-zero (usually
+    ///   because the netns doesn't exist or the kernel refused the move).
     ///
     /// **Caller responsibility**: validate `interface` via
     /// [`super::validation::validate_interface_name`] BEFORE calling this.
@@ -118,32 +139,79 @@ pub fn validate_netns_name(name: &str) -> Result<(), String> {
 
 // ── Linux impl ──────────────────────────────────────────────────────────
 
-/// Production [`NetnsOps`] backed by `/usr/sbin/ip` from iproute2. Requires
-/// the helper process to have `CAP_NET_ADMIN`; in deployment that's
-/// satisfied by running as root via the systemd unit.
+/// sysfs path that exposes the wiphy name (`phyN`) for a wireless netdev.
+/// The kernel maintains `phy80211/name` for every cfg80211 interface;
+/// reading it is the canonical, parse-free way to map `wlan0` → `phy0`.
+///
+/// `interface` is assumed to have passed [`super::validation::validate_interface_name`]
+/// (only `[A-Za-z0-9_-]`), so it can't introduce `..` or `/` path segments.
+fn phy_name_sysfs_path(interface: &str) -> PathBuf {
+    Path::new("/sys/class/net")
+        .join(interface)
+        .join("phy80211/name")
+}
+
+/// argv (after the `iw` binary) that moves a whole PHY into a named netns.
+/// Pinned by a unit test so the DESK-001 fix can't silently regress back to
+/// the netdev-only `ip link set ... netns` form.
+fn phy_set_netns_args<'a>(phy: &'a str, netns_name: &'a str) -> [&'a str; 6] {
+    ["phy", phy, "set", "netns", "name", netns_name]
+}
+
+/// Run a privileged command, mapping a non-zero exit (or exec failure) to
+/// `(code, stderr)`. Shared by the `ip` and `iw` call paths.
+fn run_command(binary: &Path, args: &[&str]) -> Result<(), (i32, String)> {
+    let output = Command::new(binary)
+        .args(args)
+        .output()
+        .map_err(|e| (-1, format!("could not exec {}: {e}", binary.display())))?;
+    if output.status.success() {
+        return Ok(());
+    }
+    let code = output.status.code().unwrap_or(-1);
+    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+    Err((code, stderr))
+}
+
+/// Production [`NetnsOps`]. Uses `ip` from iproute2 for netns create/destroy
+/// and `iw` from the wireless tools for the PHY move. Requires the helper
+/// process to have `CAP_NET_ADMIN`; in deployment that's satisfied by
+/// running as root via the systemd unit.
 pub struct LinuxNetnsOps {
     /// Configurable for tests; defaults to `ip` on PATH.
     ip_binary: PathBuf,
+    /// Configurable for tests; defaults to `iw` on PATH.
+    iw_binary: PathBuf,
 }
 
 impl LinuxNetnsOps {
     pub fn new() -> Self {
         Self {
             ip_binary: PathBuf::from("ip"),
+            iw_binary: PathBuf::from("iw"),
         }
     }
 
     fn run_ip(&self, args: &[&str]) -> Result<(), (i32, String)> {
-        let output = Command::new(&self.ip_binary)
-            .args(args)
-            .output()
-            .map_err(|e| (-1, format!("could not exec ip: {e}")))?;
-        if output.status.success() {
-            return Ok(());
+        run_command(&self.ip_binary, args)
+    }
+
+    fn run_iw(&self, args: &[&str]) -> Result<(), (i32, String)> {
+        run_command(&self.iw_binary, args)
+    }
+
+    /// Resolve `wlan0` → `phy0` by reading the sysfs `phy80211/name` link.
+    /// Returns a human-readable detail string on failure (no such interface,
+    /// not a wireless device, or an empty/unreadable attribute).
+    fn resolve_phy(interface: &str) -> Result<String, String> {
+        let path = phy_name_sysfs_path(interface);
+        let raw = std::fs::read_to_string(&path)
+            .map_err(|e| format!("reading {}: {e}", path.display()))?;
+        let name = raw.trim();
+        if name.is_empty() {
+            return Err(format!("{} was empty", path.display()));
         }
-        let code = output.status.code().unwrap_or(-1);
-        let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
-        Err((code, stderr))
+        Ok(name.to_string())
     }
 }
 
@@ -169,22 +237,24 @@ impl NetnsOps for LinuxNetnsOps {
     }
 
     fn move_interface(&self, interface: &str, netns_name: &str) -> Result<(), NetnsError> {
-        // KNOWN BUG (BLOCKER-DESK-001, see docs/BLOCKERS.md): `ip link set
-        // dev <iface> netns` does NOT work for Wi-Fi interfaces. A wireless
-        // netdev is bound to its wiphy (PHY); the kernel rejects moving the
-        // netdev alone with -EOPNOTSUPP. The correct op is to move the whole
-        // PHY: `iw phy <phyN> set netns name <name>` (or the nl80211
-        // NL80211_CMD_SET_WIPHY_NETNS netlink call). This path is only
-        // exercised against FakeNetnsOps in the test suite, so the failure
-        // does not surface there. Do not treat the isolated session as
-        // functional on real hardware until this is fixed AND association +
-        // DHCP are re-established inside the netns (BLOCKER-DESK-002).
+        // DESK-001 fix: a Wi-Fi netdev cannot be moved between netns on its
+        // own (`ip link set dev <iface> netns` → -EOPNOTSUPP). Resolve the
+        // owning PHY, then move the whole PHY with
+        // `iw phy <phyN> set netns name <netns>` (NL80211_CMD_SET_WIPHY_NETNS).
         //
         // We trust callers to have run validation::validate_interface_name
         // and validate_netns_name first. We do NOT re-validate here because
-        // these strings have to flow through to `ip` verbatim and any
-        // additional rejection logic creates two sources of truth.
-        self.run_ip(&["link", "set", "dev", interface, "netns", netns_name])
+        // these strings have to flow through to `iw` verbatim and any
+        // additional rejection logic creates two sources of truth. The
+        // interface name's restricted charset is also what makes the sysfs
+        // path lookup in `resolve_phy` injection-safe.
+        let phy =
+            Self::resolve_phy(interface).map_err(|detail| NetnsError::PhyResolutionFailed {
+                interface: interface.into(),
+                detail,
+            })?;
+        let args = phy_set_netns_args(&phy, netns_name);
+        self.run_iw(&args)
             .map_err(|(_, stderr)| NetnsError::MoveFailed {
                 interface: interface.into(),
                 netns: netns_name.into(),
@@ -379,5 +449,52 @@ mod tests {
         let ops = LinuxNetnsOps::new();
         let err = ops.destroy_netns("bad name").unwrap_err();
         assert_eq!(err, NetnsError::InvalidName("bad name".into()));
+    }
+
+    // ── DESK-001: PHY-move command construction ─────────────────────────────
+
+    #[test]
+    fn phy_sysfs_path_is_under_class_net() {
+        // The interface name has already passed validation (charset
+        // [A-Za-z0-9_-]), so it cannot inject `..`/`/` path segments.
+        assert_eq!(
+            phy_name_sysfs_path("wlan0"),
+            Path::new("/sys/class/net/wlan0/phy80211/name"),
+        );
+        assert_eq!(
+            phy_name_sysfs_path("wlp3s0"),
+            Path::new("/sys/class/net/wlp3s0/phy80211/name"),
+        );
+    }
+
+    #[test]
+    fn phy_move_uses_iw_whole_phy_form_not_ip_link() {
+        // Regression pin for BLOCKER-DESK-001: the move MUST target the
+        // whole PHY (`iw phy <phyN> set netns name <netns>`), never the
+        // netdev-only `ip link set dev <iface> netns <netns>` form that the
+        // wireless stack rejects with -EOPNOTSUPP.
+        assert_eq!(
+            phy_set_netns_args("phy0", "gatepath"),
+            ["phy", "phy0", "set", "netns", "name", "gatepath"],
+        );
+    }
+
+    #[test]
+    fn phy_move_args_carry_through_resolved_phy_and_netns() {
+        let args = phy_set_netns_args("phy7", "gatepath-test");
+        assert_eq!(args[1], "phy7");
+        assert_eq!(args[5], "gatepath-test");
+    }
+
+    #[test]
+    fn resolve_phy_errors_for_nonexistent_interface() {
+        // No real wireless device under this name on a test host → the
+        // sysfs read fails and we surface a detail string rather than panic.
+        let err = LinuxNetnsOps::resolve_phy("wlx-does-not-exist-99")
+            .expect_err("nonexistent interface must not resolve a phy");
+        assert!(
+            err.contains("/sys/class/net/wlx-does-not-exist-99/phy80211/name"),
+            "detail should name the sysfs path, got: {err}",
+        );
     }
 }

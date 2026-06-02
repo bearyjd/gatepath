@@ -38,6 +38,7 @@ use crate::{
     auth::{ACTION_SETUP_CAPTIVE, ACTION_TEARDOWN_CAPTIVE, AuthError, Authorizer},
     backstop::{BackstopGuard, BackstopTimer, DEFAULT_BACKSTOP_DURATION},
     caller_uid::{CallerUidError, CallerUidLookup},
+    connectivity::{ConnectivityParams, ConnectivitySession, NetnsConnectivity, WifiSecurity},
     name_watch::{NameWatcher, WatchGuard},
     netns::NetnsOps,
     network_manager::{CaptiveStateChecker, NMError},
@@ -85,6 +86,10 @@ pub struct Deps<
     pub watcher: W,
     pub spawner: Box<dyn Spawner>,
     pub caller_uid_lookup: Box<dyn CallerUidLookup>,
+    /// DESK-002: re-establishes association + DHCP inside the netns after the
+    /// PHY is moved. Boxed for the same reason as `spawner` — tests reach the
+    /// fake via a shared `Arc`.
+    pub connectivity: Box<dyn NetnsConnectivity>,
     pub backstop: BackstopConfig,
     pub audit: Box<dyn AuditWriter>,
 }
@@ -107,6 +112,8 @@ pub struct GatepathHelperService<N: NetnsOps, A: Authorizer, C: CaptiveStateChec
     spawner: Box<dyn Spawner>,
     /// Phase 5b.7: D-Bus sender → UID resolver. Boxed for the same reason.
     caller_uid_lookup: Box<dyn CallerUidLookup>,
+    /// DESK-002: in-netns connectivity (wpa_supplicant + DHCP).
+    connectivity: Box<dyn NetnsConnectivity>,
     audit: Box<dyn AuditWriter>,
     /// `Some(interface_name)` while a session is active, `None` otherwise.
     /// Mutex because the D-Bus service handles concurrent calls; this field
@@ -138,6 +145,10 @@ pub struct GatepathHelperService<N: NetnsOps, A: Authorizer, C: CaptiveStateChec
     /// and `handle_disconnect`. Multiple takes are safe — Drop cancels
     /// idempotently.
     active_backstop: Mutex<Option<BackstopGuard>>,
+    /// DESK-002: live connectivity session (wpa_supplicant + DHCP). Set on
+    /// successful setup; dropped — which stops those processes — BEFORE
+    /// `destroy_netns` on every teardown path (explicit, disconnect, backstop).
+    active_connectivity: Mutex<Option<Box<dyn ConnectivitySession>>>,
 }
 
 impl<
@@ -158,6 +169,7 @@ impl<
             watcher,
             spawner,
             caller_uid_lookup,
+            connectivity,
             backstop,
             audit,
         } = deps;
@@ -169,6 +181,7 @@ impl<
             watcher,
             spawner,
             caller_uid_lookup,
+            connectivity,
             audit,
             active: Mutex::new(None),
             active_sender: Mutex::new(None),
@@ -177,6 +190,7 @@ impl<
             backstop_timer: backstop.timer,
             backstop_duration: backstop.duration,
             active_backstop: Mutex::new(None),
+            active_connectivity: Mutex::new(None),
         }
     }
 
@@ -263,6 +277,20 @@ impl<
             };
         }
 
+        // 5b. Capture the SSID NOW, while NetworkManager can still see the
+        //     device. Step 6 moves the PHY into the netns and NM loses sight
+        //     of it, so this is our only chance to learn what wpa_supplicant
+        //     must re-associate to inside the netns (DESK-002).
+        let ssid = match self.captive_check.active_ssid(&request.interface_name) {
+            Ok(s) => s,
+            Err(err) => {
+                tracing::error!(error = %err, "active SSID lookup failed");
+                return SetupCaptiveResponse::Refused {
+                    reason: RefusalReason::BackendUnavailable,
+                };
+            }
+        };
+
         // 6. Kernel ops. On failure, the session does NOT become active.
         let netns_path = match self.ops.create_netns(NETNS_NAME) {
             Ok(p) => p,
@@ -282,6 +310,28 @@ impl<
             };
         }
 
+        // 6b. DESK-002: the moved PHY is unassociated and address-less. Bring
+        //     the link up, re-associate via wpa_supplicant, and acquire a DHCP
+        //     lease inside the netns before the WebView is ever launched. On
+        //     failure, tear the netns back down — a half-built isolated stack
+        //     is worse than none.
+        let conn_params = ConnectivityParams {
+            netns_name: NETNS_NAME.to_string(),
+            interface: request.interface_name.clone(),
+            ssid,
+            security: WifiSecurity::Open,
+        };
+        let connectivity_session = match self.connectivity.bring_up(&conn_params) {
+            Ok(session) => session,
+            Err(err) => {
+                tracing::error!(error = %err, "connectivity bring-up failed");
+                let _ = self.ops.destroy_netns(NETNS_NAME);
+                return SetupCaptiveResponse::Refused {
+                    reason: RefusalReason::KernelError,
+                };
+            }
+        };
+
         // 7. Install the name watch so we auto-teardown if the UI dies. If
         //    the watch can't be installed, undo the kernel ops and return
         //    KernelError — running without an auto-teardown would leak the
@@ -297,6 +347,8 @@ impl<
             Ok(g) => g,
             Err(err) => {
                 tracing::error!(error = %err, "name watch install failed");
+                // Stop wpa_supplicant/DHCP before tearing the netns down.
+                drop(connectivity_session);
                 let _ = self.ops.destroy_netns(NETNS_NAME);
                 return SetupCaptiveResponse::Refused {
                     reason: RefusalReason::KernelError,
@@ -310,6 +362,10 @@ impl<
             .lock()
             .expect("active_sender mutex poisoned") = Some(sender.to_string());
         *self.active_guard.lock().expect("guard mutex poisoned") = Some(guard);
+        *self
+            .active_connectivity
+            .lock()
+            .expect("connectivity mutex poisoned") = Some(connectivity_session);
 
         SetupCaptiveResponse::Success {
             netns_path: netns_path.to_string_lossy().into_owned(),
@@ -345,6 +401,13 @@ impl<
             .active_backstop
             .lock()
             .expect("backstop mutex poisoned") = None;
+        // DESK-002: stop wpa_supplicant/DHCP BEFORE destroying the netns, so
+        // they release their netns sockets first (a process still pinned to
+        // the netns would keep it alive past `ip netns del`).
+        *self
+            .active_connectivity
+            .lock()
+            .expect("connectivity mutex poisoned") = None;
 
         match self.ops.destroy_netns(NETNS_NAME) {
             Ok(()) => {
@@ -382,6 +445,11 @@ impl<
             .active_backstop
             .lock()
             .expect("backstop mutex poisoned") = None;
+        // DESK-002: stop wpa_supplicant/DHCP before tearing the netns down.
+        *self
+            .active_connectivity
+            .lock()
+            .expect("connectivity mutex poisoned") = None;
 
         let result = self.ops.destroy_netns(NETNS_NAME);
         *active = None;
@@ -560,6 +628,11 @@ impl<
             .lock()
             .expect("backstop mutex poisoned") = None;
         *self.active_guard.lock().expect("guard mutex poisoned") = None;
+        // DESK-002: stop wpa_supplicant/DHCP before tearing the netns down.
+        *self
+            .active_connectivity
+            .lock()
+            .expect("connectivity mutex poisoned") = None;
 
         let result = self.ops.destroy_netns(NETNS_NAME);
         *active = None;
@@ -679,6 +752,7 @@ mod tests {
     use crate::audit_log::FakeAuditWriter;
     use crate::auth::FakeAuthorizer;
     use crate::caller_uid::FakeCallerUidLookup;
+    use crate::connectivity::FakeNetnsConnectivity;
     use crate::name_watch::FakeNameWatcher;
     use crate::netns::{FakeNetnsOps, NetnsError};
     use crate::network_manager::FakeCaptiveCheck;
@@ -715,6 +789,7 @@ mod tests {
         spawner: Arc<FakeSpawner>,
         uid_lookup: Arc<FakeCallerUidLookup>,
         backstop: Arc<crate::backstop::FakeBackstop>,
+        connectivity: Arc<FakeNetnsConnectivity>,
     }
 
     fn svc_with_audit(
@@ -728,6 +803,7 @@ mod tests {
         let spawner = Arc::new(FakeSpawner::new());
         let uid_lookup = Arc::new(FakeCallerUidLookup::new());
         let backstop = Arc::new(crate::backstop::FakeBackstop::new());
+        let connectivity = Arc::new(FakeNetnsConnectivity::new());
         // Default UID mapping: every sender maps to UID 1000. Tests that
         // exercise the unauthorised-uid path call `uid_lookup.fail_dbus()`
         // or override entries directly.
@@ -739,6 +815,7 @@ mod tests {
         let spawner_for_svc = Arc::clone(&spawner);
         let uid_for_svc = Arc::clone(&uid_lookup);
         let backstop_for_svc = Arc::clone(&backstop);
+        let connectivity_for_svc = Arc::clone(&connectivity);
 
         struct ArcWriter(Arc<FakeAuditWriter>);
         impl AuditWriter for ArcWriter {
@@ -754,6 +831,7 @@ mod tests {
             watcher: watcher_for_svc,
             spawner: Box::new(spawner_for_svc),
             caller_uid_lookup: Box::new(uid_for_svc),
+            connectivity: Box::new(connectivity_for_svc),
             backstop: BackstopConfig {
                 timer: Box::new(backstop_for_svc),
                 duration: Duration::from_secs(30),
@@ -767,6 +845,7 @@ mod tests {
             spawner,
             uid_lookup,
             backstop,
+            connectivity,
         }
     }
 
@@ -1007,6 +1086,7 @@ mod tests {
         let exploding = ExplodingMoveFake {
             inner: FakeNetnsOps::new(),
         };
+        let connectivity = Arc::new(FakeNetnsConnectivity::new());
         let svc = Arc::new(GatepathHelperService::new(Deps {
             ops: exploding,
             auth: FakeAuthorizer::allow_all(),
@@ -1015,6 +1095,7 @@ mod tests {
             watcher: Arc::new(FakeNameWatcher::new()),
             spawner: Box::new(Arc::new(FakeSpawner::new())),
             caller_uid_lookup: Box::new(Arc::new(FakeCallerUidLookup::new())),
+            connectivity: Box::new(Arc::clone(&connectivity)),
             backstop: BackstopConfig {
                 timer: Box::new(Arc::new(crate::backstop::FakeBackstop::new())),
                 duration: Duration::from_secs(30),
@@ -1029,6 +1110,13 @@ mod tests {
             },
         );
         assert!(!svc.is_active());
+        // Ordering guarantee: connectivity bring-up must NOT run when the PHY
+        // move fails (it runs only after a successful move). This pins the
+        // no-leak invariant the rollback depends on.
+        assert!(
+            connectivity.brought_up().is_empty(),
+            "bring_up must not be attempted after a failed move",
+        );
     }
 
     // ── Phase 5b.5 throttle + audit ──────────────────────────────────────
@@ -1200,6 +1288,141 @@ mod tests {
         assert!(!svc.is_active());
     }
 
+    // ── DESK-002: in-netns connectivity orchestration ───────────────────────
+
+    #[test]
+    fn setup_brings_up_connectivity_with_captured_ssid() {
+        let nm = FakeCaptiveCheck::new();
+        nm.say_captive("wlan0");
+        nm.set_ssid("wlan0", "CoffeeWiFi");
+        let Fixture {
+            svc, connectivity, ..
+        } = svc_with_audit(
+            FakeNetnsOps::new(),
+            FakeAuthorizer::allow_all(),
+            nm,
+            permissive_throttle(),
+        );
+        let resp = svc.setup_captive(&req("wlan0"), ":1.42");
+        assert!(matches!(resp, SetupCaptiveResponse::Success { .. }));
+        let brought = connectivity.brought_up();
+        assert_eq!(
+            brought.len(),
+            1,
+            "setup must bring connectivity up exactly once"
+        );
+        assert_eq!(brought[0].interface, "wlan0");
+        // The SSID NM reported pre-move is the one we re-associate to.
+        assert_eq!(brought[0].ssid, "CoffeeWiFi");
+        assert_eq!(brought[0].netns_name, NETNS_NAME);
+        assert_eq!(
+            connectivity.teardown_count(),
+            0,
+            "session must stay up while active"
+        );
+    }
+
+    #[test]
+    fn connectivity_failure_tears_down_netns_and_refuses() {
+        let Fixture {
+            svc, connectivity, ..
+        } = svc_with_audit(
+            FakeNetnsOps::new(),
+            FakeAuthorizer::allow_all(),
+            allow_captive(),
+            permissive_throttle(),
+        );
+        connectivity.fail_bring_up();
+        let resp = svc.setup_captive(&req("wlan0"), ":1.42");
+        assert_eq!(
+            resp,
+            SetupCaptiveResponse::Refused {
+                reason: RefusalReason::KernelError,
+            },
+        );
+        assert!(
+            !svc.is_active(),
+            "failed bring-up must not leave an active session"
+        );
+        // bring_up was attempted; no session was created, so there's nothing
+        // to tear down (the netns was destroyed by the rollback instead).
+        assert_eq!(connectivity.brought_up().len(), 1);
+        assert_eq!(connectivity.teardown_count(), 0);
+    }
+
+    #[test]
+    fn explicit_teardown_drops_connectivity_session() {
+        let Fixture {
+            svc, connectivity, ..
+        } = svc_with_audit(
+            FakeNetnsOps::new(),
+            FakeAuthorizer::allow_all(),
+            allow_captive(),
+            permissive_throttle(),
+        );
+        svc.setup_captive(&req("wlan0"), ":1.42");
+        assert_eq!(connectivity.teardown_count(), 0);
+        svc.teardown_captive(":1.42");
+        assert_eq!(
+            connectivity.teardown_count(),
+            1,
+            "explicit teardown must stop wpa_supplicant/DHCP",
+        );
+    }
+
+    #[test]
+    fn disconnect_drops_connectivity_session() {
+        let Fixture {
+            svc,
+            watcher,
+            connectivity,
+            ..
+        } = svc_with_audit(
+            FakeNetnsOps::new(),
+            FakeAuthorizer::allow_all(),
+            allow_captive(),
+            permissive_throttle(),
+        );
+        svc.setup_captive(&req("wlan0"), ":1.42");
+        watcher.fire_disconnect(":1.42");
+        assert!(!svc.is_active());
+        assert_eq!(
+            connectivity.teardown_count(),
+            1,
+            "auto-teardown on sender disconnect must stop connectivity",
+        );
+    }
+
+    #[test]
+    fn setup_ssid_lookup_failure_refuses_and_does_not_touch_kernel() {
+        // is_captive passes but the SSID capture fails — setup must refuse
+        // before creating the netns or attempting connectivity bring-up.
+        let nm = FakeCaptiveCheck::new();
+        nm.say_captive("wlan0");
+        nm.fail_ssid();
+        let Fixture {
+            svc, connectivity, ..
+        } = svc_with_audit(
+            FakeNetnsOps::new(),
+            FakeAuthorizer::allow_all(),
+            nm,
+            permissive_throttle(),
+        );
+        let resp = svc.setup_captive(&req("wlan0"), ":1.42");
+        assert_eq!(
+            resp,
+            SetupCaptiveResponse::Refused {
+                reason: RefusalReason::BackendUnavailable,
+            },
+        );
+        assert!(!svc.is_active());
+        assert!(svc.ops.netns().is_empty(), "no netns should be created");
+        assert!(
+            connectivity.brought_up().is_empty(),
+            "bring_up must not run when SSID capture fails",
+        );
+    }
+
     #[test]
     fn watch_install_failure_rolls_back_kernel_and_returns_kernel_error() {
         let watcher = Arc::new(FakeNameWatcher::new());
@@ -1220,6 +1443,7 @@ mod tests {
             watcher: Arc::clone(&watcher),
             spawner: Box::new(Arc::new(FakeSpawner::new())),
             caller_uid_lookup: Box::new(Arc::new(FakeCallerUidLookup::new())),
+            connectivity: Box::new(Arc::new(FakeNetnsConnectivity::new())),
             backstop: BackstopConfig {
                 timer: Box::new(Arc::new(crate::backstop::FakeBackstop::new())),
                 duration: Duration::from_secs(30),

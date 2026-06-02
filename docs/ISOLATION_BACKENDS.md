@@ -30,9 +30,11 @@ Move the Wi-Fi PHY into a dedicated netns, run the WebView there, tear it down.
 - **Contains a browser RCE?** **No.** The browser shares the host kernel. netns
   confines *where packets go*, not *whether rendering hostile HTML is safe*. A
   WebKit bug that targets the kernel still lands on the host.
-- **Open blockers:** the Wi-Fi PHY move (`iw phy … set netns`, not `ip link`)
-  and re-establishing association/DHCP inside the netns —
-  BLOCKER-DESK-001/002 in [`BLOCKERS.md`](BLOCKERS.md).
+- **Status:** the Wi-Fi PHY move (`iw phy … set netns`, not `ip link`) and
+  in-netns association/DHCP re-establishment (`wpa_supplicant` + DHCP) are both
+  implemented (BLOCKER-DESK-001/002 resolved). Remaining: real-hardware
+  validation (BLOCKER-DESK-003) and secured-network support — see
+  [`BLOCKERS.md`](BLOCKERS.md).
 
 **Verdict:** the pragmatic, lightweight backend. Smallest TCB, works on any
 machine (no hardware requirement), but the weakest containment of the *actual*

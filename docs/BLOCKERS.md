@@ -6,8 +6,12 @@ the workaround (if any).
 
 ## Status
 
-Two open blockers gate the desktop **netns isolation** path (the
-Android-parity "bind portal traffic to the Wi-Fi interface" capability). See
+The two code-level blockers that gated the desktop **netns isolation** path
+(the Android-parity "bind portal traffic to the Wi-Fi interface" capability)
+are now **implemented** — see RESOLVED entries below. One open item remains:
+real-hardware validation of the privileged exec paths (the unit suite still
+exercises them only through fakes), tracked as **BLOCKER-DESK-003**, plus the
+documented open-networks-only limitation. See
 [`DESKTOP_NETNS_DEPLOYMENT.md`](DESKTOP_NETNS_DEPLOYMENT.md) for the full
 findings and the atomic-distro deployment analysis.
 
@@ -15,50 +19,111 @@ findings and the atomic-distro deployment analysis.
 
 ## Open
 
-### BLOCKER-DESK-001 — Wi-Fi interface is moved with the wrong kernel operation
+### BLOCKER-DESK-003 — Privileged exec paths are not yet hardware-validated
 
-**File:** `desktop/gatepath-netns-helper/src/netns.rs` (`LinuxNetnsOps::move_interface`)
+**Files:** `desktop/gatepath-netns-helper/src/netns.rs`
+(`LinuxNetnsOps::move_interface` → `iw`), `src/connectivity.rs`
+(`LinuxNetnsConnectivity` → `wpa_supplicant` + DHCP client).
 
-**Symptom:** The helper moves the captive interface into the gatepath netns with
-`ip link set dev <iface> netns <name>`. On real Wi-Fi hardware this fails with
-`-EOPNOTSUPP` / "Invalid argument" and the isolated session never starts.
+**Symptom:** None observable in CI. The DESK-001/002 fixes are covered by
+unit tests at the **command-construction** and **orchestration** level
+(`phy_set_netns_args`, `render_wpa_config`, the `*_args` builders, and
+service-level setup/teardown tests via `FakeNetnsConnectivity`), but the
+actual privileged execution — moving a real PHY, re-associating with
+`wpa_supplicant`, and pulling a DHCP lease inside the netns — has never run
+against real Wi-Fi hardware in this environment (`iw`/`wpa_supplicant`/DHCP
+clients aren't installed on the build host).
 
-**Diagnosis:** A wireless netdev is bound to its `wiphy` (PHY) and cannot be
-moved between network namespaces on its own. The wireless stack requires moving
-the **whole PHY**:
+**Diagnosis:** This is the same fakes-hide-the-kernel gap that the original
+DESK-001/002 entries called out, now narrowed to "the code is correct by
+construction and review, but unverified end-to-end on hardware." The
+`tests/dbus_integration.rs` `--ignored` suite is the intended home for
+on-hardware checks.
+
+**Workaround:** Validate on a real (non-Flatpak) Linux box with an **open**
+captive SSID:
 
 ```
-iw phy <phyN> set netns name <name>     # or: set netns <pid>
+cd desktop/gatepath-netns-helper
+cargo test --test dbus_integration -- --ignored --nocapture   # wire-shape checks
+# then a manual end-to-end run of SetupCaptive → LaunchPortal → TeardownCaptive
 ```
 
-The unit/JVM-style suite does not catch this because the privileged kernel
-surface is exercised through `FakeNetnsOps`, which never invokes `ip`/`iw`.
+Confirm: the PHY appears inside `ip netns exec gatepath iw dev`, the interface
+gets an IPv4 address, the portal loads, and teardown removes the netns and
+leaves no `wpa_supplicant`/DHCP strays (`ip netns pids gatepath`).
 
-**Workaround:** None. The privileged op must switch to `iw phy … set netns`
-(resolving the PHY for the validated interface first), or to the equivalent
-`nl80211` `NL80211_CMD_SET_WIPHY_NETNS` netlink call.
+**Hardware-validation checklist** (items the unit suite cannot cover; several
+surfaced in security/code review):
 
-### BLOCKER-DESK-002 — Nothing re-establishes connectivity inside the netns
+- [ ] `iw phy <phyN> set netns name gatepath` is accepted by the deployed `iw`
+      version (older `iw` may only support `set netns <pid>`).
+- [ ] The wireless netdev keeps its name after the PHY move (no udev rename
+      inside the bare netns); otherwise `link_up_args` / DHCP target the wrong
+      iface.
+- [ ] DHCP actually completes (the one-shot client exits 0) on a real open
+      captive AP, and `bring_up` returns only after a lease.
+- [ ] systemd hardening is compatible with the in-netns children: `AF_PACKET`
+      present, `IPAddressDeny` not blocking DHCP/portal, `MemoryDenyWriteExecute`
+      off for the WebKit JIT (all addressed in
+      `data/gatepath-netns-helper.service`, but verify end-to-end).
+- [ ] Teardown leaves no stray privileged processes; the SIGTERM→SIGKILL
+      straggler sweep reaps the DHCP client and supplicant before `ip netns del`.
+- [ ] `cargo audit` runs clean in CI (could not run in the sandbox — no network).
 
-**File:** `desktop/gatepath-netns-helper/src/service.rs` (setup → launch path)
+**Known limitation — non-UTF-8 SSIDs:** `active_ssid` returns a lossy UTF-8
+`String`, so an SSID with non-UTF-8 bytes is hex-encoded from the lossy form and
+won't match the real beacon. Plumb raw `Vec<u8>` end-to-end if a real captive
+network with a non-UTF-8 SSID is encountered (rare).
 
-**Symptom:** Even after the PHY is moved correctly (BLOCKER-DESK-001), the
-gatepath netns has no usable link, so the portal page cannot load.
+### Known limitation — secured captive networks are not supported
 
-**Diagnosis:** NetworkManager runs in the **host** netns and can no longer
-manage the moved PHY. Moving a connected wiphy drops the L2 association on most
-drivers, and the DHCP lease does not travel with the PHY. The netns therefore
-has an unassociated, address-less interface.
-
-**Workaround:** None yet. Inside the gatepath netns the helper must run its own
-`wpa_supplicant` (re-associate to the captive SSID) and a DHCP client (reacquire
-an address + the gateway/portal route) before spawning the WebView runner, then
-tear both down with the netns. This is the larger of the two items and changes
-the helper's runtime dependency set (`wpa_supplicant`, a DHCP client).
+`connectivity.rs` re-associates **open** SSIDs only (`key_mgmt=NONE`), which is
+the overwhelming captive-portal case. Secured captive networks (WPA2-PSK or
+enterprise EAP) need the PSK/credentials lifted out of NetworkManager's secret
+store before `wpa_supplicant` can re-associate inside the netns — a separate,
+security-sensitive piece of work. `WifiSecurity::Psk` is modelled but
+`bring_up` returns `ConnectivityError::Unsupported` rather than silently
+producing a session that can never associate.
 
 ---
 
 ## Resolved
+
+### BLOCKER-DESK-001 (RESOLVED 2026-06-01) — Wi-Fi PHY now moved with `iw`
+
+**File:** `desktop/gatepath-netns-helper/src/netns.rs` (`LinuxNetnsOps::move_interface`)
+
+`move_interface` no longer uses the netdev-only `ip link set dev <iface> netns`
+form the wireless stack rejects with `-EOPNOTSUPP`. It now resolves the owning
+PHY for the validated interface from sysfs
+(`/sys/class/net/<iface>/phy80211/name`) and moves the **whole PHY** with
+`iw phy <phyN> set netns name <name>` (the `nl80211`
+`NL80211_CMD_SET_WIPHY_NETNS` operation). The interface name's restricted
+charset (`[A-Za-z0-9_-]`, enforced by `validation`) keeps the sysfs lookup
+injection-safe. The exact `iw` argv is pinned by `phy_move_uses_iw_whole_phy_form_not_ip_link`
+so it can't regress. End-to-end exec is tracked by BLOCKER-DESK-003.
+
+### BLOCKER-DESK-002 (RESOLVED 2026-06-01) — connectivity re-established in the netns
+
+**Files:** `desktop/gatepath-netns-helper/src/connectivity.rs` (new),
+`src/service.rs` (setup/teardown wiring), `src/network_manager.rs`
+(`active_ssid`).
+
+The new `connectivity` module brings the link up, runs `wpa_supplicant` to
+re-associate to the captive SSID, and runs a DHCP client — all inside the
+gatepath netns, behind the `NetnsConnectivity` trait. The SSID is captured from
+NetworkManager **before** the PHY moves (after the move NM can't see the
+device). The live session is stored by the orchestrator and dropped — which
+stops `wpa_supplicant`/DHCP — **before** `destroy_netns` on every teardown path
+(explicit, sender-disconnect, backstop). This adds `iw`, `wpa_supplicant`, and a
+DHCP client to the helper's runtime dependency set (see
+[`DESKTOP_NETNS_DEPLOYMENT.md`](DESKTOP_NETNS_DEPLOYMENT.md)). Open-networks-only
+and on-hardware validation remain (see Open, above).
+
+---
+
+## Resolved (earlier)
 
 ### KNOWN-AND-001 (RESOLVED 2026-05-17) — `BindWatchdog` lifecycle delivery is JVM-tested
 

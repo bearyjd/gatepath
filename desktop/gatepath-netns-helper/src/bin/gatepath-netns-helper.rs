@@ -22,6 +22,7 @@ use std::time::Duration;
 use anyhow::Context;
 use gatepath_netns_helper::audit_log::FileAuditWriter;
 use gatepath_netns_helper::caller_uid::DbusCallerUidLookup;
+use gatepath_netns_helper::connectivity::LinuxNetnsConnectivity;
 use gatepath_netns_helper::dbus_service::{BUS_NAME, DbusService, OBJECT_PATH};
 use gatepath_netns_helper::name_watch::LinuxNameWatcher;
 use gatepath_netns_helper::netns::LinuxNetnsOps;
@@ -108,6 +109,7 @@ async fn run() -> anyhow::Result<()> {
     }
     let spawner = LinuxSpawner::new(PORTAL_RUNNER_PATH);
     let ops = LinuxNetnsOps::new();
+    let connectivity = LinuxNetnsConnectivity::new();
     let throttle = Throttle::new(THROTTLE_LIMIT, THROTTLE_WINDOW);
     let audit = FileAuditWriter::open(PathBuf::from(AUDIT_LOG_PATH))
         .with_context(|| format!("opening audit log at {AUDIT_LOG_PATH}"))?;
@@ -120,6 +122,7 @@ async fn run() -> anyhow::Result<()> {
         watcher,
         spawner: Box::new(spawner),
         caller_uid_lookup: Box::new(caller_uid_lookup),
+        connectivity: Box::new(connectivity),
         backstop: BackstopConfig::production(),
         audit: Box::new(audit),
     }));
