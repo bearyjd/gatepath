@@ -244,7 +244,9 @@ impl<
                     reason: RefusalReason::InvalidInterface,
                 };
             }
-            Err(NMError::DbusFailed(_)) => {
+            // `is_captive` doesn't query the access point, so it never returns
+            // NotAssociated; map it with DbusFailed for exhaustiveness.
+            Err(NMError::NotAssociated(_)) | Err(NMError::DbusFailed(_)) => {
                 return SetupCaptiveResponse::Refused {
                     reason: RefusalReason::BackendUnavailable,
                 };
@@ -277,14 +279,29 @@ impl<
             };
         }
 
-        // 5b. Capture the SSID NOW, while NetworkManager can still see the
-        //     device. Step 6 moves the PHY into the netns and NM loses sight
-        //     of it, so this is our only chance to learn what wpa_supplicant
-        //     must re-associate to inside the netns (DESK-002).
-        let ssid = match self.captive_check.active_ssid(&request.interface_name) {
-            Ok(s) => s,
+        // 5a. Read the active AP's SSID + security in ONE NM round-trip, while
+        //     NetworkManager can still see the device (step 6 moves the PHY and
+        //     NM loses sight of it). Two facts from one access point:
+        //       - `is_open` gates the open-network requirement (DESK-002) — we
+        //         refuse a secured network up front, before the PHY move, rather
+        //         than tearing the user's Wi-Fi away only to fail at DHCP.
+        //       - `ssid` is what wpa_supplicant re-associates to inside the netns.
+        let ssid = match self.captive_check.active_ap_state(&request.interface_name) {
+            Ok(ap) if ap.is_open => ap.ssid,
+            Ok(_secured) => {
+                return SetupCaptiveResponse::Refused {
+                    reason: RefusalReason::UnsupportedSecurity,
+                };
+            }
+            // Device dropped its association between the captive check and now
+            // — transient, so tell the UI to retry rather than "NM is down".
+            Err(NMError::NotAssociated(_)) => {
+                return SetupCaptiveResponse::Refused {
+                    reason: RefusalReason::Pending,
+                };
+            }
             Err(err) => {
-                tracing::error!(error = %err, "active SSID lookup failed");
+                tracing::error!(error = %err, "active AP lookup failed");
                 return SetupCaptiveResponse::Refused {
                     reason: RefusalReason::BackendUnavailable,
                 };
@@ -385,32 +402,47 @@ impl<
             return TeardownCaptiveResponse::KernelError;
         }
 
-        let mut active = self.active.lock().expect("active mutex poisoned");
-        if active.is_none() {
-            return TeardownCaptiveResponse::NotActive;
-        }
+        // Phase 1 (under the `active` lock): confirm a session is active,
+        // detach the watch guard + backstop, and TAKE the connectivity session
+        // out — without dropping it yet. We deliberately leave `active` = Some
+        // so a concurrent setup is refused (AlreadyActive) while the slow
+        // connectivity stop runs lock-free below.
+        //
+        // Race note: because the lock is released during Phase 2/3, another
+        // teardown-class path (disconnect/backstop) could also pass its
+        // is-active gate in this window. That is benign — the second `take()`
+        // yields `None`, `destroy_netns` is idempotent, and both null `active`
+        // together; the only visible effect is a possible duplicate audit
+        // entry for one logical teardown.
+        let session = {
+            let active = self.active.lock().expect("active mutex poisoned");
+            if active.is_none() {
+                return TeardownCaptiveResponse::NotActive;
+            }
+            // Drop the watch guard BEFORE destroy so the auto-teardown callback
+            // can't race in. Cancel the backstop timer too (5b.8).
+            *self.active_guard.lock().expect("guard mutex poisoned") = None;
+            *self
+                .active_backstop
+                .lock()
+                .expect("backstop mutex poisoned") = None;
+            self.active_connectivity
+                .lock()
+                .expect("connectivity mutex poisoned")
+                .take()
+        };
 
-        // Drop the watch guard BEFORE destroy so the auto-teardown callback
-        // can't race in and fire after we've cleaned up. Drop happens
-        // synchronously (the guard's cancel closure runs here).
-        *self.active_guard.lock().expect("guard mutex poisoned") = None;
-        // Phase 5b.8: also cancel the backstop timer if it was armed by
-        // a prior subprocess exit. Drop sends on the cancel channel; the
-        // timer thread will see it and exit without firing the callback.
-        *self
-            .active_backstop
-            .lock()
-            .expect("backstop mutex poisoned") = None;
-        // DESK-002: stop wpa_supplicant/DHCP BEFORE destroying the netns, so
-        // they release their netns sockets first (a process still pinned to
-        // the netns would keep it alive past `ip netns del`).
-        *self
-            .active_connectivity
-            .lock()
-            .expect("connectivity mutex poisoned") = None;
+        // Phase 2 (DESK-002): stop wpa_supplicant/DHCP with NO lock held — the
+        // kill + reap must not stall every other D-Bus method on `active`. This
+        // runs BEFORE destroy_netns so the processes release their netns
+        // sockets first (a process still pinned would outlive `ip netns del`).
+        drop(session);
 
+        // Phase 3: destroy the netns, then clear state. On a kernel error we
+        // leave `active` = Some so an explicit teardown can be retried.
         match self.ops.destroy_netns(NETNS_NAME) {
             Ok(()) => {
+                let mut active = self.active.lock().expect("active mutex poisoned");
                 *active = None;
                 *self
                     .active_sender
@@ -428,35 +460,40 @@ impl<
     /// security argument. Idempotent: if an explicit teardown already
     /// cleared the session, this call is a no-op.
     fn handle_disconnect(&self, sender: &str) {
-        let mut active = self.active.lock().expect("active mutex poisoned");
-        if active.is_none() {
-            return;
-        }
+        // Phase 1 (under the `active` lock): confirm active, detach the guard +
+        // backstop (the guard's cancel closure no-ops here — the callback we're
+        // running was already taken), and TAKE the connectivity session out.
+        // Leave `active` = Some during the lock-free stop below.
+        let session = {
+            let active = self.active.lock().expect("active mutex poisoned");
+            if active.is_none() {
+                return;
+            }
+            *self.active_guard.lock().expect("guard mutex poisoned") = None;
+            *self
+                .active_backstop
+                .lock()
+                .expect("backstop mutex poisoned") = None;
+            self.active_connectivity
+                .lock()
+                .expect("connectivity mutex poisoned")
+                .take()
+        };
 
-        // Clear the guard now that we've started reacting; no further
-        // signals matter. (The guard's cancel closure no-ops because the
-        // callback we're running was already taken from cb_holder.)
-        *self.active_guard.lock().expect("guard mutex poisoned") = None;
-        // Phase 5b.8: also cancel the backstop. If the disconnect raced
-        // in just after a subprocess exit (so a backstop was armed),
-        // cancelling here prevents the backstop from double-firing.
-        *self
-            .active_backstop
-            .lock()
-            .expect("backstop mutex poisoned") = None;
-        // DESK-002: stop wpa_supplicant/DHCP before tearing the netns down.
-        *self
-            .active_connectivity
-            .lock()
-            .expect("connectivity mutex poisoned") = None;
+        // Phase 2 (DESK-002): stop wpa_supplicant/DHCP without holding `active`.
+        drop(session);
 
+        // Phase 3: destroy the netns and clear state unconditionally — the
+        // sender is gone, so there is nobody to retry a kernel failure.
         let result = self.ops.destroy_netns(NETNS_NAME);
-        *active = None;
-        *self
-            .active_sender
-            .lock()
-            .expect("active_sender mutex poisoned") = None;
-        drop(active);
+        {
+            let mut active = self.active.lock().expect("active mutex poisoned");
+            *active = None;
+            *self
+                .active_sender
+                .lock()
+                .expect("active_sender mutex poisoned") = None;
+        }
 
         let decision = match &result {
             Ok(()) => AuditDecision::Success,
@@ -613,33 +650,39 @@ impl<
     /// duration of a subprocess exit. Idempotent: if the orchestrator's
     /// teardown raced in just before the timer, this is a no-op.
     fn fire_backstop_teardown(&self) {
-        let mut active = self.active.lock().expect("active mutex poisoned");
-        if active.is_none() {
-            return;
-        }
+        // Phase 1 (under the `active` lock): confirm active, detach backstop +
+        // guard, and TAKE the connectivity session out. The timer thread that
+        // fired us has already exited, so the guard cancel is a no-op. Leave
+        // `active` = Some during the lock-free stop below.
+        let session = {
+            let active = self.active.lock().expect("active mutex poisoned");
+            if active.is_none() {
+                return;
+            }
+            *self
+                .active_backstop
+                .lock()
+                .expect("backstop mutex poisoned") = None;
+            *self.active_guard.lock().expect("guard mutex poisoned") = None;
+            self.active_connectivity
+                .lock()
+                .expect("connectivity mutex poisoned")
+                .take()
+        };
 
-        // Drop our own guard — the timer thread that fired us has already
-        // exited the loop, so the cancel is a no-op. Doing it here keeps
-        // the active state coherent: no dangling guard pointing at a dead
-        // thread.
-        *self
-            .active_backstop
-            .lock()
-            .expect("backstop mutex poisoned") = None;
-        *self.active_guard.lock().expect("guard mutex poisoned") = None;
-        // DESK-002: stop wpa_supplicant/DHCP before tearing the netns down.
-        *self
-            .active_connectivity
-            .lock()
-            .expect("connectivity mutex poisoned") = None;
+        // Phase 2 (DESK-002): stop wpa_supplicant/DHCP without holding `active`.
+        drop(session);
 
+        // Phase 3: destroy the netns and clear state.
         let result = self.ops.destroy_netns(NETNS_NAME);
-        *active = None;
-        *self
-            .active_sender
-            .lock()
-            .expect("active_sender mutex poisoned") = None;
-        drop(active);
+        {
+            let mut active = self.active.lock().expect("active mutex poisoned");
+            *active = None;
+            *self
+                .active_sender
+                .lock()
+                .expect("active_sender mutex poisoned") = None;
+        }
 
         let decision = match &result {
             Ok(()) => AuditDecision::Success,
@@ -1319,6 +1362,64 @@ mod tests {
             0,
             "session must stay up while active"
         );
+    }
+
+    #[test]
+    fn setup_secured_network_refused_before_any_kernel_op() {
+        // A secured captive network must be refused up front — before the PHY
+        // move tears away the user's real Wi-Fi — not discovered via DHCP.
+        let nm = FakeCaptiveCheck::new();
+        nm.say_captive("wlan0");
+        nm.set_secured("wlan0");
+        let Fixture {
+            svc, connectivity, ..
+        } = svc_with_audit(
+            FakeNetnsOps::new(),
+            FakeAuthorizer::allow_all(),
+            nm,
+            permissive_throttle(),
+        );
+        let resp = svc.setup_captive(&req("wlan0"), ":1.42");
+        assert_eq!(
+            resp,
+            SetupCaptiveResponse::Refused {
+                reason: RefusalReason::UnsupportedSecurity,
+            },
+        );
+        assert!(!svc.is_active());
+        assert!(
+            svc.ops.netns().is_empty(),
+            "secured network must not create a netns"
+        );
+        assert!(
+            connectivity.brought_up().is_empty(),
+            "secured network must not reach connectivity bring-up"
+        );
+    }
+
+    #[test]
+    fn setup_unassociated_device_refused_as_pending() {
+        // The captive check passed but the device dropped its AP association
+        // before we could read it — a transient state, so the UI is told to
+        // retry (Pending), not "NetworkManager is down" (BackendUnavailable).
+        let nm = FakeCaptiveCheck::new();
+        nm.say_captive("wlan0");
+        nm.set_unassociated("wlan0");
+        let Fixture { svc, .. } = svc_with_audit(
+            FakeNetnsOps::new(),
+            FakeAuthorizer::allow_all(),
+            nm,
+            permissive_throttle(),
+        );
+        let resp = svc.setup_captive(&req("wlan0"), ":1.42");
+        assert_eq!(
+            resp,
+            SetupCaptiveResponse::Refused {
+                reason: RefusalReason::Pending,
+            },
+        );
+        assert!(!svc.is_active());
+        assert!(svc.ops.netns().is_empty());
     }
 
     #[test]

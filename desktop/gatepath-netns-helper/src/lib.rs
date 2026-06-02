@@ -134,6 +134,11 @@ pub enum RefusalReason {
     /// Distinct from `KernelError` so audit log differentiates netns
     /// migration failure from process-spawn failure.
     SpawnFailed,
+    /// DESK-002: the captive network is **secured** (WPA/WPA2/WPA3/WEP). The
+    /// helper can only re-associate to open captive networks today, so it
+    /// refuses up front — before moving the PHY — rather than tearing away
+    /// the user's real Wi-Fi only to fail at DHCP. See `docs/BLOCKERS.md`.
+    UnsupportedSecurity,
 }
 
 impl RefusalReason {
@@ -155,6 +160,7 @@ impl RefusalReason {
             Self::NoActiveSession => "no_active_session",
             Self::SenderMismatch => "sender_mismatch",
             Self::SpawnFailed => "spawn_failed",
+            Self::UnsupportedSecurity => "unsupported_security",
         }
     }
 }
