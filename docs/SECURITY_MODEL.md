@@ -111,14 +111,17 @@ analogue of Android's `bindProcessToNetwork()` (and of a Qubes DisposableVM).
 This would give a kernel-enforced no-leak guarantee even with a full-tunnel VPN
 active.
 
-**It is not yet functional on real hardware.** Two blockers gate it
-(see [`BLOCKERS.md`](BLOCKERS.md)): the helper moves the interface with
-`ip link set … netns`, which the wireless stack rejects (a Wi-Fi PHY must be
-moved with `iw phy … set netns`), and nothing re-establishes association/DHCP
-inside the namespace once the PHY is moved. Until both land, do **not** rely on
-the netns path for isolation; the guarantees in this document for desktop remain
-the Flatpak best-effort ones above. Deployment of the helper on atomic distros
-(e.g. Bazzite) is analysed in
+**It is implemented but not yet validated on real hardware.** The helper now
+moves the whole Wi-Fi PHY with `iw phy … set netns name` (the wireless stack
+rejects the netdev-only `ip link set … netns`), and a `connectivity` module
+re-establishes association + DHCP inside the namespace via `wpa_supplicant` and
+a DHCP client. Two caveats remain (see [`BLOCKERS.md`](BLOCKERS.md)): the
+privileged exec paths have **not** been exercised end-to-end on real Wi-Fi
+hardware (BLOCKER-DESK-003), and only **open** captive networks are supported
+(WPA2-PSK/EAP would need credential capture from NetworkManager). Until the path
+is validated on hardware, do **not** rely on it for isolation; the guarantees in
+this document for desktop remain the Flatpak best-effort ones above. Deployment
+of the helper on atomic distros (e.g. Bazzite) is analysed in
 [`DESKTOP_NETNS_DEPLOYMENT.md`](DESKTOP_NETNS_DEPLOYMENT.md).
 
 ### Caveat — desktop tracker-resource requests are logged, not blocked

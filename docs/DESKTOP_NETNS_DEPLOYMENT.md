@@ -84,49 +84,51 @@ guarantee. The question is therefore *how to deploy that helper on an immutable
 
 ---
 
-## 3. Open blockers found during this evaluation
+## 3. The two evaluation blockers — now implemented
 
-These must be resolved before the isolated path works on real hardware — on
-**any** distro, atomic or not. Both are tracked in [`BLOCKERS.md`](BLOCKERS.md).
+The evaluation surfaced two code-level blockers. Both are now **implemented**
+(tracked as RESOLVED in [`BLOCKERS.md`](BLOCKERS.md)); what remains is
+on-hardware validation of the privileged exec paths (BLOCKER-DESK-003).
 
-### 3a. The Wi-Fi interface is moved with the wrong kernel operation
+### 3a. Moving the Wi-Fi interface — fixed to move the whole PHY
 
-`desktop/gatepath-netns-helper/src/netns.rs` moves the interface with:
-
-```rust
-ip link set dev <interface> netns <netns_name>
-```
-
-This does **not** work for Wi-Fi. A wireless netdev is bound to its `wiphy`
-(the PHY); the kernel refuses to move the netdev alone and returns
-`-EOPNOTSUPP` / "Invalid argument". The wireless stack requires moving the
+`desktop/gatepath-netns-helper/src/netns.rs` previously moved the interface
+with `ip link set dev <interface> netns <netns_name>`, which does **not** work
+for Wi-Fi: a wireless netdev is bound to its `wiphy` (the PHY), so the kernel
+refuses to move the netdev alone (`-EOPNOTSUPP`). `move_interface` now resolves
+the owning PHY from sysfs (`/sys/class/net/<iface>/phy80211/name`) and moves the
 **whole PHY**:
 
 ```
-iw phy <phyN> set netns name <netns_name>     # or: set netns <pid>
+iw phy <phyN> set netns name <netns_name>     # NL80211_CMD_SET_WIPHY_NETNS
 ```
 
-So the central "straight to the Wi-Fi" step fails today. The validator
-(`validation.rs`) and the orchestration around it are fine; the single
-privileged op is wrong for the one device class Gatepath targets.
+The validator (`validation.rs`) and the orchestration around it were always
+fine; only the single privileged op needed correcting. The exact `iw` argv is
+pinned by a unit test.
 
-### 3b. Nothing re-establishes connectivity inside the netns
+### 3b. Re-establishing connectivity inside the netns — implemented
 
-Even once the PHY is moved correctly, the new netns has **no link**:
+Moving the PHY leaves the new netns with **no usable link** (NetworkManager
+lives in the host netns and can no longer manage the moved PHY; the L2
+association drops and the DHCP lease doesn't travel). The new
+`connectivity.rs` module now, inside the gatepath netns:
 
-- NetworkManager lives in the **host** netns and can no longer see or manage
-  the moved PHY.
-- Moving a connected wiphy drops the L2 association on most drivers, and the
-  DHCP lease does not travel with it.
+- brings the loopback + Wi-Fi link up,
+- runs `wpa_supplicant` to re-associate to the captive SSID (captured from
+  NetworkManager **before** the move), and
+- runs a DHCP client to reacquire an address + the gateway/portal route,
 
-So the helper must also, inside the gatepath netns, run its own
-`wpa_supplicant` (re-associate to the captive SSID) **and** a DHCP client
-(reacquire an address + the gateway/portal route) before the WebView runner is
-spawned. None of that exists yet. This is the larger of the two items.
+then tears all of that down with the session (the orchestrator drops the
+session — stopping both processes — before destroying the netns). This adds
+`iw`, `wpa_supplicant`, and a DHCP client to the helper's runtime dependency
+set. Only **open** captive SSIDs are supported for now (see BLOCKERS.md).
 
-> Implication for the parity table: until 3a **and** 3b land, desktop "bind
-> portal traffic to the Wi-Fi interface" is **architected but non-functional**,
-> not "done". The README and SECURITY_MODEL have been corrected to say so.
+> Implication for the parity table: 3a and 3b have **landed in code**. Desktop
+> "bind portal traffic to the Wi-Fi interface" is implemented but **pending
+> real-hardware validation** (BLOCKER-DESK-003) and limited to open networks —
+> the README and SECURITY_MODEL should describe it as such, not as fully
+> verified.
 
 ---
 
@@ -156,7 +158,10 @@ host NIC or own a host system-D-Bus name.
 ### Option A — Layered RPM (`rpm-ostree install`)
 
 Build an RPM that installs every file to its canonical `/usr` path and depends
-on `python3-gobject`, `webkit2gtk` (or `webkitgtk6.0`), and `iproute2`/`iw`.
+on `python3-gobject`, `webkit2gtk` (or `webkitgtk6.0`), `iproute2`, `iw`,
+`wpa_supplicant`, and a DHCP client (`dhcp-client`/`dhcpcd`, or `busybox` for
+`udhcpc`). The last three are required by the §3b in-netns connectivity
+bring-up; without them `SetupCaptive` fails at the connectivity step.
 
 **Pros**
 - Canonical, conventional packaging; files land exactly where the code expects,
@@ -232,10 +237,10 @@ Option B (systemd-sysext) as the primary path on Bazzite**, with **Option A
 Use **Option C only for development iteration** while 3a/3b are being built —
 not as the shipping mechanism.
 
-Either way, the deployment work is **gated on the §3 blockers**: there is no
-point shipping a polished installer for a netns whose Wi-Fi move does not yet
-function. Build the wiphy move + in-netns supplicant/DHCP first, validate on
-real hardware, then package with sysext (or RPM).
+The wiphy move + in-netns supplicant/DHCP are now built (§3). The remaining
+gate before shipping a polished installer is **on-hardware validation**
+(BLOCKER-DESK-003): confirm the path works end-to-end on a real open captive
+network, then package with sysext (or RPM).
 
 ---
 
@@ -246,9 +251,12 @@ real hardware, then package with sysext (or RPM).
 - A privileged helper is **unavoidable** for a no-leak guarantee; there is no
   fully unprivileged path (Qubes doesn't have one either — it just moves the
   privilege into dom0).
-- The blocker is not the atomic distro. It is that the helper (a) moves Wi-Fi
-  with the wrong kernel op and (b) never re-establishes connectivity inside the
-  netns. Both are tracked in [`BLOCKERS.md`](BLOCKERS.md).
+- The blocker was never the atomic distro. It was that the helper (a) moved
+  Wi-Fi with the wrong kernel op and (b) never re-established connectivity
+  inside the netns. **Both are now implemented** (the PHY move via `iw`, and an
+  in-netns `wpa_supplicant` + DHCP bring-up); what remains is on-hardware
+  validation (BLOCKER-DESK-003) and secured-network support. See
+  [`BLOCKERS.md`](BLOCKERS.md).
 - For packaging, **systemd-sysext** is the recommended primary on Bazzite, with
   a **layered RPM** as the conventional alternative; a writable-path installer
   is for dev only.
