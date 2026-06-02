@@ -1,12 +1,15 @@
 """Mock captive portal HTTP server for Gatepath integration tests.
 
 Behavior:
-  GET /generate_204 -> 302 to /portal for the first PORTAL_COMPLETE_AFTER calls,
-                        then 204 No Content.
+  GET /generate_204 -> 302 to /portal while captive, then 204 No Content once
+                        authenticated. "Captive" = not yet logged in AND within
+                        the first PORTAL_COMPLETE_AFTER probes; a successful
+                        /login flips the session to authenticated so every
+                        subsequent probe returns 204 (models sign-in).
   GET /portal       -> minimal HTML login page with intentional off-domain
                         tracker script and external link (used to verify blocking).
-  POST /login       -> 302 to /generate_204 (simulates successful login).
-  POST /reset       -> resets the request counter and request log.
+  POST /login       -> marks the session authenticated, 302 to /generate_204.
+  POST /reset       -> resets the counter, auth flag, and request log.
   GET /log          -> JSON array of all requests received (test assertions).
 
 Configurable via env: PORTAL_HOST, PORTAL_PORT, PORTAL_COMPLETE_AFTER (default 3).
@@ -49,6 +52,7 @@ class _State:
         self._lock = threading.Lock()
         self._complete_after = complete_after
         self.probe_count = 0
+        self.authenticated = False
         self.requests: list[dict[str, Any]] = []
 
     def record(self, entry: dict[str, Any]) -> None:
@@ -56,14 +60,30 @@ class _State:
             self.requests.append(entry)
 
     def consume_probe(self) -> bool:
-        """Return True if this probe should still redirect to /portal."""
+        """Return True if this probe should still redirect to /portal.
+
+        Once /login has been POSTed the session is authenticated and every
+        probe validates (204) — this models a real captive portal: captive
+        until you sign in, open afterwards. Before login, the counter governs
+        behaviour so callers that never log in (the desktop e2e, unit tests)
+        keep the redirect-for-first-N semantics. complete_after is set high in
+        the Android harness so the network stays reliably captive until the
+        /login signal arrives, rather than auto-validating mid-detection."""
         with self._lock:
             self.probe_count += 1
+            if self.authenticated:
+                return False
             return self.probe_count <= self._complete_after
+
+    def mark_authenticated(self) -> None:
+        """Record a successful /login — subsequent probes return 204."""
+        with self._lock:
+            self.authenticated = True
 
     def reset(self) -> None:
         with self._lock:
             self.probe_count = 0
+            self.authenticated = False
             self.requests.clear()
 
     def snapshot(self) -> list[dict[str, Any]]:
@@ -125,6 +145,7 @@ def _make_handler(state: _State, host: str, port: int) -> type[BaseHTTPRequestHa
             body = self.rfile.read(length) if length else b""
             self._record(body)
             if self.path.startswith("/login"):
+                state.mark_authenticated()
                 self._send(302, headers={"Location": probe_url})
                 return
             if self.path.startswith("/reset"):

@@ -96,6 +96,11 @@ sealed interface NetworkEvent {
 class CaptivePortalMonitor(
     private val connectivityManager: ConnectivityManager,
     private val probe: PortalProbe = PortalProbe(),
+    // URL Gatepath's own connectivity probe hits. Defaults to the standard
+    // gstatic endpoint; debug builds may override it (see AppModule) so the
+    // e2e harness can point it at its mock portal. Production always uses the
+    // default.
+    private val probeUrl: String = CONNECTIVITY_CHECK_URL,
 ) {
 
     fun observe(): Flow<NetworkEvent> = callbackFlow {
@@ -133,7 +138,7 @@ class CaptivePortalMonitor(
                 val previousBinding = connectivityManager.boundNetworkForProcess
                 val bindResult = try {
                     connectivityManager.bindProcessToNetwork(network)
-                    probe.probe(network)
+                    probe.probe(network, testUrl = probeUrl)
                 } finally {
                     connectivityManager.bindProcessToNetwork(previousBinding)
                 }
@@ -158,7 +163,7 @@ class CaptivePortalMonitor(
                 // PATH 2 — userspace fallback. probe(null) calls
                 // URL.openConnection() directly, no bind, follows default
                 // route. Works for users without an active VPN.
-                val fallbackResult = probe.probe(network = null)
+                val fallbackResult = probe.probe(network = null, testUrl = probeUrl)
                 when (fallbackResult) {
                     is ProbeResult.Portal -> {
                         Log.d(TAG, "Captive portal detected on $network (default-route fallback)")
