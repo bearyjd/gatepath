@@ -82,6 +82,11 @@ jobs:
         # Fails on actual vulnerabilities (the CVE gate a privileged root
         # helper warrants); unmaintained/yanked warnings are reported but
         # don't fail the build (avoids flaking on transitive advisory noise).
+        #
+        # Non-determinism note: the advisory DB is fetched fresh each run, so a
+        # newly-published CVE can turn a previously-green PR red with no code
+        # change. That is the intended tripwire — a red here usually means
+        # "a dependency advisory just dropped", not "this PR broke something".
         run: cargo audit
 
   flatpak-build:

@@ -244,7 +244,9 @@ impl<
                     reason: RefusalReason::InvalidInterface,
                 };
             }
-            Err(NMError::DbusFailed(_)) => {
+            // `is_captive` doesn't query the access point, so it never returns
+            // NotAssociated; map it with DbusFailed for exhaustiveness.
+            Err(NMError::NotAssociated(_)) | Err(NMError::DbusFailed(_)) => {
                 return SetupCaptiveResponse::Refused {
                     reason: RefusalReason::BackendUnavailable,
                 };
@@ -277,36 +279,29 @@ impl<
             };
         }
 
-        // 5a. Open-network gate (DESK-002). The helper can only re-associate
-        //     to OPEN captive networks inside the netns today. Check BEFORE the
-        //     PHY move so a secured network is refused up front, rather than
-        //     tearing the user's Wi-Fi away and only then failing at DHCP.
-        match self
-            .captive_check
-            .active_network_is_open(&request.interface_name)
-        {
-            Ok(true) => {}
-            Ok(false) => {
+        // 5a. Read the active AP's SSID + security in ONE NM round-trip, while
+        //     NetworkManager can still see the device (step 6 moves the PHY and
+        //     NM loses sight of it). Two facts from one access point:
+        //       - `is_open` gates the open-network requirement (DESK-002) — we
+        //         refuse a secured network up front, before the PHY move, rather
+        //         than tearing the user's Wi-Fi away only to fail at DHCP.
+        //       - `ssid` is what wpa_supplicant re-associates to inside the netns.
+        let ssid = match self.captive_check.active_ap_state(&request.interface_name) {
+            Ok(ap) if ap.is_open => ap.ssid,
+            Ok(_secured) => {
                 return SetupCaptiveResponse::Refused {
                     reason: RefusalReason::UnsupportedSecurity,
                 };
             }
-            Err(err) => {
-                tracing::error!(error = %err, "AP security lookup failed");
+            // Device dropped its association between the captive check and now
+            // — transient, so tell the UI to retry rather than "NM is down".
+            Err(NMError::NotAssociated(_)) => {
                 return SetupCaptiveResponse::Refused {
-                    reason: RefusalReason::BackendUnavailable,
+                    reason: RefusalReason::Pending,
                 };
             }
-        }
-
-        // 5b. Capture the SSID NOW, while NetworkManager can still see the
-        //     device. Step 6 moves the PHY into the netns and NM loses sight
-        //     of it, so this is our only chance to learn what wpa_supplicant
-        //     must re-associate to inside the netns (DESK-002).
-        let ssid = match self.captive_check.active_ssid(&request.interface_name) {
-            Ok(s) => s,
             Err(err) => {
-                tracing::error!(error = %err, "active SSID lookup failed");
+                tracing::error!(error = %err, "active AP lookup failed");
                 return SetupCaptiveResponse::Refused {
                     reason: RefusalReason::BackendUnavailable,
                 };
@@ -1400,6 +1395,31 @@ mod tests {
             connectivity.brought_up().is_empty(),
             "secured network must not reach connectivity bring-up"
         );
+    }
+
+    #[test]
+    fn setup_unassociated_device_refused_as_pending() {
+        // The captive check passed but the device dropped its AP association
+        // before we could read it — a transient state, so the UI is told to
+        // retry (Pending), not "NetworkManager is down" (BackendUnavailable).
+        let nm = FakeCaptiveCheck::new();
+        nm.say_captive("wlan0");
+        nm.set_unassociated("wlan0");
+        let Fixture { svc, .. } = svc_with_audit(
+            FakeNetnsOps::new(),
+            FakeAuthorizer::allow_all(),
+            nm,
+            permissive_throttle(),
+        );
+        let resp = svc.setup_captive(&req("wlan0"), ":1.42");
+        assert_eq!(
+            resp,
+            SetupCaptiveResponse::Refused {
+                reason: RefusalReason::Pending,
+            },
+        );
+        assert!(!svc.is_active());
+        assert!(svc.ops.netns().is_empty());
     }
 
     #[test]
