@@ -71,6 +71,9 @@ pub enum HelperError {
     SenderMismatch(String),
     /// Phase 5b.7: `setns`/`fork`/`execv` failed.
     SpawnFailed(String),
+    /// DESK-002: the captive network is secured; only open networks can be
+    /// re-associated inside the netns today.
+    UnsupportedSecurity(String),
 }
 
 /// Extract the sender's bus name from the message header, refusing the call
@@ -117,6 +120,9 @@ impl HelperError {
                 Self::SenderMismatch("caller is not the session owner".into())
             }
             RefusalReason::SpawnFailed => Self::SpawnFailed("subprocess spawn failed".into()),
+            RefusalReason::UnsupportedSecurity => {
+                Self::UnsupportedSecurity("secured captive networks are not supported".into())
+            }
         }
     }
 }

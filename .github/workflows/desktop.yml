@@ -66,6 +66,24 @@ jobs:
       - name: cargo test
         run: cargo test --all-targets
 
+  cargo-audit:
+    name: cargo audit (gatepath-netns-helper)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: desktop/gatepath-netns-helper
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked
+      - name: cargo audit
+        # Scans the committed Cargo.lock against the RustSec advisory DB.
+        # Fails on actual vulnerabilities (the CVE gate a privileged root
+        # helper warrants); unmaintained/yanked warnings are reported but
+        # don't fail the build (avoids flaking on transitive advisory noise).
+        run: cargo audit
+
   flatpak-build:
     name: flatpak-builder bundle
     runs-on: ubuntu-latest

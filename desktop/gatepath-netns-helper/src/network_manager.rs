@@ -83,7 +83,22 @@ trait NMAccessPoint {
     /// SSID as raw bytes (`ay`) — NM does not assume it is UTF-8.
     #[zbus(property)]
     fn ssid(&self) -> zbus::Result<Vec<u8>>;
+
+    /// `NM_802_11_AP_FLAGS` — bit 0 (`PRIVACY`) is set for WEP/WPA networks.
+    #[zbus(property)]
+    fn flags(&self) -> zbus::Result<u32>;
+
+    /// `NM_802_11_AP_SEC` WPA flags — non-zero on a WPA-protected AP.
+    #[zbus(property)]
+    fn wpa_flags(&self) -> zbus::Result<u32>;
+
+    /// `NM_802_11_AP_SEC` RSN/WPA2 flags — non-zero on a WPA2/WPA3 AP.
+    #[zbus(property)]
+    fn rsn_flags(&self) -> zbus::Result<u32>;
 }
+
+/// `NM_802_11_AP_FLAGS_PRIVACY` — the AP requires encryption (WEP or WPA).
+const NM_AP_FLAG_PRIVACY: u32 = 0x1;
 
 /// Trait for "is this interface currently flagged captive by NM?". Real
 /// impl talks to NetworkManager over D-Bus; tests use [`FakeCaptiveCheck`].
@@ -110,6 +125,20 @@ pub trait CaptiveStateChecker {
     /// - [`NMError::DbusFailed`] if the device isn't associated to an access
     ///   point, or for any zbus error during the lookup.
     fn active_ssid(&self, interface: &str) -> Result<String, NMError>;
+
+    /// Whether the interface's active access point is an **open** network
+    /// (no encryption: no privacy flag, no WPA, no RSN). The helper can only
+    /// re-associate to open captive networks today, so the orchestrator
+    /// checks this **before** the disruptive PHY move and refuses secured
+    /// networks up front (rather than discovering it via a failed DHCP
+    /// after the user's real Wi-Fi has already been torn away).
+    ///
+    /// # Errors
+    ///
+    /// - [`NMError::InterfaceNotFound`] if no NM device matches `interface`.
+    /// - [`NMError::DbusFailed`] if the device isn't associated to an access
+    ///   point, or for any zbus error during the lookup.
+    fn active_network_is_open(&self, interface: &str) -> Result<bool, NMError>;
 }
 
 // ── Production impl ─────────────────────────────────────────────────────
@@ -158,6 +187,31 @@ impl NMCaptiveCheck {
         }
         Err(NMError::InterfaceNotFound(interface.to_string()))
     }
+
+    /// Proxy for the interface's currently-associated access point. Shared by
+    /// `active_ssid` and `active_network_is_open`.
+    fn active_ap(&self, interface: &str) -> Result<NMAccessPointProxy<'_>, NMError> {
+        let dev_path = self.find_device(interface)?;
+        let wireless = NMDeviceWirelessProxy::builder(&self.conn)
+            .path(dev_path)
+            .map_err(|e| NMError::DbusFailed(e.to_string()))?
+            .build()
+            .map_err(|e| NMError::DbusFailed(e.to_string()))?;
+        let ap_path = wireless
+            .active_access_point()
+            .map_err(|e| NMError::DbusFailed(e.to_string()))?;
+        // NM uses "/" for "no active access point".
+        if ap_path.as_str() == "/" {
+            return Err(NMError::DbusFailed(format!(
+                "interface '{interface}' is not associated to an access point"
+            )));
+        }
+        NMAccessPointProxy::builder(&self.conn)
+            .path(ap_path)
+            .map_err(|e| NMError::DbusFailed(e.to_string()))?
+            .build()
+            .map_err(|e| NMError::DbusFailed(e.to_string()))
+    }
 }
 
 impl CaptiveStateChecker for NMCaptiveCheck {
@@ -199,28 +253,22 @@ impl CaptiveStateChecker for NMCaptiveCheck {
     }
 
     fn active_ssid(&self, interface: &str) -> Result<String, NMError> {
-        let dev_path = self.find_device(interface)?;
-        let wireless = NMDeviceWirelessProxy::builder(&self.conn)
-            .path(dev_path)
-            .map_err(|e| NMError::DbusFailed(e.to_string()))?
-            .build()
-            .map_err(|e| NMError::DbusFailed(e.to_string()))?;
-        let ap_path = wireless
-            .active_access_point()
-            .map_err(|e| NMError::DbusFailed(e.to_string()))?;
-        // NM uses "/" for "no active access point".
-        if ap_path.as_str() == "/" {
-            return Err(NMError::DbusFailed(format!(
-                "interface '{interface}' is not associated to an access point"
-            )));
-        }
-        let ap = NMAccessPointProxy::builder(&self.conn)
-            .path(ap_path)
-            .map_err(|e| NMError::DbusFailed(e.to_string()))?
-            .build()
-            .map_err(|e| NMError::DbusFailed(e.to_string()))?;
+        let ap = self.active_ap(interface)?;
         let ssid_bytes = ap.ssid().map_err(|e| NMError::DbusFailed(e.to_string()))?;
         Ok(String::from_utf8_lossy(&ssid_bytes).into_owned())
+    }
+
+    fn active_network_is_open(&self, interface: &str) -> Result<bool, NMError> {
+        let ap = self.active_ap(interface)?;
+        let flags = ap.flags().map_err(|e| NMError::DbusFailed(e.to_string()))?;
+        let wpa = ap
+            .wpa_flags()
+            .map_err(|e| NMError::DbusFailed(e.to_string()))?;
+        let rsn = ap
+            .rsn_flags()
+            .map_err(|e| NMError::DbusFailed(e.to_string()))?;
+        // Open == no encryption advertised at all.
+        Ok((flags & NM_AP_FLAG_PRIVACY) == 0 && wpa == 0 && rsn == 0)
     }
 }
 
@@ -241,6 +289,8 @@ pub struct FakeCaptiveCheck {
     /// Fail ONLY `active_ssid` (not `is_captive`) — lets a test drive the
     /// "captive check passes but SSID capture fails" orchestration branch.
     pub force_ssid_error: std::sync::Mutex<bool>,
+    /// Interfaces whose active network is secured. Default (absent) = open.
+    pub secured: std::sync::Mutex<std::collections::HashSet<String>>,
 }
 
 #[cfg(test)]
@@ -252,6 +302,7 @@ impl FakeCaptiveCheck {
             force_dbus_error: std::sync::Mutex::new(false),
             ssids: std::sync::Mutex::new(std::collections::HashMap::new()),
             force_ssid_error: std::sync::Mutex::new(false),
+            secured: std::sync::Mutex::new(std::collections::HashSet::new()),
         }
     }
 
@@ -287,6 +338,12 @@ impl FakeCaptiveCheck {
     /// Make `active_ssid` fail while leaving `is_captive` working.
     pub fn fail_ssid(&self) {
         *self.force_ssid_error.lock().unwrap() = true;
+    }
+
+    /// Mark an interface's active network as secured (so
+    /// `active_network_is_open` returns `Ok(false)`).
+    pub fn set_secured(&self, interface: &str) {
+        self.secured.lock().unwrap().insert(interface.to_string());
     }
 }
 
@@ -324,11 +381,28 @@ impl CaptiveStateChecker for FakeCaptiveCheck {
             .cloned()
             .unwrap_or_else(|| "gatepath-test-ssid".to_string()))
     }
+
+    fn active_network_is_open(&self, interface: &str) -> Result<bool, NMError> {
+        if *self.force_dbus_error.lock().unwrap() {
+            return Err(NMError::DbusFailed("fake forced".into()));
+        }
+        Ok(!self.secured.lock().unwrap().contains(interface))
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fake_network_is_open_by_default_and_secured_when_set() {
+        let nm = FakeCaptiveCheck::new();
+        assert_eq!(nm.active_network_is_open("wlan0"), Ok(true));
+        nm.set_secured("wlan0");
+        assert_eq!(nm.active_network_is_open("wlan0"), Ok(false));
+        // Other interfaces stay open.
+        assert_eq!(nm.active_network_is_open("wlp3s0"), Ok(true));
+    }
 
     #[test]
     fn fake_returns_canned_captive_answer() {
