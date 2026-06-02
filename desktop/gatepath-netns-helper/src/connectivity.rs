@@ -191,10 +191,12 @@ pub enum DhcpClient {
     Udhcpc,
 }
 
-/// Bounded wait for a DHCP lease. The client is run **one-shot** (it exits
-/// after acquiring a lease or giving up), so the orchestrator can't be wedged
-/// holding the session lock indefinitely behind a dead AP. Kept short because
-/// a captive portal that doesn't answer DHCP promptly isn't usable anyway.
+/// dhclient's `-timeout` bound (seconds). The client is run **one-shot** (it
+/// exits after acquiring a lease or giving up), so the orchestrator can't be
+/// wedged holding the session lock indefinitely behind a dead AP. Kept short
+/// because a captive portal that doesn't answer DHCP promptly isn't usable
+/// anyway. NOTE: this applies to dhclient only; the udhcpc path is bounded
+/// separately via `-t 6` (six discover attempts) rather than this constant.
 const DHCP_TIMEOUT_SECS: u32 = 30;
 
 /// `ip` argv that runs the chosen DHCP client **one-shot, in the foreground**
@@ -381,6 +383,15 @@ fn ensure_private_dir(dir: &Path) -> Result<(), String> {
         .mode(0o700)
         .create(dir)
         .map_err(|e| e.to_string())?;
+    // Refuse to operate through a symlink. If some earlier boot stage (or a
+    // local actor able to write `/run`) planted `/run/gatepath` as a symlink,
+    // chmod-ing and then writing the config through it would expose the SSID
+    // (and future PSK) at an attacker-chosen target — set_permissions and the
+    // config write both follow symlinks, so reject one here first.
+    let meta = std::fs::symlink_metadata(dir).map_err(|e| e.to_string())?;
+    if meta.file_type().is_symlink() {
+        return Err(format!("{} is a symlink; refusing", dir.display()));
+    }
     std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700)).map_err(|e| e.to_string())
 }
 
@@ -393,6 +404,9 @@ fn write_private(path: &Path, contents: &str) -> Result<(), String> {
         .create(true)
         .truncate(true)
         .mode(0o600)
+        // O_NOFOLLOW: never write through a symlink at the final path
+        // component (defence-in-depth; the filename is a fixed constant).
+        .custom_flags(libc::O_NOFOLLOW)
         .open(path)
         .map_err(|e| e.to_string())?;
     f.write_all(contents.as_bytes()).map_err(|e| e.to_string())

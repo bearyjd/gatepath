@@ -416,7 +416,6 @@ impl<
                     .active_sender
                     .lock()
                     .expect("active_sender mutex poisoned") = None;
-                let _ = sender; // sender used by audit; suppress unused-on-Ok
                 TeardownCaptiveResponse::Success
             }
             Err(_) => TeardownCaptiveResponse::KernelError,

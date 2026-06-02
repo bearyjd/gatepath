@@ -70,6 +70,23 @@ surfaced in security/code review):
 - [ ] Teardown leaves no stray privileged processes; the SIGTERM→SIGKILL
       straggler sweep reaps the DHCP client and supplicant before `ip netns del`.
 - [ ] `cargo audit` runs clean in CI (could not run in the sandbox — no network).
+- [ ] **Restore `MemoryDenyWriteExecute` on the helper proper.** It is disabled
+      unit-wide today only because the WebKitGTK *child* JITs JS — but that
+      relaxes W^X on the long-lived **root** helper. Prefer scoping the
+      relaxation to the unprivileged WebView child (e.g. a separate runner
+      scope/unit) and re-enabling it on the helper.
+- [ ] **Detect the captive network's security from NetworkManager** (AP
+      `wpa_flags`/`rsn_flags`) and pass it through instead of hardcoding
+      `WifiSecurity::Open`. Today a secured captive network is only discovered
+      *after* the disruptive PHY move (it fails closed via `Dhcp` rollback, but
+      pays the cost of dropping the user's real association first). The
+      `WifiSecurity::Psk` + `ConnectivityError::Unsupported` machinery already
+      exists for this.
+- [ ] **Move connectivity teardown out from under the `active` lock.** Dropping
+      the session (which kills wpa_supplicant + a 200 ms straggler-sweep sleep)
+      currently runs while `active` is held, stalling other D-Bus methods.
+      `take()` the session into a local and drop it after releasing `active`,
+      preserving the stop-before-`destroy_netns` ordering.
 
 **Known limitation — non-UTF-8 SSIDs:** `active_ssid` returns a lossy UTF-8
 `String`, so an SSID with non-UTF-8 bytes is hex-encoded from the lossy form and
