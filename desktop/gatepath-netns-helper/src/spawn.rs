@@ -249,12 +249,19 @@ fn netns_mount_path(name: &str) -> PathBuf {
 ///   status (so the wait-thread can deliver a [`SpawnExit`]); garbage-collect
 ///   the unit even on failure so repeated launches don't accumulate dead units;
 ///   suppress systemd-run's own chatter.
+/// - `--property=Type=exec`: the unit counts as started only once `execve()`
+///   succeeds, so exec-time failures (missing runner, denied W^X, netns-join
+///   failure) surface as a clean non-zero `--wait` result instead of a
+///   spurious success.
 /// - `--property=MemoryDenyWriteExecute=no`: relax W^X for the JIT — this child
 ///   only. The helper proper keeps `MemoryDenyWriteExecute=yes`.
 /// - `--property=NetworkNamespacePath=…`: **join** the existing gatepath netns;
 ///   never create a new one.
-/// - `--uid`/`--gid`: drop to the caller's identity; the WebView is fully
-///   unprivileged.
+/// - `--uid` (only): drop to the caller's identity. systemd resolves the
+///   caller's *real* primary group from the user database and resets
+///   supplementary groups via `initgroups(3)`. We deliberately do NOT pass
+///   `--gid`: forcing `GID==UID` is wrong on non-user-private-group setups and
+///   fails hard if that GID doesn't exist.
 /// - `--`: terminate option parsing so the runner path and the (validated)
 ///   portal URL can never be interpreted as `systemd-run` options.
 fn systemd_run_args(runner_path: &Path, request: &SpawnRequest) -> Vec<String> {
@@ -263,10 +270,10 @@ fn systemd_run_args(runner_path: &Path, request: &SpawnRequest) -> Vec<String> {
         "--wait".to_string(),
         "--collect".to_string(),
         "--quiet".to_string(),
+        "--property=Type=exec".to_string(),
         "--property=MemoryDenyWriteExecute=no".to_string(),
         format!("--property=NetworkNamespacePath={}", netns_path.display()),
         format!("--uid={}", request.caller_uid),
-        format!("--gid={}", request.caller_uid),
         "--".to_string(),
         runner_path.to_string_lossy().into_owned(),
         request.portal_url.clone(),
@@ -473,10 +480,10 @@ mod tests {
                 "--wait".to_string(),
                 "--collect".to_string(),
                 "--quiet".to_string(),
+                "--property=Type=exec".to_string(),
                 "--property=MemoryDenyWriteExecute=no".to_string(),
                 "--property=NetworkNamespacePath=/var/run/netns/gatepath".to_string(),
                 "--uid=1000".to_string(),
-                "--gid=1000".to_string(),
                 "--".to_string(),
                 "/usr/lib/gatepath/portal-webview-runner".to_string(),
                 "http://captive.example/login".to_string(),
@@ -516,7 +523,9 @@ mod tests {
         r.caller_uid = 1234;
         let args = systemd_run_args(runner, &r);
         assert!(args.iter().any(|a| a == "--uid=1234"));
-        assert!(args.iter().any(|a| a == "--gid=1234"));
+        // No explicit `--gid`: systemd derives the caller's real primary group
+        // from the user database rather than forcing GID==UID.
+        assert!(!args.iter().any(|a| a.starts_with("--gid")));
     }
 
     #[test]

@@ -70,7 +70,8 @@ surfaced in security/code review):
       `data/gatepath-netns-helper.service`).
 - [ ] **DESK-003 C4 transient WebView unit** (`src/spawn.rs` `systemd_run_args`):
       `systemd-run` joins the netns via `NetworkNamespacePath=/var/run/netns/gatepath`,
-      drops to the caller via `--uid`/`--gid`, and the WebKit JIT runs under that
+      drops to the caller via `--uid` (systemd derives the caller's real primary
+      group + resets supplementary groups), and the WebKit JIT runs under that
       unit's `MemoryDenyWriteExecute=no` while the helper keeps W^X. Also confirm
       the WebView gets the user's graphical-session env (`WAYLAND_DISPLAY`/`DISPLAY`,
       `XDG_RUNTIME_DIR`, `DBUS_SESSION_BUS_ADDRESS`) — not plumbed yet; today the
