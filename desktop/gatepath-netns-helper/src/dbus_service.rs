@@ -69,7 +69,7 @@ pub enum HelperError {
     NoActiveSession(String),
     /// Phase 5b.7: caller is not the session owner.
     SenderMismatch(String),
-    /// Phase 5b.7: `setns`/`fork`/`execv` failed.
+    /// Phase 5b.7 / DESK-003 C4: launching the WebView's transient `systemd-run` unit failed.
     SpawnFailed(String),
     /// DESK-002: the captive network is secured; only open networks can be
     /// re-associated inside the netns today.

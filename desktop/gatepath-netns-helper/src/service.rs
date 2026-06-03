@@ -512,7 +512,7 @@ impl<
     /// - [`RefusalReason::SenderMismatch`] — caller isn't the session's owner.
     /// - [`RefusalReason::InvalidPortalUrl`] — URL fails RFC 3986 / scheme / control-byte checks.
     /// - [`RefusalReason::Unauthorised`] — caller's UID couldn't be resolved.
-    /// - [`RefusalReason::SpawnFailed`] — fork/setns/execv failed.
+    /// - [`RefusalReason::SpawnFailed`] — launching the transient WebView unit failed.
     ///
     /// Auth note: NO PolicyKit check here. The session is already gated
     /// (the corresponding `SetupCaptive` ran auth) AND the spawn is gated
@@ -1795,7 +1795,7 @@ mod tests {
             };
         spawner.fire_exit(SpawnExit {
             pid,
-            exit_code: Some(91), // setns failed marker from spawn.rs
+            exit_code: Some(91), // arbitrary non-zero child exit (transient unit failed)
             signal: None,
         });
         let entries = audit.entries();
