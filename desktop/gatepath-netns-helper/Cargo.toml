@@ -29,26 +29,22 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 chrono = { version = "0.4", default-features = false, features = ["clock", "serde"] }
-# Subprocess spawn (5b.7): direct syscalls for setns/setresuid/fork/execv —
-# preferred over shelling out to nsenter, which would add a PATH-resolved
-# binary to the privileged surface. URL parsing for portal-URL validation
-# at the spawn boundary uses the same RFC 3986 grammar the rest of the
-# stack assumes.
-nix = { version = "0.29", features = ["sched", "process", "user", "fs"] }
+# URL parsing for portal-URL validation at the spawn boundary uses the same
+# RFC 3986 grammar the rest of the stack assumes. (DESK-003 C4: the portal
+# WebView is launched via `systemd-run` as a transient unit, so the helper no
+# longer hand-rolls fork/setns/setresuid — the `nix` syscall crate that needed
+# was dropped along with all `unsafe` in src/spawn.rs.)
 url = "2"
-# libc for `_exit(2)` directly: nix doesn't wrap it because it's
-# async-signal-safe ONLY in the very specific post-fork-pre-exec context
-# we use it. `std::process::exit` runs destructors and is NOT
-# async-signal-safe; using it after fork in a multi-threaded program
-# would be unsound.
+# libc for `O_NOFOLLOW` when opening files in the netns connectivity path
+# (src/connectivity.rs); std doesn't surface the raw open flag.
 libc = "0.2"
 
 [lints.rust]
-# `deny` (not `forbid`) so individual call sites can opt in with
-# `#[allow(unsafe_code)]` and a written SAFETY justification. Phase 5b.7's
-# `spawn.rs` needs `unsafe { fork() }` and post-fork `unsafe { libc::_exit }`
-# — the latter is the only async-signal-safe exit available, and using
-# `std::process::exit` after fork in a multi-threaded program is unsound.
+# The crate is `unsafe`-free as of DESK-003 C4: the portal spawn moved from a
+# hand-rolled post-fork setns/setresuid/execv to a transient `systemd-run`
+# unit, removing the last `unsafe` block. `deny` (not `forbid`) keeps the door
+# open for a justified `#[allow(unsafe_code)]` + SAFETY comment if one is ever
+# genuinely needed, while flagging any unannotated reintroduction.
 unsafe_code = "deny"
 
 [lints.clippy]

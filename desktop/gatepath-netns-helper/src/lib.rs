@@ -130,9 +130,10 @@ pub enum RefusalReason {
     /// the active session. Prevents one client from launching subprocesses
     /// inside another client's session.
     SenderMismatch,
-    /// Phase 5b.7: `setns`/`fork`/`execv` failed at the kernel level.
-    /// Distinct from `KernelError` so audit log differentiates netns
-    /// migration failure from process-spawn failure.
+    /// Phase 5b.7 / DESK-003 C4: launching the portal WebView's transient
+    /// `systemd-run` unit failed (bad URL, missing netns, or `systemd-run`
+    /// itself failing). Distinct from `KernelError` so the audit log
+    /// differentiates netns migration failure from process-spawn failure.
     SpawnFailed,
     /// DESK-002: the captive network is **secured** (WPA/WPA2/WPA3/WEP). The
     /// helper can only re-associate to open captive networks today, so it

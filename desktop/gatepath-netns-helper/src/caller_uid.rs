@@ -1,7 +1,8 @@
 //! Resolve a D-Bus sender bus name to a Unix UID.
 //!
-//! Phase 5b.7's spawn path needs the caller's UID so it can `setresuid` to
-//! the calling user before exec'ing the runner. dbus-daemon already knows
+//! Phase 5b.7's spawn path needs the caller's UID so the WebView's transient
+//! `systemd-run` unit can drop to the calling user (`--uid`/`--gid`, DESK-003
+//! C4) before exec'ing the runner. dbus-daemon already knows
 //! the UID — every connection authenticates with `EXTERNAL` (SASL on
 //! `SO_PEERCRED`) so the daemon learned the UID at connect time. We just
 //! ask it via `org.freedesktop.DBus.GetConnectionUnixUser`.

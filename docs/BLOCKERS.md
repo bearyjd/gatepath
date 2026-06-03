@@ -64,11 +64,21 @@ surfaced in security/code review):
 - [ ] DHCP actually completes (the one-shot client exits 0) on a real open
       captive AP, and `bring_up` returns only after a lease.
 - [ ] systemd hardening is compatible with the in-netns children: `AF_PACKET`
-      present, `IPAddressDeny` not blocking DHCP/portal, `MemoryDenyWriteExecute`
-      off for the WebKit JIT (all addressed in
-      `data/gatepath-netns-helper.service`, but verify end-to-end).
+      present and `IPAddressDeny` not blocking DHCP for wpa_supplicant + the
+      DHCP client (which share the helper's unit/cgroup), with the helper proper
+      now under `MemoryDenyWriteExecute=true` (verify end-to-end in
+      `data/gatepath-netns-helper.service`).
+- [ ] **DESK-003 C4 transient WebView unit** (`src/spawn.rs` `systemd_run_args`):
+      `systemd-run` joins the netns via `NetworkNamespacePath=/var/run/netns/gatepath`,
+      drops to the caller via `--uid`/`--gid`, and the WebKit JIT runs under that
+      unit's `MemoryDenyWriteExecute=no` while the helper keeps W^X. Also confirm
+      the WebView gets the user's graphical-session env (`WAYLAND_DISPLAY`/`DISPLAY`,
+      `XDG_RUNTIME_DIR`, `DBUS_SESSION_BUS_ADDRESS`) — not plumbed yet; today the
+      transient unit inherits none, same display gap the prior fork path had.
 - [ ] Teardown leaves no stray privileged processes; the SIGTERM→SIGKILL
       straggler sweep reaps the DHCP client and supplicant before `ip netns del`.
+      The transient WebView unit is `--collect`-cleaned by systemd; confirm no
+      orphan `run-*.service` survives a teardown.
 - [x] `cargo audit` runs in CI — **done**: a `cargo audit` job gates the
       desktop workflow against the RustSec advisory DB, and `Cargo.lock` is now
       committed for determinism.
@@ -81,11 +91,19 @@ surfaced in security/code review):
       **done**: all three teardown paths now take the session out under the
       lock, release it, and stop wpa_supplicant/DHCP lock-free before
       `destroy_netns` (each path keeps its own error-clearing semantics).
-- [ ] **Restore `MemoryDenyWriteExecute` on the helper proper.** Still open. It
-      is disabled unit-wide today only because the WebKitGTK *child* JITs JS —
-      relaxing W^X on the long-lived **root** helper. The correct fix scopes the
-      relaxation to the unprivileged WebView child (its own systemd transient
-      scope), which is a spawn-path change best validated on hardware.
+- [x] **Restore `MemoryDenyWriteExecute` on the helper proper** —
+      **implemented (DESK-003 C4), end-to-end pending hardware.** The unit now
+      sets `MemoryDenyWriteExecute=true`, so the long-lived root helper keeps
+      W^X. The only process that needs W+X (the WebKitGTK JIT) is launched in
+      its **own transient systemd `.service`** via `systemd-run` with
+      `MemoryDenyWriteExecute=no` on that unit alone (`src/spawn.rs`,
+      `systemd_run_args`). Because the transient unit is forked by PID 1, it does
+      not inherit the helper's (non-removable) W^X seccomp filter; wpa_supplicant
+      and the DHCP client don't JIT, so they run fine under it. The argv shape is
+      pinned by unit tests; the **exec** — `systemd-run` joining the netns via
+      `NetworkNamespacePath=`, dropping privilege via `--uid`/`--gid`, and the
+      JIT actually running under `MemoryDenyWriteExecute=no` — is unverified off
+      hardware and stays on the validation list below.
 
 **Known limitation — non-UTF-8 SSIDs:** `active_ssid` returns a lossy UTF-8
 `String`, so an SSID with non-UTF-8 bytes is hex-encoded from the lossy form and

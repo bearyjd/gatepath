@@ -1,49 +1,57 @@
-//! Privileged subprocess spawn into the gatepath netns (Phase 5b.7).
+//! Privileged subprocess spawn into the gatepath netns (Phase 5b.7, DESK-003 C4).
 //!
-//! `setns(2)` to a root-owned netns requires `CAP_SYS_ADMIN` in BOTH the
-//! caller's user namespace AND the netns's owning user namespace. The
-//! Gatepath UI runs unprivileged; the kernel rejects setns from there. The
-//! helper, which already holds CAP_NET_ADMIN, performs the namespace entry
-//! on the caller's behalf, drops privilege to the caller's UID, and exec's
-//! a hardcoded subprocess path — the WebView runner script bundled at
-//! `/usr/lib/gatepath/portal-webview-runner`.
+//! The portal WebView must run (a) inside the gatepath netns, (b) as the
+//! unprivileged calling user, and (c) with `MemoryDenyWriteExecute` (W^X)
+//! relaxed — WebKitGTK JITs JavaScript and needs writable+executable pages.
 //!
-//! ## Trust surface mitigations
+//! ## Why a transient systemd unit (C4)
 //!
-//! The spawn capability is the largest expansion of helper privilege so
-//! far. To keep blast radius bounded:
+//! The helper proper runs with `MemoryDenyWriteExecute=yes` so the long-lived,
+//! root, D-Bus-facing process cannot be coerced into mapping W+X memory. systemd
+//! enforces that with a **seccomp filter that is inherited by every descendant
+//! and can never be lifted** (seccomp is one-way by design). A WebView forked
+//! directly from the helper would therefore inherit the filter and its JIT would
+//! crash. We cannot "drop" W^X in the child.
 //!
-//! - **Hardcoded exec path** ([`PORTAL_RUNNER_PATH`]). No caller input
-//!   reaches `execv`'s path argument. Even a compromised caller cannot
-//!   redirect to an arbitrary binary.
-//! - **One controlled argument**: the portal URL, validated against
-//!   [`url::Url`] (RFC 3986) before reaching the subprocess. Rejected
-//!   schemes other than `http`/`https`. Rejected control bytes
-//!   (`< 0x20` or `== 0x7F`).
-//! - **Drop privilege before exec**: `setresuid(uid, uid, uid)` followed
-//!   by `setresgid` — the spawned process is fully unprivileged with the
-//!   caller's identity. It can't `setuid` back to root.
-//! - **Fail-closed**: any error during fork/setns/exec aborts the spawn
-//!   entirely; no partial state. Audit log records the failure.
+//! The fix is to not make the WebView a *descendant* of the helper at all.
+//! [`LinuxSpawner`] launches it as a **transient systemd `.service`** via
+//! `systemd-run`: PID 1 forks and exec's it, so it is born a *sibling* of the
+//! helper without the helper's seccomp filter, and we set
+//! `MemoryDenyWriteExecute=no` on that unit alone. The relaxation is scoped to
+//! the one process that needs it; the privileged helper keeps W^X.
+//!
+//! A transient `.service` (not a `.scope`) is required: a scope wraps a process
+//! the caller already forked, so PID 1 cannot apply exec-time settings
+//! (`MemoryDenyWriteExecute=`, `NetworkNamespacePath=`, user switching) to it. A
+//! `.service` is forked+exec'd by PID 1, which applies the full exec context.
+//!
+//! ## Trust surface
+//!
+//! Delegating to systemd also moves the namespace entry and privilege drop out
+//! of hand-rolled post-fork syscalls and into PID 1's audited exec path:
+//!
+//! - **Netns entry** is declarative: `NetworkNamespacePath=` *joins* the
+//!   already-created `/var/run/netns/gatepath`. It never creates a new netns,
+//!   so a missing netns fails the unit rather than silently isolating the child.
+//! - **Privilege drop** is `--uid`/`--gid` to the caller's identity; systemd
+//!   resets supplementary groups too (the old in-process `setresuid` did not).
+//! - **Hardcoded exec path** ([`PORTAL_RUNNER_PATH`]). No caller input reaches
+//!   the command path; only the validated portal URL is passed, after `--` so
+//!   it can never be mistaken for a `systemd-run` option.
+//! - **One controlled argument**: the portal URL, validated against [`url::Url`]
+//!   (RFC 3986) — `http`/`https` only, no control bytes, length-bounded.
+//! - **Fail-closed**: any error spawning `systemd-run` aborts the launch; the
+//!   audit log records the failure.
 //!
 //! ## Test strategy
 //!
-//! `LinuxSpawner` exercises real syscalls and requires root + a netns
-//! mount; it is integration-tested under `--ignored` in
-//! `tests/dbus_integration.rs`. Service-level tests use [`FakeSpawner`].
-
-#![allow(unsafe_code)]
-// SAFETY rationale (whole-module): `fork(2)` and `_exit(2)` are not safe
-// abstractions wrapped by `nix`. `fork` is unsafe because the post-fork
-// child shares mappings with the parent and must avoid any function that
-// is not async-signal-safe. `_exit` is unsafe because it's a raw libc
-// call. We use them only in the documented post-fork-pre-exec window:
-// after fork, the child performs setns + setresuid + execv (all
-// async-signal-safe per POSIX). On error in that window we MUST use
-// `_exit` rather than `std::process::exit` (which runs destructors and
-// is not async-signal-safe — calling it after fork in a multi-threaded
-// program would be unsound, since other threads' locks held at fork
-// time still appear locked in the child's copy of memory).
+//! The `systemd-run` argument vector is built by the pure [`systemd_run_args`]
+//! and pinned by unit tests (the same "pin the privileged argv" approach as
+//! `netns.rs`'s `phy_set_netns_args`). The actual exec — `systemd-run` joining
+//! the netns, dropping privilege, and the WebKit JIT running under
+//! `MemoryDenyWriteExecute=no` — requires root + a real netns and is covered by
+//! the `--ignored` suite in `tests/dbus_integration.rs` / on-hardware validation
+//! (BLOCKER-DESK-003). Service-level tests use [`FakeSpawner`].
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -57,6 +65,12 @@ use thiserror::Error;
 /// distro-packaged helper, not by the Flatpak.
 pub const PORTAL_RUNNER_PATH: &str = "/usr/lib/gatepath/portal-webview-runner";
 
+/// Default `systemd-run` binary. Resolved via the unit's pinned `PATH`
+/// (`/usr/sbin:/usr/bin:/sbin:/bin`), exactly like the helper's other execs
+/// (`ip`, `iw`, `wpa_supplicant`, `kill`). Overridable on [`LinuxSpawner`] for
+/// integration tests that point at a stub.
+pub const SYSTEMD_RUN_BINARY: &str = "systemd-run";
+
 /// Failure modes for the privileged spawn. Each variant maps to an
 /// audit-log refusal reason and a D-Bus error name in the wire protocol.
 #[derive(Debug, Error)]
@@ -67,7 +81,7 @@ pub enum SpawnError {
     NetnsMissing { name: String, path: PathBuf },
     #[error("could not look up caller UID: {0}")]
     CallerUidUnavailable(String),
-    #[error("fork/setns/exec failed: {0}")]
+    #[error("launching systemd-run failed: {0}")]
     SyscallFailed(String),
 }
 
@@ -98,18 +112,18 @@ pub struct SpawnRequest {
     pub caller_uid: u32,
 }
 
-/// Privileged spawn surface. Real impl ([`LinuxSpawner`]) performs
-/// fork/setns/setresuid/exec; tests use [`FakeSpawner`].
+/// Privileged spawn surface. Real impl ([`LinuxSpawner`]) launches a transient
+/// systemd unit; tests use [`FakeSpawner`].
 pub trait Spawner: Send + Sync + 'static {
-    /// Validate the request, fork into the netns, drop privilege, and
-    /// exec the runner. Returns the child PID on success.
+    /// Validate the request and launch the runner in a transient systemd unit
+    /// joined to the netns and dropped to the caller's UID. Returns the
+    /// controlling `systemd-run` PID on success.
     ///
     /// Implementations MUST:
     /// 1. Re-validate the portal URL (the trait is the privileged surface;
     ///    don't trust prior validation).
-    /// 2. Open the netns path BEFORE fork (so failure to open errors out
-    ///    cleanly without leaving orphan state).
-    /// 3. setns + setresuid in the child BEFORE execv.
+    /// 2. Fail closed if the target netns is absent.
+    /// 3. Relax W^X for the child only — never for the helper.
     /// 4. Spawn a wait-thread that reaps the child and invokes the
     ///    exit callback, if registered.
     ///
@@ -132,18 +146,17 @@ pub type ExitCallback = Arc<dyn Fn(SpawnExit) + Send + Sync + 'static>;
 
 // ── Production impl ────────────────────────────────────────────────────
 
-use std::ffi::CString;
+use std::os::unix::process::ExitStatusExt as _;
 use std::path::Path;
+use std::process::Command;
 use std::thread;
 
-use nix::sched::{CloneFlags, setns};
-use nix::sys::wait::{WaitStatus, waitpid};
-use nix::unistd::{ForkResult, Gid, Uid, execv, fork, setresgid, setresuid};
-
-/// Production spawner. Holds the runner path so tests can substitute a
-/// different binary; production wiring uses [`PORTAL_RUNNER_PATH`].
+/// Production spawner. Holds the runner path and the `systemd-run` binary so
+/// tests can substitute stubs; production wiring uses [`PORTAL_RUNNER_PATH`]
+/// and [`SYSTEMD_RUN_BINARY`].
 pub struct LinuxSpawner {
     runner_path: PathBuf,
+    systemd_run_binary: PathBuf,
     exit_callback: Mutex<Option<ExitCallback>>,
 }
 
@@ -151,8 +164,17 @@ impl LinuxSpawner {
     pub fn new(runner_path: impl Into<PathBuf>) -> Self {
         Self {
             runner_path: runner_path.into(),
+            systemd_run_binary: PathBuf::from(SYSTEMD_RUN_BINARY),
             exit_callback: Mutex::new(None),
         }
+    }
+
+    /// Override the `systemd-run` binary. For integration tests that point at
+    /// a stub; production uses the [`SYSTEMD_RUN_BINARY`] default.
+    #[must_use]
+    pub fn with_systemd_run_binary(mut self, binary: impl Into<PathBuf>) -> Self {
+        self.systemd_run_binary = binary.into();
+        self
     }
 }
 
@@ -160,81 +182,41 @@ impl Spawner for LinuxSpawner {
     fn spawn(&self, request: &SpawnRequest) -> Result<u32, SpawnError> {
         validate_portal_url(&request.portal_url)?;
 
-        // Open the netns fd in the parent BEFORE fork, so a missing netns
-        // errors out cleanly without leaving an orphan child.
+        // Fail closed if the netns isn't present. `systemd-run` would also
+        // fail when `NetworkNamespacePath=` can't be opened, but a clean
+        // NetnsMissing here keeps the wire error precise and avoids spawning
+        // systemd-run only to have the unit fail.
         let netns_path = netns_mount_path(&request.netns_name);
-        let netns_file = std::fs::File::open(&netns_path).map_err(|e| {
-            SpawnError::NetnsMissing {
+        if !netns_path.exists() {
+            return Err(SpawnError::NetnsMissing {
                 name: request.netns_name.clone(),
-                path: netns_path.clone(),
-            }
-            .or_io(e)
-        })?;
+                path: netns_path,
+            });
+        }
 
-        let runner_c = CString::new(self.runner_path.as_os_str().to_string_lossy().as_bytes())
-            .map_err(|e| SpawnError::SyscallFailed(format!("runner path NUL: {e}")))?;
-        let url_c = CString::new(request.portal_url.as_bytes())
-            .map_err(|e| SpawnError::SyscallFailed(format!("url NUL: {e}")))?;
-        let argv = [runner_c.clone(), url_c];
+        let args = systemd_run_args(&self.runner_path, request);
+        let child = Command::new(&self.systemd_run_binary)
+            .args(&args)
+            .spawn()
+            .map_err(|e| SpawnError::SyscallFailed(format!("systemd-run spawn failed: {e}")))?;
+        let pid = child.id();
 
-        let target_uid = Uid::from_raw(request.caller_uid);
-        let target_gid = Gid::from_raw(request.caller_uid); // primary GID == UID; safe assumption for desktop users
-
-        // SAFETY: `fork` is the only async-signal-unsafe call in the
-        // post-fork child path. Nothing else allocates between fork and
-        // exec; the CStrings, path buffers, and fd are all stack/heap
-        // pre-fork. `setns`/`setresuid`/`setresgid`/`execv` are
-        // async-signal-safe.
-        let pid = match unsafe { fork() } {
-            Ok(ForkResult::Parent { child }) => child.as_raw() as u32,
-            Ok(ForkResult::Child) => {
-                // From here on, anything we touch must be async-signal-safe.
-                // We do NOT use the stdlib's logging; we do NOT allocate.
-                // On any error we _exit() with a distinct code so the
-                // parent can audit the failure mode.
-                if setns(netns_file, CloneFlags::CLONE_NEWNET).is_err() {
-                    unsafe { libc::_exit(91) };
-                }
-                if setresgid(target_gid, target_gid, target_gid).is_err() {
-                    unsafe { libc::_exit(92) };
-                }
-                if setresuid(target_uid, target_uid, target_uid).is_err() {
-                    unsafe { libc::_exit(93) };
-                }
-                let _ = execv(&runner_c, &argv);
-                // execv only returns on failure.
-                unsafe { libc::_exit(94) };
-            }
-            Err(e) => {
-                return Err(SpawnError::SyscallFailed(format!("fork failed: {e}")));
-            }
-        };
-
-        // Spawn a thread to reap the child and notify the callback.
+        // Reap the controlling `systemd-run` on a dedicated thread and notify
+        // the callback. `--wait` makes systemd-run block until the transient
+        // unit exits and propagate its status, so this exit reflects the
+        // WebView's outcome. (The reported PID is systemd-run's, not the
+        // WebView's; teardown reaps by netns membership, not this PID.)
         let cb_holder = self.exit_callback.lock().unwrap().clone();
         thread::spawn(move || {
-            let pid_arg = nix::unistd::Pid::from_raw(pid as i32);
-            let exit = match waitpid(pid_arg, None) {
-                Ok(WaitStatus::Exited(_, code)) => SpawnExit {
+            let mut child = child;
+            let exit = match child.wait() {
+                Ok(status) => SpawnExit {
                     pid,
-                    exit_code: Some(code),
-                    signal: None,
+                    exit_code: status.code(),
+                    signal: status.signal(),
                 },
-                Ok(WaitStatus::Signaled(_, sig, _)) => SpawnExit {
-                    pid,
-                    exit_code: None,
-                    signal: Some(sig as i32),
-                },
-                Ok(other) => {
-                    tracing::warn!(?other, "unexpected waitpid status");
-                    SpawnExit {
-                        pid,
-                        exit_code: None,
-                        signal: None,
-                    }
-                }
                 Err(e) => {
-                    tracing::error!(error = %e, "waitpid failed");
+                    tracing::error!(error = %e, "waiting on systemd-run failed");
                     SpawnExit {
                         pid,
                         exit_code: None,
@@ -255,20 +237,40 @@ impl Spawner for LinuxSpawner {
     }
 }
 
-impl SpawnError {
-    fn or_io(self, io: std::io::Error) -> Self {
-        match self {
-            Self::NetnsMissing { name, path } => Self::NetnsMissing {
-                name,
-                path: path.with_extension(format!("err:{io}")),
-            },
-            other => other,
-        }
-    }
-}
-
 fn netns_mount_path(name: &str) -> PathBuf {
     Path::new(crate::netns::NETNS_DIR).join(name)
+}
+
+/// Build the `systemd-run` argument vector (excluding the binary itself) that
+/// launches the portal WebView as a transient `.service`.
+///
+/// The shape is security-load-bearing and pinned by unit tests:
+/// - `--wait --collect --quiet`: block until the unit exits and propagate its
+///   status (so the wait-thread can deliver a [`SpawnExit`]); garbage-collect
+///   the unit even on failure so repeated launches don't accumulate dead units;
+///   suppress systemd-run's own chatter.
+/// - `--property=MemoryDenyWriteExecute=no`: relax W^X for the JIT — this child
+///   only. The helper proper keeps `MemoryDenyWriteExecute=yes`.
+/// - `--property=NetworkNamespacePath=…`: **join** the existing gatepath netns;
+///   never create a new one.
+/// - `--uid`/`--gid`: drop to the caller's identity; the WebView is fully
+///   unprivileged.
+/// - `--`: terminate option parsing so the runner path and the (validated)
+///   portal URL can never be interpreted as `systemd-run` options.
+fn systemd_run_args(runner_path: &Path, request: &SpawnRequest) -> Vec<String> {
+    let netns_path = netns_mount_path(&request.netns_name);
+    vec![
+        "--wait".to_string(),
+        "--collect".to_string(),
+        "--quiet".to_string(),
+        "--property=MemoryDenyWriteExecute=no".to_string(),
+        format!("--property=NetworkNamespacePath={}", netns_path.display()),
+        format!("--uid={}", request.caller_uid),
+        format!("--gid={}", request.caller_uid),
+        "--".to_string(),
+        runner_path.to_string_lossy().into_owned(),
+        request.portal_url.clone(),
+    ]
 }
 
 /// Validate a portal URL the helper is about to pass to the runner.
@@ -457,6 +459,84 @@ mod tests {
     fn malformed_url_rejected() {
         let err = validate_portal_url("not a url").unwrap_err();
         assert!(matches!(err, SpawnError::InvalidUrl(_)));
+    }
+
+    // ── systemd-run argv (C4): pin the privileged command shape ──────────
+
+    #[test]
+    fn systemd_run_args_pins_transient_service_shape() {
+        let runner = Path::new("/usr/lib/gatepath/portal-webview-runner");
+        let args = systemd_run_args(runner, &req("http://captive.example/login"));
+        assert_eq!(
+            args,
+            vec![
+                "--wait".to_string(),
+                "--collect".to_string(),
+                "--quiet".to_string(),
+                "--property=MemoryDenyWriteExecute=no".to_string(),
+                "--property=NetworkNamespacePath=/var/run/netns/gatepath".to_string(),
+                "--uid=1000".to_string(),
+                "--gid=1000".to_string(),
+                "--".to_string(),
+                "/usr/lib/gatepath/portal-webview-runner".to_string(),
+                "http://captive.example/login".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn systemd_run_args_relaxes_mdwe_for_child_only() {
+        // The W^X relaxation must be expressed as a per-unit property — never
+        // a global flag — so it cannot leak to the helper proper.
+        let runner = Path::new(PORTAL_RUNNER_PATH);
+        let args = systemd_run_args(runner, &req("https://captive.example/"));
+        assert!(
+            args.iter()
+                .any(|a| a == "--property=MemoryDenyWriteExecute=no")
+        );
+    }
+
+    #[test]
+    fn systemd_run_args_joins_named_netns_not_a_new_one() {
+        // `NetworkNamespacePath=` JOINS the existing netns. `PrivateNetwork=`
+        // would create a fresh, empty one — that must never appear.
+        let runner = Path::new(PORTAL_RUNNER_PATH);
+        let args = systemd_run_args(runner, &req("http://captive.example/"));
+        assert!(
+            args.iter()
+                .any(|a| a == "--property=NetworkNamespacePath=/var/run/netns/gatepath")
+        );
+        assert!(!args.iter().any(|a| a.contains("PrivateNetwork")));
+    }
+
+    #[test]
+    fn systemd_run_args_drops_to_caller_identity() {
+        let runner = Path::new(PORTAL_RUNNER_PATH);
+        let mut r = req("http://captive.example/");
+        r.caller_uid = 1234;
+        let args = systemd_run_args(runner, &r);
+        assert!(args.iter().any(|a| a == "--uid=1234"));
+        assert!(args.iter().any(|a| a == "--gid=1234"));
+    }
+
+    #[test]
+    fn systemd_run_args_terminates_options_before_command() {
+        // The `--` guard means a portal URL shaped like an option (already
+        // rejected by validate_portal_url, but defence in depth) cannot be
+        // parsed as a systemd-run flag.
+        let runner = Path::new(PORTAL_RUNNER_PATH);
+        let args = systemd_run_args(runner, &req("http://captive.example/x"));
+        let dashdash = args.iter().position(|a| a == "--").expect("`--` present");
+        let runner_pos = args
+            .iter()
+            .position(|a| a == PORTAL_RUNNER_PATH)
+            .expect("runner present");
+        let url_pos = args
+            .iter()
+            .position(|a| a == "http://captive.example/x")
+            .expect("url present");
+        assert!(dashdash < runner_pos);
+        assert!(runner_pos < url_pos);
     }
 
     // ── FakeSpawner behaviour ───────────────────────────────────────────
