@@ -11,10 +11,11 @@ Requires=dbus.service
 Type=dbus
 BusName=cc.grepon.Gatepath.NetNsHelper
 ExecStart=/usr/libexec/gatepath-netns-helper
-# Fixed PATH so the helper's `ip`/`iw`/`wpa_supplicant`/DHCP-client/`kill`
-# lookups can't be redirected by an inherited or attacker-influenced PATH in
-# a root process. systemd already supplies a default PATH (not inherited), but
-# pinning it here is defence-in-depth for the binaries the helper now execs.
+# Fixed PATH so the helper's `ip`/`iw`/`wpa_supplicant`/DHCP-client/`kill`/
+# `systemd-run` lookups can't be redirected by an inherited or attacker-
+# influenced PATH in a root process. systemd already supplies a default PATH
+# (not inherited), but pinning it here is defence-in-depth for the binaries the
+# helper now execs.
 Environment=PATH=/usr/sbin:/usr/bin:/sbin:/bin
 # Helper needs CAP_NET_ADMIN to run `ip netns ...` and move interfaces; it
 # runs as root so that root's CAP_NET_ADMIN is implicit. We could drop to
@@ -39,19 +40,25 @@ ProtectControlGroups=true
 # clients (dhclient/udhcpc) use raw AF_PACKET sockets to send/receive DHCP
 # before an address exists, and wpa_supplicant uses AF_PACKET for EAPOL.
 RestrictAddressFamilies=AF_UNIX AF_NETLINK AF_INET AF_INET6 AF_PACKET
-# NOTE (DESK-002): the helper now spawns network-using CHILDREN in the gatepath
-# netns — wpa_supplicant, the DHCP client, and the portal WebView runner. Those
-# children share this unit's cgroup, so a cgroup-level `IPAddressDeny=any` would
-# block the captive sign-in itself (DHCP broadcast + the portal page). Network
-# confinement is therefore the *netns*'s job (the children only ever see the
-# captive Wi-Fi link), not the cgroup's. `IPAddressDeny=any` is intentionally
-# NOT set for this reason; re-evaluate with `IPAddressAllow` scoping during the
-# BLOCKER-DESK-003 hardware validation.
+# NOTE (DESK-002): the helper spawns network-using CHILDREN in the gatepath
+# netns — wpa_supplicant and the DHCP client — which share this unit's cgroup,
+# so a cgroup-level `IPAddressDeny=any` would block the captive sign-in itself
+# (DHCP broadcast). Network confinement is therefore the *netns*'s job (the
+# children only ever see the captive Wi-Fi link), not the cgroup's.
+# `IPAddressDeny=any` is intentionally NOT set for this reason; re-evaluate with
+# `IPAddressAllow` scoping during the BLOCKER-DESK-003 hardware validation.
+# (The portal WebView is NOT one of these in-cgroup children: as of DESK-003 C4
+# it runs in its OWN transient systemd unit — see MemoryDenyWriteExecute below.)
 LockPersonality=true
-# NOTE (DESK-003): MemoryDenyWriteExecute is left OFF because the portal WebView
-# child (WebKitGTK) JITs JavaScript and needs W+X pages. Confirm on hardware
-# whether a per-child relaxation is preferable to disabling it unit-wide.
-MemoryDenyWriteExecute=false
+# DESK-003 C4: W^X is ON for the helper proper. The only process that needs
+# W+X pages is the portal WebView (WebKitGTK JITs JavaScript); it is launched
+# in its own transient `.service` via `systemd-run` with
+# `MemoryDenyWriteExecute=no` set on THAT unit only (see src/spawn.rs). The
+# transient unit is forked by PID 1, so it does NOT inherit this unit's W^X
+# seccomp filter. wpa_supplicant and the DHCP client do not JIT, so they run
+# fine under this filter. End-to-end behaviour (JIT under the transient unit,
+# `NetworkNamespacePath=` netns join) is on the BLOCKER-DESK-003 hardware list.
+MemoryDenyWriteExecute=true
 RestrictRealtime=true
 RestrictSUIDSGID=true
 SystemCallArchitectures=native
