@@ -7,6 +7,9 @@ both success and the helper's typed error variants.
 
 from __future__ import annotations
 
+import re
+from pathlib import Path
+
 import pytest
 
 from gatepath.netns_client import (
@@ -96,6 +99,12 @@ class FakeProxy:
         ("AlreadyActive", RefusalReason.ALREADY_ACTIVE),
         ("Throttled", RefusalReason.THROTTLED),
         ("NotActive", RefusalReason.NOT_ACTIVE),
+        ("InvalidPortalUrl", RefusalReason.INVALID_PORTAL_URL),
+        ("InvalidDisplayEnv", RefusalReason.INVALID_DISPLAY_ENV),
+        ("NoActiveSession", RefusalReason.NO_ACTIVE_SESSION),
+        ("SenderMismatch", RefusalReason.SENDER_MISMATCH),
+        ("SpawnFailed", RefusalReason.SPAWN_FAILED),
+        ("UnsupportedSecurity", RefusalReason.UNSUPPORTED_SECURITY),
     ],
 )
 def test_refusal_reason_maps_known_variants(suffix: str, expected: RefusalReason) -> None:
@@ -113,6 +122,50 @@ def test_refusal_reason_foreign_prefix_maps_to_unknown() -> None:
     assert (
         RefusalReason.from_dbus_error_name("org.freedesktop.DBus.Error.AccessDenied")
         == RefusalReason.UNKNOWN
+    )
+
+
+# ── cross-language drift guard (roadmap P1.1) ────────────────────────────
+
+# RefusalReason lives in the privileged Rust helper crate; it is the source of
+# truth for the wire names. The Python enum above must mirror every variant the
+# helper can emit, or the UI silently degrades a typed refusal to UNKNOWN — which
+# is exactly the `UnsupportedSecurity` drift this guard was added for.
+#
+# Scope: this guard checks *value coverage* (every Rust wire name has a matching
+# Python enum value). It does NOT check *mapping correctness* — that a PascalCase
+# suffix in from_dbus_error_name resolves to the RIGHT member;
+# test_refusal_reason_maps_known_variants covers that for every known variant.
+_RUST_LIB_RS = (
+    Path(__file__).resolve().parents[2]
+    / "desktop"
+    / "gatepath-netns-helper"
+    / "src"
+    / "lib.rs"
+)
+
+
+def _rust_refusal_reason_wire_names() -> set[str]:
+    """The snake_case names from `RefusalReason::as_str()` in lib.rs."""
+    text = _RUST_LIB_RS.read_text(encoding="utf-8")
+    # Narrow to the as_str() match block so other enums' arms can't leak in.
+    # Assumes `impl RefusalReason` sits at 0-indent (so the fn closes at a
+    # 4-space `}`); adjust the terminator if lib.rs moves it into a submodule.
+    match = re.search(r"fn as_str\(self\)[^{]*\{(.*?)\n    \}", text, re.DOTALL)
+    assert match, "could not locate RefusalReason::as_str() in lib.rs"
+    return set(re.findall(r'=>\s*"([a-z_]+)"', match.group(1)))
+
+
+def test_python_refusal_reasons_cover_every_rust_variant() -> None:
+    if not _RUST_LIB_RS.exists():
+        pytest.skip(f"Rust source not present at {_RUST_LIB_RS}")
+    rust_names = _rust_refusal_reason_wire_names()
+    assert rust_names, "parsed no RefusalReason::as_str() arms from lib.rs"
+    python_names = {r.value for r in RefusalReason}
+    missing = rust_names - python_names
+    assert not missing, (
+        f"Python RefusalReason omits variant(s) the helper can emit: {sorted(missing)}. "
+        "Add each to the enum AND from_dbus_error_name (PascalCase suffix)."
     )
 
 
