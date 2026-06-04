@@ -59,6 +59,9 @@ class RefusalReason(Enum):
     NO_ACTIVE_SESSION = "no_active_session"
     SENDER_MISMATCH = "sender_mismatch"
     SPAWN_FAILED = "spawn_failed"
+    # DESK-002 — the captive network is secured (WPA/WPA2/WPA3/WEP); the helper
+    # only re-associates to open networks today, so it refuses up front.
+    UNSUPPORTED_SECURITY = "unsupported_security"
     UNKNOWN = "unknown"
 
     @classmethod
@@ -90,6 +93,7 @@ class RefusalReason(Enum):
             "NoActiveSession": cls.NO_ACTIVE_SESSION,
             "SenderMismatch": cls.SENDER_MISMATCH,
             "SpawnFailed": cls.SPAWN_FAILED,
+            "UnsupportedSecurity": cls.UNSUPPORTED_SECURITY,
         }
         return mapping.get(suffix, cls.UNKNOWN)
 
