@@ -65,6 +65,8 @@ pub enum HelperError {
     Throttled(String),
     /// Phase 5b.7: portal URL failed validation (scheme, control byte, etc.).
     InvalidPortalUrl(String),
+    /// DESK-004: a client-supplied display env value failed validation.
+    InvalidDisplayEnv(String),
     /// Phase 5b.7: `LaunchPortal` called without a prior `SetupCaptive`.
     NoActiveSession(String),
     /// Phase 5b.7: caller is not the session owner.
@@ -112,6 +114,9 @@ impl HelperError {
             }
             RefusalReason::InvalidPortalUrl => {
                 Self::InvalidPortalUrl("portal URL failed validation".into())
+            }
+            RefusalReason::InvalidDisplayEnv => {
+                Self::InvalidDisplayEnv("display env value failed validation".into())
             }
             RefusalReason::NoActiveSession => {
                 Self::NoActiveSession("no captive session active".into())
@@ -202,19 +207,31 @@ impl<
         }
     }
 
-    /// `LaunchPortal(portal_url: s) -> u`  (Phase 5b.7)
+    /// `LaunchPortal(portal_url: s, wayland_display: s, x_display: s, x_authority: s) -> u`
+    /// (Phase 5b.7; display args DESK-004)
     ///
     /// Returns the spawned subprocess's PID on success, a typed D-Bus
     /// error on refusal. The subprocess runs inside the gatepath netns
-    /// as the calling user. Helper independently observes the subprocess
-    /// exit and emits [`Self::portal_subprocess_exited`] as a signal.
+    /// as the calling user. The three display args are the graphical-session
+    /// identifiers the WebView needs to render (`""` = unset); the helper
+    /// validates them and derives `XDG_RUNTIME_DIR`/`DBUS_SESSION_BUS_ADDRESS`
+    /// from the authenticated caller UID. Helper independently observes the
+    /// subprocess exit and emits [`Self::portal_subprocess_exited`] as a signal.
     async fn launch_portal(
         &self,
         portal_url: String,
+        wayland_display: String,
+        x_display: String,
+        x_authority: String,
         #[zbus(header)] header: zbus::message::Header<'_>,
     ) -> Result<u32, HelperError> {
         let sender = sender_or_unauthorised(&header)?;
-        let request = LaunchPortalRequest { portal_url };
+        let request = LaunchPortalRequest {
+            portal_url,
+            wayland_display,
+            x_display,
+            x_authority,
+        };
         let inner = Arc::clone(&self.inner);
         let response =
             tokio::task::spawn_blocking(move || inner.launch_portal_subprocess(&request, &sender))

@@ -52,6 +52,7 @@ class FakeProxy:
         self.setup_calls: list[str] = []
         self.teardown_calls: int = 0
         self.launch_calls: list[str] = []
+        self.launch_display_calls: list[tuple[str, str, str]] = []
 
     def SetupCaptive(self, interface_name: str) -> str:  # noqa: N802
         self.setup_calls.append(interface_name)
@@ -65,8 +66,15 @@ class FakeProxy:
         if isinstance(self.teardown_result, BaseException):
             raise self.teardown_result
 
-    def LaunchPortal(self, portal_url: str) -> int:  # noqa: N802
+    def LaunchPortal(  # noqa: N802
+        self,
+        portal_url: str,
+        wayland_display: str = "",
+        x_display: str = "",
+        x_authority: str = "",
+    ) -> int:
         self.launch_calls.append(portal_url)
+        self.launch_display_calls.append((wayland_display, x_display, x_authority))
         if isinstance(self.launch_result, BaseException):
             raise self.launch_result
         assert isinstance(self.launch_result, int)
@@ -301,6 +309,22 @@ def test_launch_portal_success_returns_pid() -> None:
 
     assert result == LaunchPortalSuccess(pid=4242)
     assert proxy.launch_calls == ["http://captive.example/login"]
+    # No display env passed → forwarded as empty strings (DESK-004).
+    assert proxy.launch_display_calls == [("", "", "")]
+
+
+def test_launch_portal_forwards_display_env() -> None:
+    proxy = FakeProxy()
+    client = NetnsClient(proxy)
+
+    client.launch_portal(
+        "http://captive.example/login",
+        wayland_display="wayland-0",
+        x_display=":0",
+        x_authority="/home/u/.Xauthority",
+    )
+
+    assert proxy.launch_display_calls == [("wayland-0", ":0", "/home/u/.Xauthority")]
 
 
 @pytest.mark.parametrize(

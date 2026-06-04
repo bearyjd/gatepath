@@ -89,6 +89,38 @@ fn polkit_check_authorization_round_trips() {
 }
 
 #[test]
+#[ignore = "requires a running gatepath-netns-helper on the system bus; run manually with --ignored"]
+fn launch_portal_wire_arity_is_four_strings() {
+    // DESK-004 pins the LaunchPortal wire signature:
+    //   LaunchPortal(portal_url: s, wayland_display: s, x_display: s, x_authority: s) -> u
+    // Neither the Rust `FakeSpawner` nor the Python `FakeProxy` catches drift
+    // from the real zbus signature — both are hand-rolled. This does, when run
+    // against a live helper.
+    let conn = Connection::system().expect("system bus");
+    let proxy = zbus::blocking::Proxy::new(
+        &conn,
+        "cc.grepon.Gatepath.NetNsHelper",
+        "/cc/grepon/Gatepath/NetNsHelper",
+        "cc.grepon.Gatepath.NetNsHelper1",
+    )
+    .expect("helper proxy");
+
+    // No SetupCaptive ran, so a correctly-shaped call MUST be refused with one
+    // of our typed errors (NoActiveSession) — which only happens if the 4-arg
+    // method matched and executed. A wrong arity surfaces UnknownMethod /
+    // InvalidArgs instead, failing the assertion below. (Debug-string check so
+    // the test is robust to zbus's internal error-variant shape.)
+    let result: zbus::Result<u32> =
+        proxy.call("LaunchPortal", &("http://captive.example/", "", "", ""));
+    let err = result.expect_err("LaunchPortal without a session must be refused");
+    let text = format!("{err:?}");
+    assert!(
+        text.contains("NetNsHelper.Error.") || text.contains("NoActiveSession"),
+        "expected a typed helper refusal (4-arg method matched), got: {text}"
+    );
+}
+
+#[test]
 #[ignore = "requires system bus + NetworkManager; run manually with --ignored"]
 fn nm_captive_check_connects_and_lists_devices() {
     // Construct the production NMCaptiveCheck. If NM's interface drifted

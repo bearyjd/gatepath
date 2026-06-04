@@ -7,6 +7,7 @@ module.  It is imported lazily inside GatepathApp.do_activate().
 from __future__ import annotations
 
 import logging
+import os
 import threading
 from typing import Callable, Optional
 
@@ -157,7 +158,18 @@ try:
                     "using in-process WebView"
                 )
                 return False
-            result = self._isolation.engage(portal_url, interface)
+            # DESK-004: the WebView runs in its own netns-joined transient unit
+            # with no inherited environment, so forward this UI process's
+            # graphical-session identifiers. This is the one place that reads the
+            # display env; the helper validates them and derives the rest from
+            # the authenticated caller UID.
+            result = self._isolation.engage(
+                portal_url,
+                interface,
+                wayland_display=os.environ.get("WAYLAND_DISPLAY", ""),
+                x_display=os.environ.get("DISPLAY", ""),
+                x_authority=os.environ.get("XAUTHORITY", ""),
+            )
             if isinstance(result, EngageRefused):
                 logger.info(
                     "helper engage refused (stage=%s, reason=%s); "

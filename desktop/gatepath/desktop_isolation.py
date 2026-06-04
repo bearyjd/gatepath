@@ -206,7 +206,15 @@ class DesktopIsolation:
         self._observed_exit: Optional[SubprocessExit] = None
         self._observed_lock = threading.Lock()
 
-    def engage(self, portal_url: str, interface_name: str) -> EngageResult:
+    def engage(
+        self,
+        portal_url: str,
+        interface_name: str,
+        *,
+        wayland_display: str = "",
+        x_display: str = "",
+        x_authority: str = "",
+    ) -> EngageResult:
         """Set up the netns AND launch the portal subprocess.
 
         Two-step operation: helper.SetupCaptive then helper.LaunchPortal.
@@ -215,6 +223,12 @@ class DesktopIsolation:
 
         On launch failure after setup succeeded, the netns is left in
         place — caller MUST call :py:meth:`disengage` to tear it down.
+
+        The three display values (``""`` = unset) are the graphical-session
+        identifiers the WebView needs to render; they are read from the UI
+        process environment at the call boundary and forwarded to the helper
+        (DESK-004). This orchestrator stays pure — it does not read
+        ``os.environ`` itself.
         """
         self._exit_event.clear()
         self._cancel_event.clear()
@@ -236,7 +250,12 @@ class DesktopIsolation:
             )
         assert isinstance(setup_result, SetupSuccess)
 
-        launch_result = self._client.launch_portal(portal_url)
+        launch_result = self._client.launch_portal(
+            portal_url,
+            wayland_display=wayland_display,
+            x_display=x_display,
+            x_authority=x_authority,
+        )
         if isinstance(launch_result, LaunchPortalRefused):
             return EngageRefused(
                 reason=launch_result.reason,
