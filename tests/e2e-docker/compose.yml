@@ -15,6 +15,17 @@ networks:
         # entrypoint installs its own default route via .2 after the
         # iface rename (it would anyway, to recover from the L3 churn).
         - subnet: 172.30.0.0/24
+  # The user's *trusted* network (their normal stack / VPN side). The
+  # no-leak sentinel lives here. The client has an interface on this net
+  # that STAYS in the host netns — only the captive iface is moved into
+  # the gatepath netns — so the in-netns WebView must NOT be able to reach
+  # anything here. That confinement is the product's core claim. (Subnet
+  # only, same netavark-race reasoning as captive_net.)
+  trusted_net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.31.0.0/24
 
 services:
   captive-gateway:
@@ -40,6 +51,26 @@ services:
       # the natural post-login flow with no extra round-trips.
       PORTAL_COMPLETE_AFTER: "1"
 
+  # Stand-in for a host on the user's trusted network (the thing a captive
+  # portal must never be able to reach). Lives ONLY on trusted_net, so it is
+  # reachable from the client's host netns but unreachable from the gatepath
+  # netns. busybox httpd serves /health; the scenario probes it from both
+  # sides — see run-scenario.py + portal-webview-runner.test.
+  trusted-sentinel:
+    container_name: gatepath-e2e-sentinel
+    # nginx:alpine (already in the local image cache) rather than busybox httpd:
+    # Alpine's default busybox doesn't ship the `httpd` applet, and a sentinel
+    # that exits immediately makes podman-compose's depends_on condition crash.
+    # Serves /health on :80 from the stock document root.
+    image: nginx:alpine
+    networks:
+      trusted_net:
+        ipv4_address: 172.31.0.2
+    command:
+      - sh
+      - -c
+      - 'printf SENTINEL-OK > /usr/share/nginx/html/health && exec nginx -g "daemon off;"'
+
   gatepath-client:
     container_name: gatepath-e2e-client
     build:
@@ -48,6 +79,11 @@ services:
     networks:
       captive_net:
         ipv4_address: 172.30.0.3
+      # An iface on the user's trusted net. This one is NEVER moved into the
+      # gatepath netns (the entrypoint moves only the captive-subnet iface),
+      # so it models "the host's other connection" that the portal can't see.
+      trusted_net:
+        ipv4_address: 172.31.0.3
     dns:
       # Force the captive gateway as the resolver — the entrypoint also
       # rewrites /etc/resolv.conf, but setting it here means even pre-
@@ -55,6 +91,7 @@ services:
       - 172.30.0.2
     depends_on:
       - captive-gateway
+      - trusted-sentinel
     # See client/Dockerfile + entrypoint.sh for why we need these.
     cap_add:
       - NET_ADMIN

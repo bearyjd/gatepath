@@ -1,0 +1,53 @@
+name: desktop-e2e
+
+# Wires the desktop captive-portal Docker E2E harness into CI so it can no
+# longer silently rot (it had drifted unrun behind DESK-001/002/003). On a CI
+# runner "wlan0" is a veth with no Wi-Fi PHY, so the scenario exercises the full
+# orchestration up to the DESK-001 PHY move and then records an explicit SKIP
+# for the privileged tail (PHY move → in-netns wpa_supplicant/DHCP → WebView →
+# no-leak confinement) — those need a real radio (mac80211_hwsim / hardware),
+# tracked as ROADMAP P0.1/P0.2. The job is GREEN when the runnable surface
+# (image build, dbusmock NM, helper activation, captive probe, sentinel
+# reachability) passes, and RED if any of it regresses.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'tests/e2e-docker/**'
+      - 'desktop/gatepath-netns-helper/**'
+      - 'desktop/gatepath/**'
+      - 'mockportal/**'
+      - '.github/workflows/desktop-e2e.yml'
+  pull_request:
+    paths:
+      - 'tests/e2e-docker/**'
+      - 'desktop/gatepath-netns-helper/**'
+      - 'desktop/gatepath/**'
+      - 'mockportal/**'
+      - '.github/workflows/desktop-e2e.yml'
+
+jobs:
+  e2e:
+    name: Desktop captive-portal E2E (podman, veth substrate)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install podman + podman-compose
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y podman
+          python -m pip install --upgrade pip podman-compose
+      - name: Run the E2E harness
+        run: bash tests/e2e-docker/run-e2e.sh
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-e2e-artifacts
+          path: tests/e2e-docker/artifacts/
+          if-no-files-found: ignore

@@ -50,6 +50,9 @@ REPORT_PATH = Path("/tmp/scenario-report.json")
 SCREENSHOT_PATH = Path("/tmp/scenario-screenshot.png")
 GATEWAY_LOG_PATH = Path("/tmp/gateway-log.json")
 HELPER_AUDIT_LOG = Path("/var/lib/gatepath/helper-audit.jsonl")
+# Written by portal-webview-runner.test from INSIDE the gatepath netns.
+NETNS_SENTINEL_PROBE = Path("/tmp/netns-sentinel-probe.json")
+SENTINEL_URL = "http://172.31.0.2/health"
 PROBE_URL = os.environ.get("GATEPATH_PROBE_URL", "http://connectivity-check.ubuntu.com/")
 WEBVIEW_DWELL_SECONDS = float(os.environ.get("GATEPATH_WEBVIEW_DWELL_SECONDS", "6"))
 
@@ -226,6 +229,52 @@ def step_snapshot_gateway_log() -> dict[str, Any]:
     return {"bytes": len(body), "path": str(GATEWAY_LOG_PATH)}
 
 
+def step_sentinel_baseline() -> dict[str, Any]:
+    # Reach the trusted-network sentinel from the HOST netns (the trusted iface
+    # lives here and is never moved). This MUST succeed — it proves the sentinel
+    # is up and routable from the trusted side, so the in-netns probe failing
+    # later is genuine confinement, not just "sentinel down".
+    import urllib.error  # noqa: PLC0415
+    import urllib.request  # noqa: PLC0415
+
+    # depends_on only guarantees the sentinel process started, not that nginx is
+    # accepting connections yet — retry briefly, same pattern as reset_gateway.
+    attempts = 20
+    delay = 0.25
+    last_error: Exception | None = None
+    for attempt in range(1, attempts + 1):
+        try:
+            with urllib.request.urlopen(SENTINEL_URL, timeout=2) as resp:
+                code = resp.status
+                body = resp.read().decode("utf-8", "replace").strip()
+            if code != 200:
+                raise AssertionError(f"sentinel returned {code}, expected 200")
+            return {"http_code": code, "body": body, "attempts": attempt}
+        except (urllib.error.URLError, ConnectionRefusedError, OSError) as exc:
+            last_error = exc
+            time.sleep(delay)
+    raise AssertionError(f"sentinel never reachable from host side: {last_error}")
+
+
+def step_netns_confinement() -> dict[str, Any]:
+    # Read the probe the runner ran from INSIDE the gatepath netns. The netns
+    # holds only the captive link, so it must NOT have reached the sentinel.
+    # reachable=true here means portal traffic escaped the confinement boundary
+    # onto the user's trusted network — the core no-leak failure this whole
+    # product exists to prevent.
+    if not NETNS_SENTINEL_PROBE.exists():
+        raise AssertionError(
+            f"in-netns sentinel probe artifact missing at {NETNS_SENTINEL_PROBE} "
+            "(runner never reached the probe step?)"
+        )
+    probe = json.loads(NETNS_SENTINEL_PROBE.read_text())
+    if probe.get("reachable") is not False:
+        raise AssertionError(
+            f"LEAK: the gatepath netns reached the trusted-net sentinel: {probe}"
+        )
+    return {"reachable": probe.get("reachable"), "curl_rc": probe.get("curl_rc")}
+
+
 def step_check_audit() -> dict[str, Any]:
     # The helper writes /var/lib/gatepath/helper-audit.jsonl as root with
     # 0640 perms. Tester (uid 1000) can't read the contents — that's the
@@ -264,6 +313,10 @@ def main() -> int:
     # captured log is complete.
     steps.append(run_step("snapshot_gateway_log", step_snapshot_gateway_log))
 
+    # Baseline: the sentinel is reachable from the host (trusted) side. If this
+    # fails the later confinement check is meaningless, so record it up front.
+    steps.append(run_step("sentinel_baseline", step_sentinel_baseline))
+
     steps.append(run_step("nm_lookup", step_nm_lookup))
     if not steps[-1].ok:
         return write_report(steps, rc=1)
@@ -276,6 +329,30 @@ def main() -> int:
     if not steps[-1].ok:
         return write_report(steps, rc=1)
 
+    # The privileged tail (PHY move → in-netns wpa_supplicant/DHCP → WebView →
+    # the no-leak confinement probe) needs a REAL Wi-Fi PHY: setup_captive runs
+    # DESK-001's `iw phy <phyN> set netns`, resolved from
+    # /sys/class/net/<iface>/phy80211. A veth — this harness's default substrate
+    # — has none, so we record an explicit SKIP and stop with a clean rc=0; the
+    # orchestration up to here is still exercised. On a real radio
+    # (mac80211_hwsim / hardware) the same scenario runs the full path including
+    # the confinement gate. See docs/ROADMAP.md P0.1/P0.2.
+    if not Path("/sys/class/net/wlan0/phy80211").exists():
+        steps.append(
+            Step(
+                name="privileged_path",
+                ok=True,
+                data={
+                    "skipped": True,
+                    "reason": "wlan0 has no phy80211 (veth substrate); PHY move, "
+                    "in-netns connectivity, and no-leak confinement need a real "
+                    "Wi-Fi radio (mac80211_hwsim / hardware).",
+                },
+            )
+        )
+        log.warning("privileged path SKIPPED: wlan0 has no phy80211 (veth)")
+        return write_report(steps, rc=0)
+
     steps.append(run_step("setup", lambda: step_setup(client)))
     if not steps[-1].ok:
         return write_report(steps, rc=1)
@@ -287,6 +364,10 @@ def main() -> int:
 
     steps.append(run_step("dwell_and_screenshot", lambda: step_dwell_and_screenshot(pid)))
     # Don't bail on screenshot failure — push through to teardown.
+
+    # The runner wrote its in-netns sentinel probe during launch; by now the
+    # dwell has elapsed so the artifact is present. This is the no-leak gate.
+    steps.append(run_step("netns_confinement", step_netns_confinement))
 
     steps.append(run_step("kill", lambda: step_kill(pid)))
 

@@ -22,8 +22,10 @@ PORTAL_URL="$1"
 
 /usr/sbin/ip link set dev lo up || true
 /usr/sbin/ip link set dev wlan0 up
-/usr/sbin/ip addr add 172.30.0.220/24 dev wlan0
-/usr/sbin/ip route add default via 172.30.0.2 dev wlan0
+# `replace` (idempotent): the DESK-002 DHCP stub already set this lease during
+# setup_captive, so a plain `add` would fail with EEXIST and abort the runner.
+/usr/sbin/ip addr replace 172.30.0.220/24 dev wlan0
+/usr/sbin/ip route replace default via 172.30.0.2 dev wlan0
 
 # We inherit env from dbus-daemon's activation, which DOES NOT have
 # DISPLAY (dbus started before the entrypoint exported it). Pin it
@@ -37,5 +39,29 @@ export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/1000}"
 # without a session bus running an AT-SPI registry, it spends ~5s
 # timing out and clogs the log.
 export NO_AT_BRIDGE=1
+
+# ─── No-leak confinement probe ───────────────────────────────────────────
+# We are now INSIDE the gatepath netns, as the caller's UID — the WebView's
+# exact context. Try to reach the sentinel on the user's trusted network.
+# Confinement REQUIRES this to FAIL: the netns holds only the captive link,
+# so it has no route to 172.31.0.0/24. We write the verdict to a
+# tester-writable path under /tmp (NOT the root-owned /tmp/artifacts mount);
+# the entrypoint copies it into the artifacts dir as root afterwards. The
+# whole block is wrapped so a probe/write hiccup can NEVER abort the runner
+# (a failed probe is the SUCCESS case here) — a genuinely missing artifact is
+# surfaced by the scenario's netns_confinement step instead.
+{
+    SENTINEL_URL="http://172.31.0.2/health"
+    sentinel_rc=0
+    curl -sS -m 3 -o /dev/null "$SENTINEL_URL" || sentinel_rc=$?
+    if [ "$sentinel_rc" -eq 0 ]; then
+        reachable=true
+    else
+        reachable=false
+    fi
+    printf '{"sentinel_url":"%s","reachable":%s,"curl_rc":%d}\n' \
+        "$SENTINEL_URL" "$reachable" "$sentinel_rc" \
+        > /tmp/netns-sentinel-probe.json
+} || true
 
 exec /usr/bin/python3 -m gatepath.portal_webview_runner "$PORTAL_URL"

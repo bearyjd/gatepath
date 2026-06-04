@@ -28,19 +28,24 @@ TESTER_UID=1000
 log() { printf '[entrypoint] %s\n' "$*" >&2; }
 
 # ─── 1. Iface rename ─────────────────────────────────────────────────────
-# Find the first non-loopback iface — podman/netavark will have given it
-# an IP on the captive subnet via IPAM.
-default_iface() {
-    # `ip -o link show` formats veth peers as "eth0@if5:" — the part after
-    # @ is the peer's ifindex, not part of the device name. sub() trims it.
-    /usr/sbin/ip -o link show \
-        | awk -F': ' '$2 != "lo" { sub(/@.*/, "", $2); print $2; exit }'
+# Find the interface on the CAPTIVE subnet (172.30.0.0/24) — that's the one
+# that becomes wlan0 and gets moved into the gatepath netns. The client now
+# ALSO has an iface on the trusted net (172.31.0.0/24, where the no-leak
+# sentinel lives); that one must stay in the host netns, so "first non-lo"
+# is no longer correct. Selecting by subnet is authoritative — if no captive
+# iface is present that's a setup error we want surfaced, not papered over by
+# grabbing the wrong (trusted) iface, so there is deliberately no fallback.
+captive_iface() {
+    # `ip -4 -o addr show` field 4 is "<addr>/<prefix>"; field 2 is the clean
+    # ifname. Print the first iface whose address is on the captive subnet.
+    /usr/sbin/ip -4 -o addr show \
+        | awk '$4 ~ /^172\.30\.0\./ { sub(/@.*/, "", $2); print $2; exit }'
 }
 
-orig_iface="$(default_iface || true)"
+orig_iface="$(captive_iface || true)"
 if [ -z "$orig_iface" ]; then
-    log "FATAL: no non-loopback interface found"
-    /usr/sbin/ip -o link show >&2
+    log "FATAL: no interface on the captive subnet (172.30.0.0/24) found"
+    /usr/sbin/ip -4 -o addr show >&2
     exit 1
 fi
 
@@ -103,6 +108,35 @@ for attempt in $(seq 1 30); do
         /usr/sbin/ip neigh show >&2
     fi
 done
+
+# ─── 2b. Connectivity test stubs (wpa_supplicant + DHCP) ─────────────────
+# DESK-002: setup_captive runs wpa_supplicant + a one-shot DHCP client INSIDE
+# the gatepath netns. This "wlan0" is a veth with no real radio to associate,
+# and neither client is installed — so provide test doubles, the same spirit as
+# the dbusmock NetworkManager and the WebView runner stub. wpa_supplicant just
+# stays alive for the session (bring_up spawns it fire-and-forget); the DHCP
+# stub assigns the captive static lease the real server would have handed out
+# and exits 0. The orchestration (move → bring_up → spawn → teardown) is what's
+# under test here; real association/DHCP is the mac80211_hwsim / on-hardware job.
+log "installing wpa_supplicant + dhclient test stubs"
+cat >/usr/sbin/wpa_supplicant <<'STUB'
+#!/bin/sh
+# A real supplicant associates and stays running for the whole session.
+exec sleep infinity
+STUB
+cat >/usr/sbin/dhclient <<'STUB'
+#!/bin/sh
+# One-shot DHCP double: we are already `ip netns exec`'d into the gatepath
+# netns. Assign the captive static lease (replace = idempotent vs the runner's
+# own setup) and exit 0 to mimic a successful lease. The iface is the last arg
+# in the helper's dhcp argv.
+iface=wlan0
+for a in "$@"; do iface="$a"; done
+/usr/sbin/ip addr replace 172.30.0.220/24 dev "$iface"
+/usr/sbin/ip route replace default via 172.30.0.2 dev "$iface"
+exit 0
+STUB
+chmod +x /usr/sbin/wpa_supplicant /usr/sbin/dhclient
 
 # ─── 3. System D-Bus ─────────────────────────────────────────────────────
 mkdir -p /run/dbus
@@ -240,6 +274,10 @@ case "$MODE" in
         cp -f /tmp/scenario-report.json     /tmp/artifacts/ 2>/dev/null || true
         cp -f /tmp/scenario-screenshot.png  /tmp/artifacts/ 2>/dev/null || true
         cp -f /tmp/gateway-log.json         /tmp/artifacts/ 2>/dev/null || true
+        # The in-netns no-leak probe is written by the runner (as tester) to a
+        # tester-writable /tmp path; copy it out as root for the host-side
+        # confinement assertion.
+        cp -f /tmp/netns-sentinel-probe.json /tmp/artifacts/ 2>/dev/null || true
         cp -f /var/lib/gatepath/helper-audit.jsonl /tmp/artifacts/ 2>/dev/null || true
         chmod -R a+rX /tmp/artifacts || true
 
