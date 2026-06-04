@@ -122,7 +122,8 @@ association drops and the DHCP lease doesn't travel). The new
 then tears all of that down with the session (the orchestrator drops the
 session — stopping both processes — before destroying the netns). This adds
 `iw`, `wpa_supplicant`, and a DHCP client to the helper's runtime dependency
-set. Only **open** captive SSIDs are supported for now (see BLOCKERS.md).
+set (the WebView launch adds `systemd-run` too — see §4). Only **open** captive
+SSIDs are supported for now (see BLOCKERS.md).
 
 > Implication for the parity table: 3a and 3b have **landed in code**. Desktop
 > "bind portal traffic to the Wi-Fi interface" is implemented but **pending
@@ -145,11 +146,21 @@ The helper's files are hardcoded to FHS paths under the read-only `/usr` tree:
 | D-Bus policy | `/usr/share/dbus-1/system.d/…` (or `/etc/dbus-1/system.d/…`) |
 | polkit action | `/usr/share/polkit-1/actions/…` |
 
-A second, easy-to-miss constraint: the portal runner is spawned **on the host**
-(netns'd, dropped to your UID) and runs `python3 -m gatepath.portal_webview_runner`.
-So the `gatepath` Python package **and** host GTK4/libadwaita/WebKitGTK +
-PyGObject must be present on the host — they are not reachable from inside the
-Flatpak sandbox. Any deployment option below must account for that too.
+A second, easy-to-miss constraint: the portal runner is launched **on the host**
+in its own transient `systemd-run` unit (DESK-003 C4) — systemd joins it to the
+gatepath netns (`NetworkNamespacePath=`), drops it to your UID (`--uid`), and
+relaxes `MemoryDenyWriteExecute` for the WebKit JIT on that unit alone while the
+helper itself keeps W^X — running `python3 -m gatepath.portal_webview_runner`.
+So the helper additionally requires **`systemd-run`** (a systemd recent enough
+for `Type=exec` and `NetworkNamespacePath=`, which every target here already
+ships). Because the transient unit inherits no session environment, the helper
+forwards the user's display identifiers (`WAYLAND_DISPLAY`/`DISPLAY`/`XAUTHORITY`,
+plus UID-derived `XDG_RUNTIME_DIR`/`DBUS_SESSION_BUS_ADDRESS`) to it via
+`--setenv` (DESK-004). The `gatepath` Python package **and** host
+GTK4/libadwaita/WebKitGTK + PyGObject must therefore be present on the host (they
+are not reachable from inside the Flatpak sandbox), and the host graphical
+session must be reachable from the helper. Any deployment option below must
+account for that too.
 
 There are three realistic ways to get these onto Bazzite. Flatpak and Distrobox
 are **not** among them: both are sandboxed/containerized and cannot move the
