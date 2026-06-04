@@ -55,18 +55,39 @@ integration suite is the intended home for the on-hardware checks.
 
 ## P1 — Stable contracts (no hidden drift)
 
-### P1.1 — Fix `UnsupportedSecurity` contract drift + add a drift guard
-**Status:** in progress. **Why it matters:** a present bug on a path we built.
+### P1.1 — `UnsupportedSecurity` contract drift + drift guard
+**Status:** core fix landed (#51); follow-ups below. **Why it matters:** a
+present bug on a path we built.
 
-The Rust helper can emit `RefusalReason::UnsupportedSecurity` (secured captive
+The Rust helper could emit `RefusalReason::UnsupportedSecurity` (secured captive
 network refused pre-setup), but the Python `RefusalReason` enum and
-`from_dbus_error_name` mapping (`desktop/gatepath/netns_client.py`) omit it — so
-the UI sees `UNKNOWN` instead of the typed reason. Fix the mapping, then close
-the class: extend the existing `schema-parity.yml` pattern (already used for the
-audit-log schema) to the **D-Bus interface + error names**, so a checked
-introspection XML / shared error-name list catches Rust↔Python drift in CI. Also
-move the `LaunchPortal` arity pin and the `PortalSubprocessExited` signal-shape
-check out of `--ignored` (they never run in CI today).
+`from_dbus_error_name` mapping (`desktop/gatepath/netns_client.py`) omitted it,
+so the UI saw `UNKNOWN`. #51 fixed the mapping and added a cross-language drift
+guard (`test_python_refusal_reasons_cover_every_rust_variant`) that parses
+`RefusalReason::as_str()` out of the Rust `lib.rs`.
+
+**Guard refinements (from the devils-advocate review of #51):**
+- **Round-trip through `from_dbus_error_name`** instead of asserting enum-value
+  membership — the current guard would miss "enum value present but mapping entry
+  absent" (the half that actually broke) and wrong-mapping. Highest value.
+- Add a **negative test** (an unknown suffix must resolve to `UNKNOWN`) so the
+  guard can't silently go vacuous.
+- Fix the guard's **over-claim**: it covers *RefusalReason* wire names, not
+  literally "every wire error" — `HelperError` (`dbus_service.rs`) also carries
+  `NotActive`/`ZBus`, which aren't `RefusalReason`s (`NotActive`'s mapping is
+  pinned in `test_refusal_reason_maps_known_variants`).
+- Optionally **parse `HelperError`** (the real wire-error enum) for full wire
+  coverage incl. `NotActive`.
+- Polish: name the likely cause in the parse-failure message, document the
+  PascalCase↔snake 1:1 convention the reconstruction relies on, and
+  cross-reference `schema-parity.yml` as the heavier shared-artifact alternative.
+
+**Bigger drift guard (still open):** extend the `schema-parity.yml` pattern
+(shared artifact + per-language conformance tests) to the **D-Bus interface +
+error names** — a checked introspection XML / shared error-name list both sides
+validate against — and move the `LaunchPortal` arity pin and the
+`PortalSubprocessExited` signal-shape check out of `--ignored` (they never run in
+CI today).
 
 ### P1.2 — Property/fuzz the privileged boundary validators
 **Status:** not started. **Why it matters:** these validators *are* the trust
