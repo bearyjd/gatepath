@@ -53,6 +53,9 @@ class RefusalReason(Enum):
     NOT_ACTIVE = "not_active"
     # Phase 5b.7 / 5c.2 — LaunchPortal refusal causes:
     INVALID_PORTAL_URL = "invalid_portal_url"
+    # DESK-004 — a display env value (WAYLAND_DISPLAY/DISPLAY/XAUTHORITY) failed
+    # the helper's validation.
+    INVALID_DISPLAY_ENV = "invalid_display_env"
     NO_ACTIVE_SESSION = "no_active_session"
     SENDER_MISMATCH = "sender_mismatch"
     SPAWN_FAILED = "spawn_failed"
@@ -83,6 +86,7 @@ class RefusalReason(Enum):
             "Throttled": cls.THROTTLED,
             "NotActive": cls.NOT_ACTIVE,
             "InvalidPortalUrl": cls.INVALID_PORTAL_URL,
+            "InvalidDisplayEnv": cls.INVALID_DISPLAY_ENV,
             "NoActiveSession": cls.NO_ACTIVE_SESSION,
             "SenderMismatch": cls.SENDER_MISMATCH,
             "SpawnFailed": cls.SPAWN_FAILED,
@@ -200,7 +204,13 @@ class HelperProxy(Protocol):
     def TeardownCaptive(self) -> None:  # noqa: N802
         ...
 
-    def LaunchPortal(self, portal_url: str) -> int:  # noqa: N802
+    def LaunchPortal(  # noqa: N802
+        self,
+        portal_url: str,
+        wayland_display: str,
+        x_display: str,
+        x_authority: str,
+    ) -> int:
         ...
 
 
@@ -290,8 +300,21 @@ class NetnsClient:
             return _classify_teardown_error(exc)
         return TeardownSuccess()
 
-    def launch_portal(self, portal_url: str) -> LaunchPortalResult:
+    def launch_portal(
+        self,
+        portal_url: str,
+        wayland_display: str = "",
+        x_display: str = "",
+        x_authority: str = "",
+    ) -> LaunchPortalResult:
         """Ask the helper to spawn a portal subprocess in the active netns.
+
+        The three display values are the graphical-session identifiers the
+        WebView needs to render; the helper sets them on the transient unit
+        via ``--setenv`` (DESK-004). ``""`` means "unset". They are read from
+        the UI process environment at the call boundary (see
+        :py:meth:`gatepath.window.GatepathWindow`); the helper validates them
+        and derives ``XDG_RUNTIME_DIR``/``DBUS_SESSION_BUS_ADDRESS`` itself.
 
         Returns :py:class:`LaunchPortalSuccess` carrying the spawned PID on
         success. The orchestrator subscribes to the helper's
@@ -303,10 +326,13 @@ class NetnsClient:
         reason. Common refusals: ``NO_ACTIVE_SESSION`` (no prior
         ``setup_captive``), ``SENDER_MISMATCH`` (different bus client),
         ``INVALID_PORTAL_URL`` (failed RFC 3986 / scheme / control checks
-        in the helper).
+        in the helper), ``INVALID_DISPLAY_ENV`` (a display value failed
+        validation).
         """
         try:
-            pid = self._proxy.LaunchPortal(portal_url)
+            pid = self._proxy.LaunchPortal(
+                portal_url, wayland_display, x_display, x_authority
+            )
         except Exception as exc:  # noqa: BLE001
             return _classify_launch_error(exc)
 

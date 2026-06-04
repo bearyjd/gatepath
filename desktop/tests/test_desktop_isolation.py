@@ -56,6 +56,7 @@ class FakeNetnsClient(NetnsClient):
         self.teardown_result: object = TeardownSuccess()
         self.setup_calls: list[str] = []
         self.launch_calls: list[str] = []
+        self.launch_display_calls: list[tuple[str, str, str]] = []
         self.teardown_calls: int = 0
 
     def setup_captive(self, interface_name: str):  # type: ignore[override]
@@ -63,8 +64,15 @@ class FakeNetnsClient(NetnsClient):
         assert isinstance(self.setup_result, (SetupSuccess, SetupRefused))
         return self.setup_result
 
-    def launch_portal(self, portal_url: str):  # type: ignore[override]
+    def launch_portal(  # type: ignore[override]
+        self,
+        portal_url: str,
+        wayland_display: str = "",
+        x_display: str = "",
+        x_authority: str = "",
+    ):
         self.launch_calls.append(portal_url)
+        self.launch_display_calls.append((wayland_display, x_display, x_authority))
         assert isinstance(self.launch_result, (LaunchPortalSuccess, LaunchPortalRefused))
         return self.launch_result
 
@@ -118,7 +126,23 @@ def test_engage_success_returns_pid_and_netns_path() -> None:
     assert result == EngageSuccess(netns_path="/var/run/netns/gatepath", pid=4242)
     assert client.setup_calls == ["wlan0"]
     assert client.launch_calls == ["http://captive.example/"]
+    # No display env passed → forwarded as empty strings (DESK-004).
+    assert client.launch_display_calls == [("", "", "")]
     assert signals.subscribe_count == 1
+
+
+def test_engage_forwards_display_env_to_launch() -> None:
+    iso, client, _ = _make_iso()
+
+    iso.engage(
+        "http://captive.example/",
+        "wlan0",
+        wayland_display="wayland-0",
+        x_display=":0",
+        x_authority="/home/u/.Xauthority",
+    )
+
+    assert client.launch_display_calls == [("wayland-0", ":0", "/home/u/.Xauthority")]
 
 
 def test_engage_setup_refused_does_not_attempt_launch() -> None:
@@ -162,7 +186,12 @@ def test_engage_subscribes_before_launch() -> None:
 
     subscribe_observed_during_launch = []
 
-    def launch_with_check(portal_url: str):
+    def launch_with_check(
+        portal_url: str,
+        wayland_display: str = "",
+        x_display: str = "",
+        x_authority: str = "",
+    ):
         subscribe_observed_during_launch.append(signals._active_callback is not None)
         return LaunchPortalSuccess(pid=42)
 
