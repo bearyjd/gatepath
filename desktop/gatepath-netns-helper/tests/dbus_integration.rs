@@ -114,9 +114,13 @@ fn launch_portal_wire_arity_is_four_strings() {
         proxy.call("LaunchPortal", &("http://captive.example/", "", "", ""));
     let err = result.expect_err("LaunchPortal without a session must be refused");
     let text = format!("{err:?}");
+    // NoActiveSession is the deterministic refusal when no SetupCaptive ran, and
+    // it only fires if the 4-arg method matched and executed. A wrong arity
+    // surfaces org.freedesktop.DBus.Error.UnknownMethod / InvalidArgs instead,
+    // which contains no such substring — so this fails loudly on signature drift.
     assert!(
-        text.contains("NetNsHelper.Error.") || text.contains("NoActiveSession"),
-        "expected a typed helper refusal (4-arg method matched), got: {text}"
+        text.contains("NoActiveSession"),
+        "expected NoActiveSession (4-arg method matched and ran), got: {text}"
     );
 }
 

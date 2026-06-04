@@ -344,7 +344,10 @@ fn validate_display_env(request: &SpawnRequest) -> Result<(), SpawnError> {
 }
 
 /// Shared boundary checks: length, no control/NUL bytes, charset allowlist.
-/// Whitespace is rejected implicitly — space is not in any allowlist.
+/// Whitespace is rejected implicitly — space is not in any allowlist. The
+/// length bound is in bytes; every caller's allowlist is ASCII-only, so a
+/// multi-byte char is rejected at the charset step and byte-vs-char length can
+/// never diverge surprisingly. (Keep allowlists ASCII if you touch this.)
 fn check_display_value(
     key: &str,
     raw: &str,
@@ -403,6 +406,15 @@ pub fn validate_xauthority(raw: &str) -> Result<(), SpawnError> {
     if !raw.starts_with('/') {
         return Err(SpawnError::InvalidDisplayEnv(
             "XAUTHORITY must be an absolute path".into(),
+        ));
+    }
+    // Reject `..` segments: defense in depth. The root helper never opens this
+    // path (only the unprivileged child does, as the caller), so traversal
+    // grants no privilege — but a normalized, traversal-free path is the
+    // least-astonishing thing to hand to a child.
+    if raw.split('/').any(|seg| seg == "..") {
+        return Err(SpawnError::InvalidDisplayEnv(
+            "XAUTHORITY must not contain '..' segments".into(),
         ));
     }
     check_display_value("XAUTHORITY", raw, |c| {
@@ -767,6 +779,26 @@ mod tests {
             validate_xauthority(".Xauthority").unwrap_err(),
             SpawnError::InvalidDisplayEnv(_)
         ));
+    }
+
+    #[test]
+    fn xauthority_with_dotdot_segment_is_rejected() {
+        assert!(matches!(
+            validate_xauthority("/home/u/../../etc/shadow").unwrap_err(),
+            SpawnError::InvalidDisplayEnv(_)
+        ));
+        // A filename that merely contains dots is fine — only a `..` *segment*
+        // is rejected.
+        assert!(validate_xauthority("/run/user/1000/..mit.cookie").is_ok());
+    }
+
+    #[test]
+    fn display_value_at_exactly_max_length_is_accepted() {
+        // Pins the boundary so a `>` → `>=` regression in the length check is
+        // caught. `/` + (MAX-1) chars == MAX bytes, all in the XAUTHORITY charset.
+        let at_max = "/".to_string() + &"a".repeat(MAX_DISPLAY_ENV_LEN - 1);
+        assert_eq!(at_max.len(), MAX_DISPLAY_ENV_LEN);
+        assert!(validate_xauthority(&at_max).is_ok());
     }
 
     #[test]
