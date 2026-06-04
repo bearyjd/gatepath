@@ -8,17 +8,28 @@ the surface the production Gatepath stack queries:
       GetDevices() -> ao   (returns [Devices/0])
 
   /org/freedesktop/NetworkManager/Devices/0:
-      Interface     (s)  = "wlan0"
-      DeviceType    (u)  = 2   (NM_DEVICE_TYPE_WIFI)
-      Connectivity  (u)  = 2   (NM_CONNECTIVITY_PORTAL)
+      Interface       (s)  = "wlan0"
+      DeviceType      (u)  = 2   (NM_DEVICE_TYPE_WIFI)
+      Connectivity    (u)  = 2   (NM_CONNECTIVITY_PORTAL)
+      [Device.Wireless] ActiveAccessPoint (o) = AccessPoints/0
 
-Why these three:
+  /org/freedesktop/NetworkManager/AccessPoints/0:
+      Ssid       (ay) = "CoffeeWiFi"
+      Flags      (u)  = 0   (no PRIVACY bit → open)
+      WpaFlags   (u)  = 0
+      RsnFlags   (u)  = 0
+
+Why these:
   * Python desktop (`gatepath.portal_monitor.CaptiveInterfaceLookup`) requires
     DeviceType == 2 AND Connectivity == 2, then keys off Interface to know
     which iface to hand the helper.
   * Rust helper (`gatepath-netns-helper::network_manager::NMCaptiveCheck`)
     iterates GetDevices(), matches Interface == "wlan0", reads Connectivity,
-    and accepts only Connectivity == 2 as captive.
+    and accepts only Connectivity == 2 as captive. It ALSO (DESK-002/003) reads
+    Device.Wireless.ActiveAccessPoint → the AccessPoint's Ssid + security flags
+    to capture the SSID and refuse secured networks up front; without the
+    Device.Wireless + AccessPoint surface, active_ap_state() fails and
+    setup_captive returns BACKEND_UNAVAILABLE. We mock an OPEN AP (all flags 0).
 
 Process holds the bus name for its lifetime; the entrypoint reaps it when
 the container shuts down.
@@ -37,6 +48,9 @@ NM_BUS = "org.freedesktop.NetworkManager"
 NM_PATH = "/org/freedesktop/NetworkManager"
 DEVICE_PATH = "/org/freedesktop/NetworkManager/Devices/0"
 DEVICE_IFACE = "org.freedesktop.NetworkManager.Device"
+WIRELESS_IFACE = "org.freedesktop.NetworkManager.Device.Wireless"
+AP_PATH = "/org/freedesktop/NetworkManager/AccessPoints/0"
+AP_IFACE = "org.freedesktop.NetworkManager.AccessPoint"
 MOCK_IFACE = "org.freedesktop.DBus.Mock"
 
 # Property values — kept as constants so a future "validated" or "limited"
@@ -93,6 +107,28 @@ def main() -> int:
             "Interface": INTERFACE_NAME,
             "DeviceType": WIFI_DEVICE_TYPE,
             "Connectivity": PORTAL_CONNECTIVITY,
+        },
+        [],
+    )
+
+    # DESK-002/003: the helper reads Device.Wireless.ActiveAccessPoint, then the
+    # AccessPoint's Ssid + security flags. Add the Wireless interface to the
+    # device (pointing at an AP) and an OPEN AccessPoint object.
+    # NB: AddProperties is called ON the target object (signature: interface,
+    # properties) — not on the NM root mock with a path argument.
+    device_mock = dbus.Interface(bus.get_object(NM_BUS, DEVICE_PATH), MOCK_IFACE)
+    device_mock.AddProperties(
+        WIRELESS_IFACE,
+        {"ActiveAccessPoint": dbus.ObjectPath(AP_PATH)},
+    )
+    mock.AddObject(
+        AP_PATH,
+        AP_IFACE,
+        {
+            "Ssid": dbus.ByteArray(b"CoffeeWiFi"),  # ay
+            "Flags": dbus.UInt32(0),                # no PRIVACY bit → open
+            "WpaFlags": dbus.UInt32(0),             # no WPA
+            "RsnFlags": dbus.UInt32(0),             # no WPA2/WPA3
         },
         [],
     )

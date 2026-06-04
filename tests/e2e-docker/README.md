@@ -20,25 +20,51 @@ the privileged Rust netns helper crate.
             └─────────────────────────┘         └──────────────────────────┘
 ```
 
+## Substrate: veth vs. a real Wi-Fi PHY
+
+This harness's "wlan0" is a **veth** masquerading as a wireless device. That
+exercises everything up to — but not including — the privileged path the current
+helper takes:
+
+- **DESK-001** moves the whole Wi-Fi **PHY** (`iw phy <phyN> set netns`, resolved
+  from `/sys/class/net/wlan0/phy80211`). A veth has no PHY.
+- **DESK-002** runs `wpa_supplicant` + a one-shot DHCP client **inside** the
+  netns. A veth can't associate (the harness ships test-double stubs for those
+  clients + an open-AP dbusmock so the orchestration still runs).
+
+So on a veth the scenario records an explicit `privileged_path: skipped` and
+exits 0 after the orchestration up to the PHY move. The full privileged path —
+PHY move, in-netns connectivity, the WebView spawn, and the **no-leak
+confinement check** — needs a real Wi-Fi radio (`mac80211_hwsim` / hardware),
+tracked as ROADMAP P0.1/P0.2. The *same* scenario runs the full path unchanged
+on that substrate.
+
+A third container, **trusted-sentinel**, sits on a separate `trusted_net` (the
+user's "other"/VPN side). The no-leak check asserts the sentinel is reachable
+from the client's host netns but **NOT** from inside the gatepath netns — i.e.
+portal traffic can't escape the captive compartment.
+
 ## What this does and doesn't cover
 
-**Covered:**
-- Captive detection (`portal_probe.probe`) against a real HTTP intercept
-- NetworkManager captive lookup (`NMCaptiveInterfaceLookup`) against a
-  python-dbusmock NM advertising `wlan0` with `Connectivity=PORTAL`
-- D-Bus activation of the Rust helper, PolicyKit auth (test override → YES)
-- Real kernel ops: `ip netns add gatepath`, `ip link set wlan0 netns gatepath`
-- Helper spawning the WebView runner via `setns + setresuid + execv`
-- Helper writing its JSONL audit log
-- Off-domain blocking — the portal HTML has `<script src=evil-tracker.example.com>`
-  and an external link, and the gateway records every Host header that
-  reaches mockportal. The assertion script fails if either off-domain
-  hostname appears.
+**Covered on the veth substrate (and in CI — `desktop-e2e.yml`):**
+- Captive detection (`portal_probe.probe`) against a real HTTP intercept.
+- NetworkManager captive lookup **and** the helper's DESK-002/003 AP-state query
+  (`Device.Wireless` → AccessPoint security flags) against a python-dbusmock NM.
+- D-Bus activation of the Rust helper + PolicyKit auth (test override → YES).
+- `ip netns add gatepath` (real).
+- **No-leak sentinel baseline:** the `trusted_net` sentinel is reachable from the
+  client's host netns (proving the later in-netns confinement check is meaningful).
+- Helper JSONL audit-log writes; off-domain blocking — the portal HTML embeds
+  `evil-tracker.example.com` + an external link, and the assertion fails if
+  either Host header reaches the gateway.
 
-**Not covered (yet):**
-- Android — that's an emulator problem, not a Docker one.
-- Real captive WiFi flakiness (lossy DHCP, captive lease churn, Wi-Fi
-  re-association mid-portal). The static IP path here is the happy path.
+**Needs a real Wi-Fi PHY (skipped on veth; runs on `mac80211_hwsim`/hardware):**
+- The PHY move, in-netns `wpa_supplicant`/DHCP, the WebView spawn (`systemd-run`),
+  and the **no-leak confinement gate** (the in-netns sentinel probe must FAIL to
+  reach `trusted_net` — proving portal traffic can't leak out).
+
+**Out of scope:**
+- Android — emulator harness (`tests/e2e-android`), not Docker.
 - TLS-intercepting captives. Gatepath's probe is HTTP-only by design.
 
 ## Quick start

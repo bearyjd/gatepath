@@ -58,8 +58,9 @@ def check_scenario(report: dict[str, Any], failures: list[str]) -> None:
 
     steps = {s["name"]: s for s in report.get("steps", [])}
     expected = ["reset_gateway", "probe", "snapshot_gateway_log",
-                "nm_lookup", "helper_connect", "setup", "launch",
-                "dwell_and_screenshot", "kill", "teardown", "audit_check"]
+                "sentinel_baseline", "nm_lookup", "helper_connect", "setup",
+                "launch", "dwell_and_screenshot", "netns_confinement", "kill",
+                "teardown", "audit_check"]
     for name in expected:
         s = steps.get(name)
         if s is None:
@@ -174,6 +175,75 @@ def check_gateway_log(entries: list[dict[str, Any]], scenario_report: dict[str, 
         ok("gateway.off_domain_blocked", "no off-domain requests observed")
 
 
+def check_confinement(report: dict[str, Any], artifacts_root: Path,
+                      failures: list[str]) -> None:
+    print("D. No-leak confinement (gatepath netns ⇸ trusted net)")
+    steps = {s["name"]: s for s in report.get("steps", [])}
+
+    # The host-side baseline must have reached the sentinel; otherwise an
+    # in-netns failure proves nothing (the sentinel could just be down).
+    base = steps.get("sentinel_baseline")
+    if not base or not base.get("ok"):
+        fail("confinement.baseline",
+             "host could not reach the sentinel — confinement result is "
+             f"meaningless: {base.get('error') if base else 'step missing'}", failures)
+    elif base.get("data", {}).get("http_code") != 200:
+        fail("confinement.baseline", f"sentinel baseline not 200: {base.get('data')}", failures)
+    else:
+        ok("confinement.baseline", "sentinel reachable from the host (trusted) side")
+
+    # The load-bearing check: the in-netns probe must have FAILED to reach the
+    # sentinel. Read the runner's artifact directly so this gate stands on its
+    # own, not just on the in-container step's self-report.
+    probe_path = artifacts_root / "netns-sentinel-probe.json"
+    if not probe_path.exists():
+        fail("confinement.netns_probe",
+             f"in-netns probe artifact missing at {probe_path}", failures)
+        return
+    try:
+        probe = json.loads(probe_path.read_text())
+    except (json.JSONDecodeError, OSError) as exc:
+        fail("confinement.netns_probe", f"unreadable probe artifact: {exc}", failures)
+        return
+
+    if probe.get("reachable") is True:
+        fail("confinement.no_leak",
+             f"LEAK: the gatepath netns reached the trusted-net sentinel: {probe}",
+             failures)
+    elif probe.get("reachable") is False:
+        ok("confinement.no_leak",
+           f"in-netns probe could not reach the sentinel (curl_rc={probe.get('curl_rc')})")
+    else:
+        fail("confinement.no_leak",
+             f"probe artifact has no clear reachable verdict: {probe}", failures)
+
+
+def check_scenario_skipped(report: dict[str, Any], failures: list[str]) -> None:
+    print("A. Scenario report (privileged path SKIPPED — no Wi-Fi PHY)")
+    if report.get("rc") != 0:
+        fail("scenario.rc", f"expected 0, got {report.get('rc')}", failures)
+    else:
+        ok("scenario.rc", "0")
+
+    steps = {s["name"]: s for s in report.get("steps", [])}
+    # Everything up to (and including) the explicit skip marker must have run.
+    required = ["reset_gateway", "probe", "snapshot_gateway_log",
+                "sentinel_baseline", "nm_lookup", "helper_connect",
+                "privileged_path"]
+    for name in required:
+        s = steps.get(name)
+        if s is None:
+            fail(f"scenario.{name}", "step missing from report", failures)
+        elif not s.get("ok"):
+            fail(f"scenario.{name}", f"step failed: {s.get('error')}", failures)
+        else:
+            ok(f"scenario.{name}", _summarise(s.get("data") or {}))
+
+    pp = steps.get("privileged_path", {}).get("data", {})
+    if not pp.get("skipped"):
+        fail("scenario.privileged_path", "expected skipped=True", failures)
+
+
 def _summarise(data: dict[str, Any]) -> str:
     # One-line summary for printout; only the small primitives.
     parts = []
@@ -196,23 +266,44 @@ def main(argv: list[str]) -> int:
         print(f"scenario-report.json missing in {root}", file=sys.stderr)
         return 1
     report = json.loads(scenario_path.read_text())
-    check_scenario(report, failures)
 
-    audit_path = root / "helper-audit.jsonl"
-    if not audit_path.exists():
-        failures.append("audit.file: helper-audit.jsonl missing")
-        print(f"  ✗ helper-audit.jsonl missing in {root}", file=sys.stderr)
+    # On a veth substrate the scenario records an explicit privileged-path SKIP
+    # (no Wi-Fi PHY → no DESK-001 PHY move). Assert only what actually ran; the
+    # full audit/gateway/confinement gates require a real radio (mac80211_hwsim).
+    skipped = any(
+        s.get("name") == "privileged_path" and (s.get("data") or {}).get("skipped")
+        for s in report.get("steps", [])
+    )
+    if skipped:
+        check_scenario_skipped(report, failures)
+        base = next((s for s in report.get("steps", [])
+                     if s.get("name") == "sentinel_baseline"), None)
+        if not (base and base.get("ok")):
+            fail("confinement.baseline", "host could not reach the sentinel", failures)
+        else:
+            ok("confinement.baseline", "sentinel reachable from the host (trusted) side")
+        print("\nNOTE: no-leak confinement DEFERRED — needs a real Wi-Fi PHY "
+              "(mac80211_hwsim / hardware). See docs/ROADMAP.md P0.1/P0.2.")
     else:
-        entries = [json.loads(line) for line in audit_path.read_text().splitlines() if line.strip()]
-        check_helper_audit(entries, failures)
+        check_scenario(report, failures)
 
-    gateway_path = root / "gateway-log.json"
-    if not gateway_path.exists():
-        failures.append("gateway.file: gateway-log.json missing")
-        print(f"  ✗ gateway-log.json missing in {root}", file=sys.stderr)
-    else:
-        entries = json.loads(gateway_path.read_text())
-        check_gateway_log(entries, report, failures)
+        audit_path = root / "helper-audit.jsonl"
+        if not audit_path.exists():
+            failures.append("audit.file: helper-audit.jsonl missing")
+            print(f"  ✗ helper-audit.jsonl missing in {root}", file=sys.stderr)
+        else:
+            entries = [json.loads(line) for line in audit_path.read_text().splitlines() if line.strip()]
+            check_helper_audit(entries, failures)
+
+        gateway_path = root / "gateway-log.json"
+        if not gateway_path.exists():
+            failures.append("gateway.file: gateway-log.json missing")
+            print(f"  ✗ gateway-log.json missing in {root}", file=sys.stderr)
+        else:
+            entries = json.loads(gateway_path.read_text())
+            check_gateway_log(entries, report, failures)
+
+        check_confinement(report, root, failures)
 
     if failures:
         print(f"\n{len(failures)} failure(s):", file=sys.stderr)
