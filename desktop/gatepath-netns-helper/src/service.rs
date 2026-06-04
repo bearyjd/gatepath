@@ -573,6 +573,9 @@ impl<
             portal_url: request.portal_url.clone(),
             netns_name: NETNS_NAME.to_string(),
             caller_uid,
+            wayland_display: request.wayland_display.clone(),
+            x_display: request.x_display.clone(),
+            x_authority: request.x_authority.clone(),
         };
 
         // Register the per-spawn exit callback BEFORE the actual spawn.
@@ -780,6 +783,7 @@ fn refusal_for_caller_uid_error(err: &CallerUidError) -> RefusalReason {
 fn refusal_for_spawn_error(err: &SpawnError) -> RefusalReason {
     match err {
         SpawnError::InvalidUrl(_) => RefusalReason::InvalidPortalUrl,
+        SpawnError::InvalidDisplayEnv(_) => RefusalReason::InvalidDisplayEnv,
         SpawnError::NetnsMissing { .. } => RefusalReason::KernelError,
         SpawnError::CallerUidUnavailable(_) => RefusalReason::Unauthorised,
         SpawnError::SyscallFailed(_) => RefusalReason::SpawnFailed,
@@ -1584,6 +1588,25 @@ mod tests {
     fn launch_req(url: &str) -> LaunchPortalRequest {
         LaunchPortalRequest {
             portal_url: url.into(),
+            wayland_display: String::new(),
+            x_display: String::new(),
+            x_authority: String::new(),
+        }
+    }
+
+    /// Like [`launch_req`] but with the display fields populated, for the
+    /// DESK-004 env-plumbing assertions.
+    fn launch_req_with_display(
+        url: &str,
+        wayland_display: &str,
+        x_display: &str,
+        x_authority: &str,
+    ) -> LaunchPortalRequest {
+        LaunchPortalRequest {
+            portal_url: url.into(),
+            wayland_display: wayland_display.into(),
+            x_display: x_display.into(),
+            x_authority: x_authority.into(),
         }
     }
 
@@ -1667,6 +1690,57 @@ mod tests {
         assert_eq!(entries[1].action, AuditAction::LaunchPortal);
         assert_eq!(entries[1].pid, Some(pid));
         assert_eq!(entries[1].decision, AuditDecision::Success);
+    }
+
+    #[test]
+    fn launch_forwards_display_env_to_spawner() {
+        // DESK-004: the three client display fields must reach the SpawnRequest
+        // verbatim so systemd_run_args can turn them into --setenv tokens.
+        let Fixture { svc, spawner, .. } = svc_with_audit(
+            FakeNetnsOps::new(),
+            FakeAuthorizer::allow_all(),
+            allow_captive(),
+            permissive_throttle(),
+        );
+        svc.setup_captive(&req("wlan0"), ":1.42");
+        let resp = svc.launch_portal_subprocess(
+            &launch_req_with_display(
+                "http://captive.example/",
+                "wayland-0",
+                ":0",
+                "/home/u/.Xauthority",
+            ),
+            ":1.42",
+        );
+        assert!(matches!(resp, LaunchPortalResponse::Success { .. }));
+        let reqs = spawner.requests();
+        assert_eq!(reqs.len(), 1);
+        assert_eq!(reqs[0].wayland_display, "wayland-0");
+        assert_eq!(reqs[0].x_display, ":0");
+        assert_eq!(reqs[0].x_authority, "/home/u/.Xauthority");
+    }
+
+    #[test]
+    fn launch_with_invalid_display_env_refused() {
+        let Fixture { svc, spawner, .. } = svc_with_audit(
+            FakeNetnsOps::new(),
+            FakeAuthorizer::allow_all(),
+            allow_captive(),
+            permissive_throttle(),
+        );
+        svc.setup_captive(&req("wlan0"), ":1.42");
+        // DISPLAY without a ':' fails validation in the (fake) spawner.
+        let resp = svc.launch_portal_subprocess(
+            &launch_req_with_display("http://captive.example/", "", "bogus", ""),
+            ":1.42",
+        );
+        assert_eq!(
+            resp,
+            LaunchPortalResponse::Refused {
+                reason: RefusalReason::InvalidDisplayEnv,
+            },
+        );
+        assert_eq!(spawner.requests().len(), 0);
     }
 
     #[test]

@@ -123,6 +123,10 @@ pub enum RefusalReason {
     /// Phase 5b.7: portal URL passed to `LaunchPortal` failed validation
     /// (non-http(s) scheme, control bytes, or unparseable per RFC 3986).
     InvalidPortalUrl,
+    /// DESK-004: a client-supplied display env value (`WAYLAND_DISPLAY`,
+    /// `DISPLAY`, or `XAUTHORITY`) failed validation (length, control byte,
+    /// charset, or `DISPLAY`/`XAUTHORITY` shape).
+    InvalidDisplayEnv,
     /// Phase 5b.7: caller invoked `LaunchPortal` without a prior successful
     /// `SetupCaptive`. Single-session enforcement.
     NoActiveSession,
@@ -158,6 +162,7 @@ impl RefusalReason {
             Self::AlreadyActive => "already_active",
             Self::Throttled => "throttled",
             Self::InvalidPortalUrl => "invalid_portal_url",
+            Self::InvalidDisplayEnv => "invalid_display_env",
             Self::NoActiveSession => "no_active_session",
             Self::SenderMismatch => "sender_mismatch",
             Self::SpawnFailed => "spawn_failed",
@@ -166,13 +171,22 @@ impl RefusalReason {
     }
 }
 
-/// Request shape for the D-Bus method `LaunchPortal(portal_url: s) -> u`
-/// (Phase 5b.7). Helper validates the URL, confirms the active session
-/// belongs to the calling sender, and forks a subprocess into the
-/// gatepath netns.
+/// Request shape for the D-Bus method
+/// `LaunchPortal(portal_url: s, wayland_display: s, x_display: s, x_authority: s) -> u`
+/// (Phase 5b.7; display fields DESK-004). Helper validates the URL and the
+/// display values, confirms the active session belongs to the calling sender,
+/// and launches the WebView in a transient unit joined to the gatepath netns.
+///
+/// The three display fields are forwarded from the unprivileged UI so the
+/// WebView can reach the compositor/X server; `""` = unset. `XDG_RUNTIME_DIR`
+/// and `DBUS_SESSION_BUS_ADDRESS` are NOT carried here — the helper derives them
+/// from the authenticated caller UID.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LaunchPortalRequest {
     pub portal_url: String,
+    pub wayland_display: String,
+    pub x_display: String,
+    pub x_authority: String,
 }
 
 /// Response shape for `LaunchPortal`.

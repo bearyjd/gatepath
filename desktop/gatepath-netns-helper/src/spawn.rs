@@ -77,6 +77,8 @@ pub const SYSTEMD_RUN_BINARY: &str = "systemd-run";
 pub enum SpawnError {
     #[error("portal URL invalid: {0}")]
     InvalidUrl(String),
+    #[error("display env invalid: {0}")]
+    InvalidDisplayEnv(String),
     #[error("netns '{name}' is not present at {path:?}")]
     NetnsMissing { name: String, path: PathBuf },
     #[error("could not look up caller UID: {0}")]
@@ -110,6 +112,14 @@ pub struct SpawnRequest {
     pub portal_url: String,
     pub netns_name: String,
     pub caller_uid: u32,
+    /// Graphical-session display identifiers, forwarded from the unprivileged
+    /// UI so the WebView can reach the compositor/X server. Empty = unset. Only
+    /// these three are trusted-from-client (and validated); `XDG_RUNTIME_DIR`
+    /// and `DBUS_SESSION_BUS_ADDRESS` are derived helper-side from `caller_uid`
+    /// (see [`setenv_args`]). DESK-004.
+    pub wayland_display: String,
+    pub x_display: String,
+    pub x_authority: String,
 }
 
 /// Privileged spawn surface. Real impl ([`LinuxSpawner`]) launches a transient
@@ -181,6 +191,7 @@ impl LinuxSpawner {
 impl Spawner for LinuxSpawner {
     fn spawn(&self, request: &SpawnRequest) -> Result<u32, SpawnError> {
         validate_portal_url(&request.portal_url)?;
+        validate_display_env(request)?;
 
         // Fail closed if the netns isn't present. `systemd-run` would also
         // fail when `NetworkNamespacePath=` can't be opened, but a clean
@@ -262,11 +273,14 @@ fn netns_mount_path(name: &str) -> PathBuf {
 ///   supplementary groups via `initgroups(3)`. We deliberately do NOT pass
 ///   `--gid`: forcing `GID==UID` is wrong on non-user-private-group setups and
 ///   fails hard if that GID doesn't exist.
+/// - `--setenv=KEY=VAL` (see [`setenv_args`]): the graphical-session env the
+///   WebView needs to reach the display. Each is one `Command::args` token, so
+///   a value can never escape into a `systemd-run` option (no shell).
 /// - `--`: terminate option parsing so the runner path and the (validated)
 ///   portal URL can never be interpreted as `systemd-run` options.
 fn systemd_run_args(runner_path: &Path, request: &SpawnRequest) -> Vec<String> {
     let netns_path = netns_mount_path(&request.netns_name);
-    vec![
+    let mut args = vec![
         "--wait".to_string(),
         "--collect".to_string(),
         "--quiet".to_string(),
@@ -274,10 +288,138 @@ fn systemd_run_args(runner_path: &Path, request: &SpawnRequest) -> Vec<String> {
         "--property=MemoryDenyWriteExecute=no".to_string(),
         format!("--property=NetworkNamespacePath={}", netns_path.display()),
         format!("--uid={}", request.caller_uid),
-        "--".to_string(),
-        runner_path.to_string_lossy().into_owned(),
-        request.portal_url.clone(),
-    ]
+    ];
+    args.extend(setenv_args(request));
+    args.push("--".to_string());
+    args.push(runner_path.to_string_lossy().into_owned());
+    args.push(request.portal_url.clone());
+    args
+}
+
+/// Build the `--setenv=KEY=VAL` tokens for the WebView's graphical-session env.
+///
+/// Two sources, by trust:
+/// - **Derived** from the SO_PEERCRED-authenticated `caller_uid` (never trusted
+///   from the client, because they point WebKit's IPC at a socket):
+///   `XDG_RUNTIME_DIR=/run/user/<uid>` and
+///   `DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/<uid>/bus`. Always emitted.
+/// - **From the client**, validated and only when non-empty: `WAYLAND_DISPLAY`,
+///   `DISPLAY`, `XAUTHORITY`. These are ephemeral session state that can't be
+///   derived; they're interpreted only by the unprivileged child, so a bad
+///   value harms only the caller's own session.
+///
+/// `GDK_BACKEND` is intentionally NOT set — GDK auto-selects Wayland (if
+/// `WAYLAND_DISPLAY` is set and reachable) else X11.
+fn setenv_args(request: &SpawnRequest) -> Vec<String> {
+    let uid = request.caller_uid;
+    let mut args = vec![
+        format!("--setenv=XDG_RUNTIME_DIR=/run/user/{uid}"),
+        format!("--setenv=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/{uid}/bus"),
+    ];
+    if !request.wayland_display.is_empty() {
+        args.push(format!(
+            "--setenv=WAYLAND_DISPLAY={}",
+            request.wayland_display
+        ));
+    }
+    if !request.x_display.is_empty() {
+        args.push(format!("--setenv=DISPLAY={}", request.x_display));
+    }
+    if !request.x_authority.is_empty() {
+        args.push(format!("--setenv=XAUTHORITY={}", request.x_authority));
+    }
+    args
+}
+
+/// Max length for any client-supplied display-env value. Nothing legitimate is
+/// longer; a bound caps the argv the helper hands to `systemd-run`.
+const MAX_DISPLAY_ENV_LEN: usize = 256;
+
+/// Validate all three client-supplied display values on the [`SpawnRequest`].
+/// Empty values are allowed (= unset) and skipped.
+fn validate_display_env(request: &SpawnRequest) -> Result<(), SpawnError> {
+    validate_wayland_display(&request.wayland_display)?;
+    validate_display(&request.x_display)?;
+    validate_xauthority(&request.x_authority)
+}
+
+/// Shared boundary checks: length, no control/NUL bytes, charset allowlist.
+/// Whitespace is rejected implicitly — space is not in any allowlist. The
+/// length bound is in bytes; every caller's allowlist is ASCII-only, so a
+/// multi-byte char is rejected at the charset step and byte-vs-char length can
+/// never diverge surprisingly. (Keep allowlists ASCII if you touch this.)
+fn check_display_value(
+    key: &str,
+    raw: &str,
+    allowed: impl Fn(char) -> bool,
+) -> Result<(), SpawnError> {
+    if raw.len() > MAX_DISPLAY_ENV_LEN {
+        return Err(SpawnError::InvalidDisplayEnv(format!(
+            "{key} exceeds {MAX_DISPLAY_ENV_LEN} bytes"
+        )));
+    }
+    if let Some(bad) = raw.bytes().find(|&b| b < 0x20 || b == 0x7F) {
+        return Err(SpawnError::InvalidDisplayEnv(format!(
+            "{key} contains control byte 0x{bad:02X}"
+        )));
+    }
+    if let Some(c) = raw.chars().find(|&c| !allowed(c)) {
+        return Err(SpawnError::InvalidDisplayEnv(format!(
+            "{key} contains disallowed character {c:?}"
+        )));
+    }
+    Ok(())
+}
+
+/// `WAYLAND_DISPLAY`: a socket name (`wayland-0`) or an absolute path
+/// (`/run/user/1000/wayland-0`), so `/` is allowed.
+pub fn validate_wayland_display(raw: &str) -> Result<(), SpawnError> {
+    if raw.is_empty() {
+        return Ok(());
+    }
+    check_display_value("WAYLAND_DISPLAY", raw, |c| {
+        c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-' | '/')
+    })
+}
+
+/// `DISPLAY`: `:0`, `:0.0`, or `host:0`. Must contain a `:`.
+pub fn validate_display(raw: &str) -> Result<(), SpawnError> {
+    if raw.is_empty() {
+        return Ok(());
+    }
+    check_display_value("DISPLAY", raw, |c| {
+        c.is_ascii_alphanumeric() || matches!(c, '.' | ':' | '_' | '-')
+    })?;
+    if !raw.contains(':') {
+        return Err(SpawnError::InvalidDisplayEnv(
+            "DISPLAY must contain ':'".into(),
+        ));
+    }
+    Ok(())
+}
+
+/// `XAUTHORITY`: an absolute path to the caller's X cookie file.
+pub fn validate_xauthority(raw: &str) -> Result<(), SpawnError> {
+    if raw.is_empty() {
+        return Ok(());
+    }
+    if !raw.starts_with('/') {
+        return Err(SpawnError::InvalidDisplayEnv(
+            "XAUTHORITY must be an absolute path".into(),
+        ));
+    }
+    // Reject `..` segments: defense in depth. The root helper never opens this
+    // path (only the unprivileged child does, as the caller), so traversal
+    // grants no privilege — but a normalized, traversal-free path is the
+    // least-astonishing thing to hand to a child.
+    if raw.split('/').any(|seg| seg == "..") {
+        return Err(SpawnError::InvalidDisplayEnv(
+            "XAUTHORITY must not contain '..' segments".into(),
+        ));
+    }
+    check_display_value("XAUTHORITY", raw, |c| {
+        c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-' | '/')
+    })
 }
 
 /// Validate a portal URL the helper is about to pass to the runner.
@@ -372,6 +514,7 @@ impl Default for FakeSpawner {
 impl Spawner for FakeSpawner {
     fn spawn(&self, request: &SpawnRequest) -> Result<u32, SpawnError> {
         validate_portal_url(&request.portal_url)?;
+        validate_display_env(request)?;
         let mut inner = self.inner.lock().unwrap();
         if let Some(target) = &inner.fail_for_url
             && target == &request.portal_url
@@ -411,6 +554,9 @@ mod tests {
             portal_url: url.into(),
             netns_name: "gatepath".into(),
             caller_uid: 1000,
+            wayland_display: String::new(),
+            x_display: String::new(),
+            x_authority: String::new(),
         }
     }
 
@@ -484,6 +630,8 @@ mod tests {
                 "--property=MemoryDenyWriteExecute=no".to_string(),
                 "--property=NetworkNamespacePath=/var/run/netns/gatepath".to_string(),
                 "--uid=1000".to_string(),
+                "--setenv=XDG_RUNTIME_DIR=/run/user/1000".to_string(),
+                "--setenv=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus".to_string(),
                 "--".to_string(),
                 "/usr/lib/gatepath/portal-webview-runner".to_string(),
                 "http://captive.example/login".to_string(),
@@ -526,6 +674,168 @@ mod tests {
         // No explicit `--gid`: systemd derives the caller's real primary group
         // from the user database rather than forcing GID==UID.
         assert!(!args.iter().any(|a| a.starts_with("--gid")));
+        // The derived env is built from the request UID, never the client.
+        assert!(
+            args.iter()
+                .any(|a| a == "--setenv=XDG_RUNTIME_DIR=/run/user/1234")
+        );
+        assert!(
+            args.iter()
+                .any(|a| a == "--setenv=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1234/bus")
+        );
+    }
+
+    fn pos(args: &[String], needle: &str) -> usize {
+        args.iter()
+            .position(|a| a == needle)
+            .unwrap_or_else(|| panic!("missing {needle:?} in {args:?}"))
+    }
+
+    #[test]
+    fn systemd_run_args_emits_validated_display_vars_when_present() {
+        let runner = Path::new(PORTAL_RUNNER_PATH);
+        let mut r = req("http://captive.example/");
+        r.wayland_display = "wayland-0".into();
+        r.x_display = ":0".into();
+        r.x_authority = "/home/u/.Xauthority".into();
+        let args = systemd_run_args(runner, &r);
+
+        // All three appear, AFTER the derived vars and BEFORE the `--` terminator.
+        let dbus = pos(
+            &args,
+            "--setenv=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus",
+        );
+        let wl = pos(&args, "--setenv=WAYLAND_DISPLAY=wayland-0");
+        let disp = pos(&args, "--setenv=DISPLAY=:0");
+        let xauth = pos(&args, "--setenv=XAUTHORITY=/home/u/.Xauthority");
+        let dashdash = pos(&args, "--");
+        assert!(dbus < wl);
+        assert!(wl < dashdash && disp < dashdash && xauth < dashdash);
+    }
+
+    #[test]
+    fn systemd_run_args_omits_empty_display_vars() {
+        let runner = Path::new(PORTAL_RUNNER_PATH);
+        let args = systemd_run_args(runner, &req("http://captive.example/"));
+        // Derived vars always present; client display vars omitted when empty.
+        assert!(
+            args.iter()
+                .any(|a| a.starts_with("--setenv=XDG_RUNTIME_DIR="))
+        );
+        assert!(!args.iter().any(|a| a.contains("WAYLAND_DISPLAY")));
+        assert!(
+            !args
+                .iter()
+                .any(|a| a.contains("=DISPLAY=") || a.contains("--setenv=DISPLAY"))
+        );
+        assert!(!args.iter().any(|a| a.contains("XAUTHORITY")));
+    }
+
+    #[test]
+    fn systemd_run_args_absolute_wayland_path_is_one_token() {
+        // An absolute-path WAYLAND_DISPLAY is valid (used verbatim as the socket
+        // path) and must land as exactly one argv token — no option escape.
+        let runner = Path::new(PORTAL_RUNNER_PATH);
+        let mut r = req("http://captive.example/");
+        r.wayland_display = "/run/user/1000/wayland-0".into();
+        assert!(validate_wayland_display(&r.wayland_display).is_ok());
+        let args = systemd_run_args(runner, &r);
+        assert!(
+            args.iter()
+                .any(|a| a == "--setenv=WAYLAND_DISPLAY=/run/user/1000/wayland-0")
+        );
+    }
+
+    // ── display-env validators ──────────────────────────────────────────
+
+    #[test]
+    fn empty_display_values_are_allowed() {
+        assert!(validate_wayland_display("").is_ok());
+        assert!(validate_display("").is_ok());
+        assert!(validate_xauthority("").is_ok());
+    }
+
+    #[test]
+    fn valid_display_values_pass() {
+        assert!(validate_wayland_display("wayland-0").is_ok());
+        assert!(validate_wayland_display("/run/user/1000/wayland-1").is_ok());
+        assert!(validate_display(":0").is_ok());
+        assert!(validate_display(":0.0").is_ok());
+        assert!(validate_display("somehost:0").is_ok());
+        assert!(validate_xauthority("/home/u/.Xauthority").is_ok());
+    }
+
+    #[test]
+    fn display_without_colon_is_rejected() {
+        assert!(matches!(
+            validate_display("0").unwrap_err(),
+            SpawnError::InvalidDisplayEnv(_)
+        ));
+    }
+
+    #[test]
+    fn relative_xauthority_is_rejected() {
+        assert!(matches!(
+            validate_xauthority(".Xauthority").unwrap_err(),
+            SpawnError::InvalidDisplayEnv(_)
+        ));
+    }
+
+    #[test]
+    fn xauthority_with_dotdot_segment_is_rejected() {
+        assert!(matches!(
+            validate_xauthority("/home/u/../../etc/shadow").unwrap_err(),
+            SpawnError::InvalidDisplayEnv(_)
+        ));
+        // A filename that merely contains dots is fine — only a `..` *segment*
+        // is rejected.
+        assert!(validate_xauthority("/run/user/1000/..mit.cookie").is_ok());
+    }
+
+    #[test]
+    fn display_value_at_exactly_max_length_is_accepted() {
+        // Pins the boundary so a `>` → `>=` regression in the length check is
+        // caught. `/` + (MAX-1) chars == MAX bytes, all in the XAUTHORITY charset.
+        let at_max = "/".to_string() + &"a".repeat(MAX_DISPLAY_ENV_LEN - 1);
+        assert_eq!(at_max.len(), MAX_DISPLAY_ENV_LEN);
+        assert!(validate_xauthority(&at_max).is_ok());
+    }
+
+    #[test]
+    fn display_env_with_space_or_control_byte_is_rejected() {
+        assert!(matches!(
+            validate_wayland_display("wayland 0").unwrap_err(),
+            SpawnError::InvalidDisplayEnv(_)
+        ));
+        assert!(matches!(
+            validate_wayland_display("wayland-0\n").unwrap_err(),
+            SpawnError::InvalidDisplayEnv(_)
+        ));
+        assert!(matches!(
+            validate_display(":0;rm -rf").unwrap_err(),
+            SpawnError::InvalidDisplayEnv(_)
+        ));
+    }
+
+    #[test]
+    fn oversized_display_value_is_rejected() {
+        let huge = "/".to_string() + &"a".repeat(MAX_DISPLAY_ENV_LEN);
+        assert!(matches!(
+            validate_xauthority(&huge).unwrap_err(),
+            SpawnError::InvalidDisplayEnv(_)
+        ));
+    }
+
+    #[test]
+    fn spawn_rejects_invalid_display_env() {
+        let s = FakeSpawner::new();
+        let mut r = req("http://captive.example/");
+        r.x_display = "no-colon".into();
+        assert!(matches!(
+            s.spawn(&r).unwrap_err(),
+            SpawnError::InvalidDisplayEnv(_)
+        ));
+        assert_eq!(s.requests().len(), 0);
     }
 
     #[test]

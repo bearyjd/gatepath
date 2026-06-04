@@ -72,10 +72,16 @@ surfaced in security/code review):
       `systemd-run` joins the netns via `NetworkNamespacePath=/var/run/netns/gatepath`,
       drops to the caller via `--uid` (systemd derives the caller's real primary
       group + resets supplementary groups), and the WebKit JIT runs under that
-      unit's `MemoryDenyWriteExecute=no` while the helper keeps W^X. Also confirm
-      the WebView gets the user's graphical-session env (`WAYLAND_DISPLAY`/`DISPLAY`,
-      `XDG_RUNTIME_DIR`, `DBUS_SESSION_BUS_ADDRESS`) — not plumbed yet; today the
-      transient unit inherits none, same display gap the prior fork path had.
+      unit's `MemoryDenyWriteExecute=no` while the helper keeps W^X.
+- [ ] **DESK-004 display-env plumbing** (`LaunchPortal` now carries
+      `wayland_display`/`x_display`/`x_authority`; helper derives
+      `XDG_RUNTIME_DIR`/`DBUS_SESSION_BUS_ADDRESS` from the caller UID and sets
+      all via `--setenv`). The *mechanism* is implemented and unit-tested at the
+      argv level; on hardware confirm: the WebView actually connects to the
+      Wayland/X socket and renders from inside the netns; `/run/user/<uid>/bus`
+      is reachable at runtime (the helper must NOT pre-stat it — `ProtectHome`
+      hides it; let a missing socket fail at the child → non-zero `--wait` →
+      `SpawnFailed`); and the XWayland `XAUTHORITY` cookie round-trips for X11.
 - [ ] Teardown leaves no stray privileged processes; the SIGTERM→SIGKILL
       straggler sweep reaps the DHCP client and supplicant before `ip netns del`.
       The transient WebView unit is `--collect`-cleaned by systemd; confirm no
