@@ -235,6 +235,26 @@ pub fn dhcp_args(client: DhcpClient, netns: &str, interface: &str) -> Vec<String
     args
 }
 
+/// Environment variable that selects the in-netns DHCP client at helper
+/// startup. Recognized values: `dhclient` (the compiled-in default) and
+/// `udhcpc`. Distros ship different DHCP clients — Fedora/atomic hosts, for
+/// example, carry neither ISC `dhclient` nor BusyBox by default — so packagers
+/// and the `mac80211_hwsim` test harness set this to match what's installed. An
+/// unset, empty, or unrecognized value falls back to the default, so shipping
+/// behavior is unchanged unless the variable is set explicitly.
+pub const DHCP_CLIENT_ENV: &str = "GATEPATH_DHCP_CLIENT";
+
+/// Pure mapping from a [`DHCP_CLIENT_ENV`] value to a [`DhcpClient`]. Split out
+/// from [`LinuxNetnsConnectivity::new`] so it is unit-testable without mutating
+/// process-global environment state.
+fn parse_dhcp_client(value: Option<&str>) -> DhcpClient {
+    match value {
+        Some("udhcpc") => DhcpClient::Udhcpc,
+        // `dhclient`, unset, empty, or anything unrecognized → compiled-in default.
+        _ => DhcpClient::Dhclient,
+    }
+}
+
 fn runtime_conf_path(runtime_dir: &Path, netns_name: &str) -> PathBuf {
     runtime_dir.join(format!("wpa-{netns_name}.conf"))
 }
@@ -257,9 +277,10 @@ pub struct LinuxNetnsConnectivity {
 
 impl LinuxNetnsConnectivity {
     pub fn new() -> Self {
+        let dhcp_client = parse_dhcp_client(std::env::var(DHCP_CLIENT_ENV).ok().as_deref());
         Self {
             ip_binary: PathBuf::from("ip"),
-            dhcp_client: DhcpClient::Dhclient,
+            dhcp_client,
             runtime_dir: PathBuf::from(RUNTIME_DIR),
         }
     }
@@ -666,6 +687,21 @@ mod tests {
         // udhcpc takes the iface via -i, not positionally.
         let i = args.iter().position(|a| a == "-i").expect("has -i");
         assert_eq!(args[i + 1], "wlp3s0");
+    }
+
+    #[test]
+    fn dhcp_client_defaults_to_dhclient_when_env_absent_or_unrecognized() {
+        // Unset, empty, and unknown values all keep the compiled-in default so
+        // a shipping deployment behaves identically unless explicitly overridden.
+        assert_eq!(parse_dhcp_client(None), DhcpClient::Dhclient);
+        assert_eq!(parse_dhcp_client(Some("")), DhcpClient::Dhclient);
+        assert_eq!(parse_dhcp_client(Some("dhcpcd")), DhcpClient::Dhclient);
+        assert_eq!(parse_dhcp_client(Some("dhclient")), DhcpClient::Dhclient);
+    }
+
+    #[test]
+    fn dhcp_client_env_selects_udhcpc() {
+        assert_eq!(parse_dhcp_client(Some("udhcpc")), DhcpClient::Udhcpc);
     }
 
     #[test]
