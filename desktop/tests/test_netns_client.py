@@ -131,6 +131,11 @@ def test_refusal_reason_foreign_prefix_maps_to_unknown() -> None:
 # truth for the wire names. The Python enum above must mirror every variant the
 # helper can emit, or the UI silently degrades a typed refusal to UNKNOWN — which
 # is exactly the `UnsupportedSecurity` drift this guard was added for.
+#
+# Scope: this guard checks *value coverage* (every Rust wire name has a matching
+# Python enum value). It does NOT check *mapping correctness* — that a PascalCase
+# suffix in from_dbus_error_name resolves to the RIGHT member;
+# test_refusal_reason_maps_known_variants covers that for every known variant.
 _RUST_LIB_RS = (
     Path(__file__).resolve().parents[2]
     / "desktop"
@@ -144,6 +149,8 @@ def _rust_refusal_reason_wire_names() -> set[str]:
     """The snake_case names from `RefusalReason::as_str()` in lib.rs."""
     text = _RUST_LIB_RS.read_text(encoding="utf-8")
     # Narrow to the as_str() match block so other enums' arms can't leak in.
+    # Assumes `impl RefusalReason` sits at 0-indent (so the fn closes at a
+    # 4-space `}`); adjust the terminator if lib.rs moves it into a submodule.
     match = re.search(r"fn as_str\(self\)[^{]*\{(.*?)\n    \}", text, re.DOTALL)
     assert match, "could not locate RefusalReason::as_str() in lib.rs"
     return set(re.findall(r'=>\s*"([a-z_]+)"', match.group(1)))

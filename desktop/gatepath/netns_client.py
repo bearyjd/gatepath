@@ -50,7 +50,7 @@ class RefusalReason(Enum):
     KERNEL_ERROR = "kernel_error"
     ALREADY_ACTIVE = "already_active"
     THROTTLED = "throttled"
-    NOT_ACTIVE = "not_active"
+    NOT_ACTIVE = "not_active"  # TeardownCaptive failure; not a RefusalReason::as_str arm
     # Phase 5b.7 / 5c.2 — LaunchPortal refusal causes:
     INVALID_PORTAL_URL = "invalid_portal_url"
     # DESK-004 — a display env value (WAYLAND_DISPLAY/DISPLAY/XAUTHORITY) failed
@@ -62,7 +62,7 @@ class RefusalReason(Enum):
     # DESK-002 — the captive network is secured (WPA/WPA2/WPA3/WEP); the helper
     # only re-associates to open networks today, so it refuses up front.
     UNSUPPORTED_SECURITY = "unsupported_security"
-    UNKNOWN = "unknown"
+    UNKNOWN = "unknown"  # Python-side sentinel for unrecognised/future variants
 
     @classmethod
     def from_dbus_error_name(cls, error_name: str) -> "RefusalReason":
