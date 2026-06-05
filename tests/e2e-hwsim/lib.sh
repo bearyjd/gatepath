@@ -25,6 +25,15 @@ HELPER_BIN="$CRATE_DIR/target/release/gatepath-netns-helper"
 NETNS="gatepath"
 NETNS_PATH="/var/run/netns/$NETNS"
 
+# Dedicated netns for the simulated AP (radio + dnsmasq + mock portal). The AP
+# lives here, NOT in the host netns, so its gateway IP (192.168.77.1) is genuinely
+# REMOTE to the client — reachable only over the hwsim RF link. If the AP shared
+# the client's (host) netns, 192.168.77.1 would be a LOCAL address and traffic to
+# it would never traverse the radio link, so NM's per-device connectivity check
+# can't see the portal (device stuck at LIMITED, never PORTAL). This also mirrors
+# reality (the AP is a separate box) and gives the no-leak test a real boundary.
+AP_NETNS="gphwsim_ap"
+
 # ── Virtual-radio netdev names ───────────────────────────────────────────
 # Renamed off the kernel's wlanN so ownership is unambiguous and we never
 # touch a real phy0/wlan0 the box might have.

@@ -66,14 +66,14 @@ HELPER_PID=""
 NM_CONN_DROPIN="/etc/NetworkManager/conf.d/99-gatepath-hwsim-connectivity.conf"
 DBUS_CONF_DST="/etc/dbus-1/system.d/${DBUS_NAME}.conf"
 POLKIT_RULE_DST="/etc/polkit-1/rules.d/49-gatepath-hwsim.rules"
-NFT_TABLE="inet gatepath_hwsim"
 INSTALLED_DBUS_CONF=0
 INSTALLED_POLKIT=0
 INSTALLED_NM_DROPIN=0
-INSTALLED_NFT=0
-FW_TRUSTED_IFACE=""
-RPF_ALL_SAVED=""
+AP_NETNS_CREATED=0
 NM_CONN_PROFILE="$SSID"
+
+# Run the AP-side commands inside the AP netns.
+apx() { ip netns exec "$AP_NETNS" "$@"; }
 
 # ── Cleanup (unconditional EXIT trap) ────────────────────────────────────
 cleanup() {
@@ -113,27 +113,17 @@ cleanup() {
     log "removed NM connectivity drop-in"
   fi
 
-  # netns (also reclaims the in-netns client PHY before we unload hwsim).
+  # netns: delete both the helper's gatepath netns and the AP netns (each
+  # reclaims its hwsim PHY back to the host before we unload the module).
   if ip netns list 2>/dev/null | grep -q "^${NETNS}\b"; then
     ip netns del "$NETNS" 2>/dev/null || true
+  fi
+  if [ "$AP_NETNS_CREATED" -eq 1 ] || ip netns list 2>/dev/null | grep -q "^${AP_NETNS}\b"; then
+    ip netns del "$AP_NETNS" 2>/dev/null || true
   fi
 
   # Sentinel dummy link.
   ip link del "$SENTINEL_IFACE" 2>/dev/null || true
-
-  # firewalld trusted-zone assignment.
-  if [ -n "$FW_TRUSTED_IFACE" ]; then
-    firewall-cmd --zone=trusted --remove-interface="$FW_TRUSTED_IFACE" >/dev/null 2>&1 || true
-  fi
-
-  # Restore rp_filter.
-  [ -n "$RPF_ALL_SAVED" ] && sysctl -w "net.ipv4.conf.all.rp_filter=$RPF_ALL_SAVED" >/dev/null 2>&1 || true
-
-  # nftables / iptables forward block.
-  if [ "$INSTALLED_NFT" -eq 1 ] || { have nft && nft list table $NFT_TABLE >/dev/null 2>&1; }; then
-    have nft && nft delete table $NFT_TABLE 2>/dev/null || true
-    have iptables && iptables -D FORWARD -i "$AP_IFACE" -j DROP 2>/dev/null || true
-  fi
 
   # Unload hwsim only if we loaded it (reclaims gpap0/wlangp0 radios).
   if [ "$LOADED_HWSIM" -eq 1 ] || [ "$TEARDOWN_ONLY" -eq 1 ]; then
@@ -267,6 +257,12 @@ if ip netns list 2>/dev/null | grep -q "^${NETNS}\b"; then
   warn "stale netns '$NETNS' present — removing it (helper refuses a pre-existing netns)"
   ip netns del "$NETNS" 2>/dev/null || true
 fi
+if ip netns list 2>/dev/null | grep -q "^${AP_NETNS}\b"; then
+  warn "stale AP netns '$AP_NETNS' present — removing it (returns its PHY to the host)"
+  pkill -f "netns exec $AP_NETNS" 2>/dev/null || true
+  ip netns del "$AP_NETNS" 2>/dev/null || true
+  sleep 1
+fi
 
 # ═════════════════════════════════════════════════════════════════════════
 #  1. Virtual radios
@@ -328,15 +324,26 @@ rename_iface "$RAW_CL" "$CL_IFACE"
 ok "radios renamed: $AP_IFACE (AP), $CL_IFACE (client)"
 
 # ═════════════════════════════════════════════════════════════════════════
-#  2. Open AP + DHCP/DNS + mock portal
+#  2. Open AP + DHCP/DNS + mock portal — ALL inside the AP netns
 # ═════════════════════════════════════════════════════════════════════════
-hdr "2. open AP, DHCP/DNS, mock captive portal"
+hdr "2. open AP, DHCP/DNS, mock captive portal (in $AP_NETNS)"
 # hwsim radios often come up SOFT-BLOCKED by rfkill, and NM may have wifi
 # disabled — either one silently breaks BOTH AP-enable and client scanning.
-# Clear them before we touch the radios.
+# rfkill is global (not netns-scoped), so clear it before we move the PHY.
 have rfkill && rfkill unblock all 2>/dev/null || true
 nmcli radio wifi on 2>/dev/null || true
 nmcli device set "$AP_IFACE" managed no >/dev/null 2>&1 || true
+
+# Move the AP radio into its own netns so 192.168.77.1 is remote to the client.
+AP_PHY="$(cat "/sys/class/net/$AP_IFACE/phy80211/name" 2>/dev/null)"
+[ -n "$AP_PHY" ] || die "could not resolve the PHY for $AP_IFACE"
+ip netns add "$AP_NETNS" || die "could not create AP netns $AP_NETNS"
+AP_NETNS_CREATED=1
+iw phy "$AP_PHY" set netns name "$AP_NETNS" 2>"$WORKDIR/apphy.err" \
+  || die "could not move AP PHY $AP_PHY into $AP_NETNS: $(cat "$WORKDIR/apphy.err")"
+apx ip link set lo up 2>/dev/null || true
+apx ip link set "$AP_IFACE" up 2>/dev/null || true
+ok "AP radio $AP_IFACE (phy $AP_PHY) moved into $AP_NETNS"
 
 cat > "$WORKDIR/ap.conf" <<EOF
 country=US
@@ -348,11 +355,9 @@ network={
     key_mgmt=NONE
 }
 EOF
-# Bring the iface up before handing it to wpa_supplicant (some builds won't
-# transition a down iface into AP mode), and run wpa_supplicant verbose (-dd)
-# so a failure to enable the AP is visible in wpa-ap.log.
-ip link set "$AP_IFACE" up 2>/dev/null || true
-wpa_supplicant -i "$AP_IFACE" -D nl80211 -c "$WORKDIR/ap.conf" -dd \
+# Run wpa_supplicant verbose (-dd) inside the AP netns so a failure to enable
+# the AP is visible in wpa-ap.log.
+apx wpa_supplicant -i "$AP_IFACE" -D nl80211 -c "$WORKDIR/ap.conf" -dd \
   >"$WORKDIR/wpa-ap.log" 2>&1 &
 AP_WPA_PID=$!
 
@@ -362,7 +367,7 @@ AP_WPA_PID=$!
 ap_ready=0
 for _ in $(seq 1 15); do
   kill -0 "$AP_WPA_PID" 2>/dev/null || break
-  if iw dev "$AP_IFACE" info 2>/dev/null | grep -qi 'type AP' \
+  if apx iw dev "$AP_IFACE" info 2>/dev/null | grep -qi 'type AP' \
      || grep -q 'AP-ENABLED' "$WORKDIR/wpa-ap.log" 2>/dev/null; then
     ap_ready=1; break
   fi
@@ -374,39 +379,17 @@ if [ "$ap_ready" -ne 1 ]; then
   err "key AP/mode/error lines from the log:"
   grep -iE 'AP-|iftype|interface state|Mode:|channel|freq|Failed|Could not|not (allowed|permitted)|nl80211.*(fail|error)|country|select_network|disabled' \
     "$WORKDIR/wpa-ap.log" 2>/dev/null | tail -n 25 | sed 's/^/      /' >&2
-  err "iface (iw dev $AP_IFACE info):"; iw dev "$AP_IFACE" info 2>/dev/null | sed 's/^/      /' >&2
+  err "iface (iw dev $AP_IFACE info):"; apx iw dev "$AP_IFACE" info 2>/dev/null | sed 's/^/      /' >&2
   err "rfkill:"; { have rfkill && rfkill list 2>/dev/null || echo "(rfkill not installed)"; } | sed 's/^/      /' >&2
   die "AP failed to enable — see the wpa-ap.log lines above (full log: $WORKDIR/wpa-ap.log)"
 fi
 
-ip addr replace "$AP_CIDR" dev "$AP_IFACE" || die "could not set AP address"
-ok "AP beaconing on $AP_IFACE ($AP_ADDR), SSID '$SSID'"
+apx ip addr replace "$AP_CIDR" dev "$AP_IFACE" || die "could not set AP address"
+ok "AP beaconing in $AP_NETNS on $AP_IFACE ($AP_ADDR), SSID '$SSID'"
 
-# Fedora/Bazzite runs firewalld; a freshly-created interface lands in the
-# DEFAULT zone, which DROPs inbound DHCP/DNS/HTTP. Without this the client
-# associates but never gets a lease (NM: ip-config-unavailable), and the
-# in-netns runner can't reach the portal either. Put the AP iface in the
-# trusted (accept-all) zone for the run; removed on teardown.
-if have firewall-cmd && firewall-cmd --state >/dev/null 2>&1; then
-  if firewall-cmd --zone=trusted --add-interface="$AP_IFACE" >/dev/null 2>&1; then
-    FW_TRUSTED_IFACE="$AP_IFACE"
-    ok "firewalld: $AP_IFACE → trusted zone (DHCP/DNS/HTTP now reach the AP)"
-  else
-    warn "firewalld active but couldn't trust $AP_IFACE — DHCP to the client may be dropped"
-  fi
-fi
-
-# The AP gateway and the client live on the SAME subnet in the SAME (host) netns,
-# so strict reverse-path filtering can drop the cross-radio packets NM's
-# per-device connectivity check relies on (→ device stuck at LIMITED, never
-# PORTAL). Relax rp_filter for the run; restore net.ipv4.conf.all on teardown.
-RPF_ALL_SAVED="$(sysctl -n net.ipv4.conf.all.rp_filter 2>/dev/null || true)"
-sysctl -w net.ipv4.conf.all.rp_filter=0          >/dev/null 2>&1 || true
-sysctl -w "net.ipv4.conf.$AP_IFACE.rp_filter=0"  >/dev/null 2>&1 || true
-sysctl -w "net.ipv4.conf.$CL_IFACE.rp_filter=0"  >/dev/null 2>&1 || true
-[ -n "$RPF_ALL_SAVED" ] && log "rp_filter relaxed (was all=$RPF_ALL_SAVED)"
-
-dnsmasq --keep-in-foreground --bind-interfaces --interface="$AP_IFACE" \
+# DHCP/DNS server inside the AP netns. No firewalld here (the AP netns has no
+# firewall), and no rp_filter conflict (client and AP are in different netns).
+apx dnsmasq --keep-in-foreground --bind-interfaces --interface="$AP_IFACE" \
   --no-resolv --no-hosts \
   --dhcp-range="$DHCP_RANGE_LO,$DHCP_RANGE_HI,255.255.255.0,12h" \
   --dhcp-option=3,"$AP_ADDR" --dhcp-option=6,"$AP_ADDR" \
@@ -418,15 +401,15 @@ sleep 1
 kill -0 "$DNSMASQ_PID" 2>/dev/null || die "dnsmasq died; see $WORKDIR/dnsmasq.log"
 ok "dnsmasq serving DHCP/DNS on $AP_IFACE (wildcard DNS → $AP_ADDR)"
 
-# Mock captive portal on the AP gateway. complete_after huge so it stays
+# Mock captive portal inside the AP netns. complete_after huge so it stays
 # captive (never auto-validates) for the whole run — the helper's is_captive
 # gate needs NM to keep flagging PORTAL until SetupCaptive.
 ( cd "$REPO_ROOT" && \
-  PORTAL_HOST="$AP_ADDR" PORTAL_PORT="$PORTAL_PORT" PORTAL_COMPLETE_AFTER=1000000 \
+  apx env PORTAL_HOST="$AP_ADDR" PORTAL_PORT="$PORTAL_PORT" PORTAL_COMPLETE_AFTER=1000000 \
   python3 -m mockportal.server >"$WORKDIR/mockportal.log" 2>&1 ) &
 MOCKPORTAL_PID=$!
 wait_for 10 "mock portal on $AP_ADDR:$PORTAL_PORT" \
-  curl -sS -m 2 -o /dev/null "http://$AP_ADDR:$PORTAL_PORT/portal" \
+  apx curl -sS -m 2 -o /dev/null "http://$AP_ADDR:$PORTAL_PORT/portal" \
   || die "mock portal never came up; see $WORKDIR/mockportal.log"
 ok "mock captive portal up at $PORTAL_URL"
 
@@ -447,23 +430,13 @@ wait_for 10 "sentinel on $SENTINEL_ADDR" \
   || die "sentinel never came up; see $WORKDIR/sentinel.log"
 ok "sentinel reachable from host: $SENTINEL_URL"
 
-# Belt-and-suspenders: drop anything the AP link tries to ROUTE onward, so the
-# netns can't reach the host-local sentinel even if ip_forward=1 globally.
-# (Portal traffic is delivered locally on the AP, never forwarded, so this is
-# safe.) Models a real captive AP that gives you a link but doesn't route you.
-if have nft; then
-  nft add table $NFT_TABLE 2>/dev/null && INSTALLED_NFT=1 || true
-  nft 'add chain '"$NFT_TABLE"' fwd { type filter hook forward priority -150 ; policy accept ; }' 2>/dev/null || true
-  nft add rule $NFT_TABLE fwd iifname "$AP_IFACE" drop 2>/dev/null || true
-  [ "$INSTALLED_NFT" -eq 1 ] && ok "nftables forward block on $AP_IFACE installed"
-elif have iptables; then
-  iptables -I FORWARD -i "$AP_IFACE" -j DROP 2>/dev/null && INSTALLED_NFT=1 \
-    && ok "iptables forward block on $AP_IFACE installed" || true
-else
-  fwd="$(cat /proc/sys/net/ipv4/ip_forward 2>/dev/null || echo '?')"
-  warn "no nft/iptables to install a forward block (ip_forward=$fwd)."
-  warn "if ip_forward=1 the confinement result may be unreliable."
-fi
+# Confinement is now STRUCTURAL: the AP lives in its own netns (only the captive
+# subnet + lo, no route to the host's sentinel and no forwarding), and the
+# gatepath netns reaches the world only through that AP. So the sentinel
+# (10.123.0.x, host netns) is unreachable from inside the gatepath netns by
+# construction — the same property real netns isolation gives. No firewall rule
+# is needed; the no-leak runner probe asserts it directly.
+log "confinement is structural (AP isolated in $AP_NETNS); no-leak asserted by the runner"
 
 # ═════════════════════════════════════════════════════════════════════════
 #  4. Connect the client via NetworkManager → PORTAL
@@ -523,18 +496,14 @@ else
   warn "SetupCaptive will likely be refused with NotCaptive. See README troubleshooting."
 fi
 
-# Reproduce NM's per-device check with a bound curl, and dump the routing/rp_filter
-# that govern same-host AP traffic. If this curl gets 302, the path works and NM's
-# LIMITED is a classification quirk; if it fails, it's a routing/binding artifact
-# of the AP gateway being a local address (→ next step: move the AP into its own
-# netns).
+# Confirm the client can actually reach the (now remote, in-$AP_NETNS) portal over
+# the RF link, reproducing NM's per-device check. 302 ⇒ the path works and NM
+# should classify PORTAL.
 cl_ip="$(nmcli -g IP4.ADDRESS device show "$CL_IFACE" 2>/dev/null | head -1 | cut -d/ -f1)"
 log "diag: bound curl $CL_IFACE (src ${cl_ip:-?}) → http://$AP_ADDR/generate_204:"
 curl --interface "$CL_IFACE" -m 5 -sS -o /dev/null \
-  -w '      http_code=%{http_code} (302 ⇒ portal path works)\n' \
+  -w '      http_code=%{http_code} (302 ⇒ portal reachable over RF)\n' \
   "http://$AP_ADDR/generate_204" 2>&1 | sed 's/^/      /' >&2 || true
-log "diag: rp_filter all=$(sysctl -n net.ipv4.conf.all.rp_filter 2>/dev/null) $CL_IFACE=$(sysctl -n "net.ipv4.conf.$CL_IFACE.rp_filter" 2>/dev/null) $AP_IFACE=$(sysctl -n "net.ipv4.conf.$AP_IFACE.rp_filter" 2>/dev/null)"
-log "diag: ip route get $AP_ADDR oif $CL_IFACE: $(ip route get "$AP_ADDR" oif "$CL_IFACE" 2>&1 | head -1)"
 
 # ═════════════════════════════════════════════════════════════════════════
 #  5. Install helper runtime artifacts
