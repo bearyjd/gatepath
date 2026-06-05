@@ -681,19 +681,20 @@ else
   log "diag: raw D-Bus GetDevices(root)     = FAILED: $(cat "$WORKDIR/nm-getdevices.err")"
 fi
 
-# --- SetupCaptive(client iface) → netns path ---
-if setup_out="$(busctl call "$DBUS_NAME" "$DBUS_OBJ" "$DBUS_IFACE" \
-                SetupCaptive s "$CL_IFACE" 2>"$WORKDIR/setup.err")"; then
-  netns_path="$(printf '%s' "$setup_out" | awk -F'"' '{print $2}')"
-  ok "SetupCaptive → $netns_path"
-  [ "$netns_path" = "$NETNS_PATH" ] || note_fail "unexpected netns path: $netns_path (want $NETNS_PATH)"
-else
-  err "SetupCaptive refused: $(cat "$WORKDIR/setup.err")"
-  err "helper log tail:"; tail -n 20 "$WORKDIR/helper.log" | sed 's/^/      /' >&2
-  die "cannot proceed without a netns"
-fi
+# --- Drive the whole session over ONE persistent D-Bus connection ---
+# busctl opens a fresh connection per call, which trips the helper's name-watch
+# auto-teardown (the one-shot caller "disconnects" the instant SetupCaptive
+# returns) and its SenderMismatch check (LaunchPortal must come from the setup
+# owner). drive.py holds one connection for SetupCaptive → LaunchPortal →
+# wait-for-verdict → TeardownCaptive, exactly like the real GUI.
+have python3 && python3 -c 'import dbus' 2>/dev/null \
+  || die "drive.py needs python3 + python-dbus (import dbus failed)"
+rm -f "$RUNNER_VERDICT"
+log "driving SetupCaptive → LaunchPortal → TeardownCaptive (single connection)"
+drive_out="$(python3 "$HWSIM_DIR/drive.py" "$CL_IFACE" "$PORTAL_URL" "$RUNNER_VERDICT" 25 2>"$WORKDIR/drive.err")"
+[ -s "$WORKDIR/drive.err" ] && cat "$WORKDIR/drive.err" >&2
 
-# Connectivity check no longer needed; remove the global override promptly.
+# Connectivity override no longer needed (it gated is_captive during setup).
 if [ "$INSTALLED_NM_DROPIN" -eq 1 ]; then
   rm -f "$NM_CONN_DROPIN" 2>/dev/null || true
   INSTALLED_NM_DROPIN=0
@@ -701,34 +702,34 @@ if [ "$INSTALLED_NM_DROPIN" -eq 1 ]; then
   log "restored NM connectivity config"
 fi
 
-# Structural assertions on the netns.
-if ip netns list 2>/dev/null | grep -q "^${NETNS}\b"; then
-  ok "netns '$NETNS' exists"
+setup_netns="$(printf '%s' "$drive_out" | jq -r '.setup_netns // empty' 2>/dev/null)"
+launch_pid="$(printf '%s'  "$drive_out" | jq -r '.launch_pid  // empty' 2>/dev/null)"
+teardown_st="$(printf '%s' "$drive_out" | jq -r '.teardown    // empty' 2>/dev/null)"
+drive_error="$(printf '%s' "$drive_out" | jq -r '.error       // empty' 2>/dev/null)"
+
+# --- SetupCaptive ---
+if [ "$setup_netns" = "$NETNS_PATH" ]; then
+  ok "SetupCaptive → $setup_netns"
 else
-  note_fail "netns '$NETNS' missing after SetupCaptive"
-fi
-if ip netns exec "$NETNS" iw dev 2>/dev/null | grep -q Interface; then
-  ok "a wireless interface is present inside the netns"
-else
-  note_fail "no wireless interface inside the netns (PHY move failed?)"
+  err "SetupCaptive failed: ${drive_error:-no netns path returned}"
+  err "helper log tail:"; tail -n 25 "$WORKDIR/helper.log" 2>/dev/null | sed 's/^/      /' >&2
+  die "cannot proceed without a netns"
 fi
 
-# --- LaunchPortal(url, "", "", "") → pid ---
-rm -f "$RUNNER_VERDICT"
-if launch_out="$(busctl call "$DBUS_NAME" "$DBUS_OBJ" "$DBUS_IFACE" \
-                 LaunchPortal ssss "$PORTAL_URL" "" "" "" 2>"$WORKDIR/launch.err")"; then
-  portal_pid="$(printf '%s' "$launch_out" | awk '{print $2}')"
-  ok "LaunchPortal → pid $portal_pid"
+# --- LaunchPortal ---
+if [ -n "$launch_pid" ]; then
+  ok "LaunchPortal → pid $launch_pid"
 else
-  note_fail "LaunchPortal refused: $(cat "$WORKDIR/launch.err")"
+  note_fail "LaunchPortal failed: ${drive_error:-no pid returned}"
+  err "helper log tail:"; tail -n 25 "$WORKDIR/helper.log" 2>/dev/null | sed 's/^/      /' >&2
 fi
 
-# --- Wait for the runner's no-leak verdict ---
-if wait_for 20 "runner verdict at $RUNNER_VERDICT" test -s "$RUNNER_VERDICT"; then
+# --- No-leak verdict (the core invariant the runner asserts from in-netns) ---
+if [ -s "$RUNNER_VERDICT" ]; then
   log "runner verdict:"; sed 's/^/      /' "$RUNNER_VERDICT" >&2
   s_reach="$(jq -r '.sentinel_reachable' "$RUNNER_VERDICT" 2>/dev/null)"
-  p_code="$(jq -r '.portal_http_code' "$RUNNER_VERDICT" 2>/dev/null)"
-  p_rc="$(jq -r '.portal_curl_rc' "$RUNNER_VERDICT" 2>/dev/null)"
+  p_code="$(jq -r '.portal_http_code'    "$RUNNER_VERDICT" 2>/dev/null)"
+  p_rc="$(jq -r '.portal_curl_rc'        "$RUNNER_VERDICT" 2>/dev/null)"
   if [ "$s_reach" = "false" ]; then
     ok "NO-LEAK: sentinel UNREACHABLE from inside the netns (confined)"
   else
@@ -741,14 +742,14 @@ if wait_for 20 "runner verdict at $RUNNER_VERDICT" test -s "$RUNNER_VERDICT"; th
   fi
 else
   note_fail "runner never wrote a verdict; helper log tail:"
-  tail -n 20 "$WORKDIR/helper.log" | sed 's/^/      /' >&2
+  tail -n 25 "$WORKDIR/helper.log" 2>/dev/null | sed 's/^/      /' >&2
 fi
 
-# --- TeardownCaptive() ---
-if busctl call "$DBUS_NAME" "$DBUS_OBJ" "$DBUS_IFACE" TeardownCaptive >/dev/null 2>"$WORKDIR/teardown.err"; then
+# --- TeardownCaptive + netns gone ---
+if [ "$teardown_st" = "ok" ]; then
   ok "TeardownCaptive → ok"
 else
-  note_fail "TeardownCaptive refused: $(cat "$WORKDIR/teardown.err")"
+  note_fail "TeardownCaptive failed: ${teardown_st:-unknown}"
 fi
 if ip netns list 2>/dev/null | grep -q "^${NETNS}\b"; then
   note_fail "netns '$NETNS' still present after teardown"
