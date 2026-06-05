@@ -498,12 +498,14 @@ wait_for 30 "$CL_IFACE to associate" \
   bash -c "nmcli -g GENERAL.STATE device show '$CL_IFACE' 2>/dev/null | grep -q '100'" \
   || warn "client did not reach state=connected; continuing to portal poll"
 
-if wait_for 40 "NM to flag $CL_IFACE as PORTAL" \
-   bash -c "nmcli -g GENERAL.CONNECTIVITY device show '$CL_IFACE' 2>/dev/null | grep -qx portal"; then
-  ok "$CL_IFACE connected, NM connectivity = portal"
+# The helper's is_captive reads the device's Ip4Connectivity (NM has no bare
+# Device.Connectivity property); poll the matching nmcli field.
+if wait_for 40 "NM to flag $CL_IFACE IPv4 connectivity = PORTAL" \
+   bash -c "nmcli -g GENERAL.IP4-CONNECTIVITY device show '$CL_IFACE' 2>/dev/null | grep -qx portal"; then
+  ok "$CL_IFACE connected, NM IP4-CONNECTIVITY = portal"
 else
-  warn "NM did not flag $CL_IFACE=portal. Current device state:"
-  nmcli device show "$CL_IFACE" 2>/dev/null | sed 's/^/      /' >&2 || true
+  warn "NM did not flag $CL_IFACE IP4-CONNECTIVITY=portal (got: $(nmcli -g GENERAL.IP4-CONNECTIVITY device show "$CL_IFACE" 2>/dev/null))"
+  warn "device state:"; nmcli device show "$CL_IFACE" 2>/dev/null | sed 's/^/      /' >&2 || true
   warn "SetupCaptive will likely be refused with NotCaptive. See README troubleshooting."
 fi
 
@@ -611,8 +613,8 @@ note_fail() { err "$1"; PASS=0; }
 #     reach NM over raw D-Bus the way the helper's is_captive does. This
 #     disambiguates "NM didn't flag PORTAL" (NotCaptive) from "helper can't
 #     talk to NM" (BackendUnavailable = is_captive DbusFailed). ---
-log "diag: NM Device.Connectivity[$CL_IFACE] = $(nmcli -g GENERAL.CONNECTIVITY device show "$CL_IFACE" 2>&1)"
-log "diag: NM global connectivity        = $(nmcli networking connectivity 2>&1)"
+log "diag: NM Device IP4-CONNECTIVITY[$CL_IFACE] = $(nmcli -g GENERAL.IP4-CONNECTIVITY device show "$CL_IFACE" 2>&1)"
+log "diag: NM global connectivity            = $(nmcli networking connectivity 2>&1)"
 if busctl call org.freedesktop.NetworkManager /org/freedesktop/NetworkManager \
      org.freedesktop.NetworkManager GetDevices >/dev/null 2>"$WORKDIR/nm-getdevices.err"; then
   log "diag: raw D-Bus GetDevices(root)     = OK (NM reachable on the system bus)"
