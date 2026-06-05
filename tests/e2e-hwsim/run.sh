@@ -143,7 +143,16 @@ cleanup() {
   # Runner + marker (leave /var/lib/gatepath audit log in place for inspection).
   rm -f "$WEBVIEW_MARKER" 2>/dev/null || true
 
-  [ -n "$WORKDIR" ] && rm -rf "$WORKDIR" 2>/dev/null || true
+  # Preserve the workdir (all the logs) when the run FAILED so it can be
+  # diagnosed; only clean it up on a clean pass.
+  if [ -n "$WORKDIR" ]; then
+    if [ "$rc" -eq 0 ]; then
+      rm -rf "$WORKDIR" 2>/dev/null || true
+    else
+      warn "run did not pass — logs preserved at: $WORKDIR"
+      warn "  (helper.log, wpa-ap.log, dnsmasq.log, nmcli-connect.log, mockportal.log)"
+    fi
+  fi
   log "teardown complete"
   exit "$rc"
 }
@@ -315,6 +324,7 @@ hdr "2. open AP, DHCP/DNS, mock captive portal"
 nmcli device set "$AP_IFACE" managed no >/dev/null 2>&1 || true
 
 cat > "$WORKDIR/ap.conf" <<EOF
+country=US
 ctrl_interface=DIR=$WORKDIR/wpa-ap
 network={
     ssid="$SSID"
@@ -326,12 +336,29 @@ EOF
 wpa_supplicant -i "$AP_IFACE" -D nl80211 -c "$WORKDIR/ap.conf" \
   >"$WORKDIR/wpa-ap.log" 2>&1 &
 AP_WPA_PID=$!
-sleep 2
-kill -0 "$AP_WPA_PID" 2>/dev/null || die "AP wpa_supplicant died; see $WORKDIR/wpa-ap.log"
+
+# Process-alive is NOT enough: wpa_supplicant can stay up but fail to enable the
+# AP (bad channel / regdomain / no-IR). Wait for it to ACTUALLY beacon — the
+# interface flips to "type AP" and the log prints AP-ENABLED — before we trust it.
+ap_ready=0
+for _ in $(seq 1 12); do
+  kill -0 "$AP_WPA_PID" 2>/dev/null || break
+  if iw dev "$AP_IFACE" info 2>/dev/null | grep -qi 'type AP' \
+     || grep -q 'AP-ENABLED' "$WORKDIR/wpa-ap.log" 2>/dev/null; then
+    ap_ready=1; break
+  fi
+  sleep 1
+done
+if [ "$ap_ready" -ne 1 ]; then
+  err "AP did NOT start beaconing on $AP_IFACE (wpa_supplicant AP-mode failed)."
+  err "wpa-ap.log tail:"; tail -n 25 "$WORKDIR/wpa-ap.log" 2>/dev/null | sed 's/^/      /' >&2
+  err "regdomain (iw reg get):"; iw reg get 2>/dev/null | grep -E 'country|DFS' | sed 's/^/      /' >&2
+  err "iface (iw dev $AP_IFACE info):"; iw dev "$AP_IFACE" info 2>/dev/null | sed 's/^/      /' >&2
+  die "AP failed to enable — see the wpa-ap.log tail above"
+fi
 
 ip addr replace "$AP_CIDR" dev "$AP_IFACE" || die "could not set AP address"
-ip link set "$AP_IFACE" up || true
-ok "AP up on $AP_IFACE ($AP_ADDR), SSID '$SSID'"
+ok "AP beaconing on $AP_IFACE ($AP_ADDR), SSID '$SSID'"
 
 dnsmasq --keep-in-foreground --bind-interfaces --interface="$AP_IFACE" \
   --no-resolv --no-hosts \
@@ -412,9 +439,20 @@ log "NM connectivity check pointed at http://$AP_ADDR/generate_204 (global, temp
 
 nmcli device set "$CL_IFACE" managed yes >/dev/null 2>&1 || true
 nmcli device wifi rescan ifname "$CL_IFACE" >/dev/null 2>&1 || true
-wait_for 25 "SSID '$SSID' to appear in scan" \
-  bash -c "nmcli -t -f SSID device wifi list ifname '$CL_IFACE' 2>/dev/null | grep -qx '$SSID'" \
-  || warn "SSID not seen in scan list yet; attempting connect anyway"
+if ! wait_for 25 "SSID '$SSID' to appear in scan" \
+  bash -c "nmcli -t -f SSID device wifi list ifname '$CL_IFACE' 2>/dev/null | grep -qx '$SSID'"; then
+  # Disambiguate "AP not beaconing" from "NM not scanning" by scanning at the
+  # driver level, bypassing NM. If `iw` sees the SSID but NM doesn't, it's an NM
+  # problem; if neither does, the RF link / AP beaconing is the problem.
+  warn "SSID not seen via NM. Driver-level scan on $CL_IFACE (iw):"
+  ip link set "$CL_IFACE" up 2>/dev/null || true
+  iw dev "$CL_IFACE" scan 2>&1 | grep -iE 'SSID|freq|signal|BSS ' | head -n 20 | sed 's/^/      /' >&2 || true
+  warn "radios overview (iw dev):"
+  iw dev 2>/dev/null | grep -iE 'Interface|type|channel|ssid|addr' | sed 's/^/      /' >&2 || true
+  warn "AP wpa_supplicant tail:"
+  tail -n 12 "$WORKDIR/wpa-ap.log" 2>/dev/null | sed 's/^/      /' >&2 || true
+  warn "attempting NM connect anyway"
+fi
 
 if ! nmcli device wifi connect "$SSID" ifname "$CL_IFACE" >"$WORKDIR/nmcli-connect.log" 2>&1; then
   warn "nmcli connect reported an error; see $WORKDIR/nmcli-connect.log"
