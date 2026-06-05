@@ -270,6 +270,12 @@ impl<
         // 4. PolicyKit — only after the request is plausibly valid AND
         //    the sender hasn't blown through the rate limit.
         if let Err(err) = self.auth.check(ACTION_SETUP_CAPTIVE, sender) {
+            tracing::error!(
+                error = %err,
+                action = ACTION_SETUP_CAPTIVE,
+                sender,
+                "PolicyKit auth check refused SetupCaptive"
+            );
             return SetupCaptiveResponse::Refused {
                 reason: refusal_for_auth_error(&err),
             };
