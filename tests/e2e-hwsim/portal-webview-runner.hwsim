@@ -30,8 +30,9 @@ set -u
 PORTAL_URL="${1:-}"
 
 # These mirror lib.sh; kept inline because the helper's clean unit env carries
-# nothing from run.sh.
-IFACE="gpcl0"
+# nothing from run.sh. IFACE must match lib.sh's CL_IFACE (a WiFi-prefixed name
+# the helper's validator accepts) — the PHY keeps this name after the move.
+IFACE="wlangp0"
 CLIENT_CIDR="192.168.77.50/24"
 GATEWAY="192.168.77.1"
 SENTINEL_URL="http://10.123.0.1/health"

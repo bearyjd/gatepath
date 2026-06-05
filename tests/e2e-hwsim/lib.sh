@@ -28,8 +28,12 @@ NETNS_PATH="/var/run/netns/$NETNS"
 # ── Virtual-radio netdev names ───────────────────────────────────────────
 # Renamed off the kernel's wlanN so ownership is unambiguous and we never
 # touch a real phy0/wlan0 the box might have.
-AP_IFACE="gpap0"    # open AP side (stays in the host netns)
-CL_IFACE="gpcl0"    # client side (the helper moves this into the netns)
+AP_IFACE="gpap0"    # open AP side (stays in the host netns; never hits the helper)
+# The client iface is the SetupCaptive() argument, so it MUST pass the helper's
+# validate_interface_name (validation.rs): WiFi prefix wlan*/wlp*/wlx* only —
+# anything else is refused NotWiFi before any kernel op. Do NOT rename this to a
+# gp*/non-WiFi name. Distinctive suffix to avoid colliding with a real radio.
+CL_IFACE="wlangp0"  # client side (the helper moves this PHY into the netns)
 SENTINEL_IFACE="gpsen0"  # dummy link carrying the host-only sentinel
 
 # ── Addressing ───────────────────────────────────────────────────────────

@@ -6,7 +6,7 @@
 # radios, with NO real captive Wi-Fi, and proves the no-leak invariant:
 #
 #   AP radio  (gpap0, host netns) → open AP + dnsmasq + mock captive portal
-#   client    (gpcl0)            → NetworkManager connects it; helper moves its
+#   client    (wlangp0)            → NetworkManager connects it; helper moves its
 #                                  PHY into the `gatepath` netns, re-associates
 #                                  in-netns, runs DHCP, spawns the runner
 #   sentinel  (gpsen0, host)     → trusted-net stand-in the netns MUST NOT reach
@@ -125,7 +125,7 @@ cleanup() {
     have iptables && iptables -D FORWARD -i "$AP_IFACE" -j DROP 2>/dev/null || true
   fi
 
-  # Unload hwsim only if we loaded it (reclaims gpap0/gpcl0 radios).
+  # Unload hwsim only if we loaded it (reclaims gpap0/wlangp0 radios).
   if [ "$LOADED_HWSIM" -eq 1 ] || [ "$TEARDOWN_ONLY" -eq 1 ]; then
     modprobe -r mac80211_hwsim 2>/dev/null \
       || warn "could not unload mac80211_hwsim (in use); clears on reboot or: rmmod -f mac80211_hwsim"
@@ -164,6 +164,14 @@ busctl_name_has_owner() {
   out="$(busctl call org.freedesktop.DBus /org/freedesktop/DBus \
          org.freedesktop.DBus NameHasOwner s "$DBUS_NAME" 2>/dev/null)" || return 1
   [ "$out" = "b true" ]
+}
+
+# PID currently owning the helper bus name (empty if none).
+bus_owner_pid() {
+  local out
+  out="$(busctl call org.freedesktop.DBus /org/freedesktop/DBus \
+         org.freedesktop.DBus GetConnectionUnixProcessID s "$DBUS_NAME" 2>/dev/null)" || return 1
+  printf '%s' "$out" | awk '{print $2}'
 }
 
 nm_reload() {
@@ -224,6 +232,22 @@ fi
 WORKDIR="$(mktemp -d /tmp/gatepath-hwsim.XXXXXX)" || die "mktemp failed"
 mkdir -p "$WORKDIR/bin"
 log "workdir: $WORKDIR"
+
+# Pre-clean wedged state from a prior crashed run so we fail at REAL problems,
+# not leftovers: a stale helper still owns the bus name, and the helper's
+# create_netns refuses if the `gatepath` netns already exists.
+if busctl_name_has_owner; then
+  spid="$(bus_owner_pid)"
+  warn "stale process owns $DBUS_NAME (pid ${spid:-?}) — killing it before we start"
+  [ -n "$spid" ] && kill "$spid" 2>/dev/null || true
+  pkill -f "$HELPER_BIN" 2>/dev/null || true
+  for _ in $(seq 1 5); do busctl_name_has_owner || break; sleep 1; done
+  busctl_name_has_owner && die "could not free $DBUS_NAME; run --teardown-only, or reboot if it persists"
+fi
+if ip netns list 2>/dev/null | grep -q "^${NETNS}\b"; then
+  warn "stale netns '$NETNS' present — removing it (helper refuses a pre-existing netns)"
+  ip netns del "$NETNS" 2>/dev/null || true
+fi
 
 # ═════════════════════════════════════════════════════════════════════════
 #  1. Virtual radios
@@ -481,6 +505,13 @@ ok "DHCP shim ($DHCP_MODE) installed in $WORKDIR/bin"
 #  6. Launch the helper as root on the real system bus
 # ═════════════════════════════════════════════════════════════════════════
 hdr "6. launch helper"
+# Sanity: under the helper's PATH, `udhcpc` must resolve to OUR shim, not a
+# system client — otherwise the in-netns DHCP runs a real client against the
+# fake AP and SetupCaptive fails at the DHCP wait.
+_resolved="$(PATH="$WORKDIR/bin:/usr/sbin:/usr/bin:/sbin:/bin" command -v udhcpc 2>/dev/null || true)"
+[ "$_resolved" = "$WORKDIR/bin/udhcpc" ] \
+  || warn "udhcpc resolves to '${_resolved:-<none>}', not the shim — in-netns DHCP may misbehave"
+
 GATEPATH_LOG="${GATEPATH_LOG:-debug}" \
 GATEPATH_DHCP_CLIENT=udhcpc \
 PATH="$WORKDIR/bin:/usr/sbin:/usr/bin:/sbin:/bin" \

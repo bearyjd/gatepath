@@ -76,21 +76,23 @@ real DHCP-exec code path; only the on-wire exchange is faked.
 ## What it stands up
 
 ```
- host netns                                          gatepath netns
- ┌──────────────────────────────────────┐            ┌────────────────────┐
- │ gpap0  192.168.77.1  ── open AP ──────┼── hwsim ───┼─ gpcl0 192.168.77.50│
- │   • wpa_supplicant mode=2 (open)      │    RF link │   (helper moved the │
- │   • dnsmasq DHCP/DNS (wildcard → .1)  │            │    PHY in here)     │
- │   • mockportal  http://192.168.77.1   │            │  runner probes:     │
- │                                       │            │   • portal  → MUST  │
- │ gpsen0 10.123.0.1  ── sentinel ───────┼──  ✗ ──────┼─    reach           │
- │   "trusted network" stand-in          │  confined  │   • sentinel → MUST │
- └──────────────────────────────────────┘            │     NOT reach       │
-                                                      └────────────────────┘
+ host netns                                     gatepath netns (throwaway)
+ ┌───────────────────────────────────────┐      ┌──────────────────────────────┐
+ │ gpap0   192.168.77.1                  │      │ wlangp0  192.168.77.50       │
+ │   open AP (wpa_supplicant)            │      │   (helper moved this PHY     │
+ │   dnsmasq DHCP/DNS  (→ .1)            │      │    into the netns)           │
+ │   mockportal  192.168.77.1            │      │                              │
+ │                                       │      │ runner probes from inside:   │
+ │ gpsen0  10.123.0.1                    │      │   portal    → MUST reach     │
+ │   "trusted-net" sentinel              │      │   sentinel  → MUST NOT reach │
+ └───────────────────────────────────────┘      └──────────────────────────────┘
+  reachable from the host
+                                                netns has only the captive link;
+                                                no route to the sentinel (confined)
 ```
 
 `run.sh` then drives the helper over the **real system bus** with `busctl`:
-`SetupCaptive("gpcl0")` → `LaunchPortal(...)` → reads the runner's verdict →
+`SetupCaptive("wlangp0")` → `LaunchPortal(...)` → reads the runner's verdict →
 `TeardownCaptive()`, asserting at each step. The runner
 (`portal-webview-runner.hwsim`, installed at the helper's compile-time
 `PORTAL_RUNNER_PATH`) is what runs *inside* the netns and writes the no-leak
@@ -126,7 +128,7 @@ The harness is careful (`trap cleanup EXIT`, unconditional, idempotent) but it
 **does touch system state** for the duration of a run, all restored on exit:
 
 - Loads `mac80211_hwsim` (only unloaded on exit **if this run loaded it**).
-- Creates two virtual radios renamed `gpap0`/`gpcl0` and a dummy `gpsen0`; it
+- Creates two virtual radios renamed `gpap0`/`wlangp0` and a dummy `gpsen0`; it
   **never touches a real `phy0`** (it claims only freshly-created hwsim phys).
 - Creates the `gatepath` netns (the helper owns this).
 - Installs, then removes on teardown:
@@ -155,8 +157,8 @@ Logs land under `/tmp/gatepath-hwsim.XXXXXX/` (kept with `--keep`):
 `helper.log`, `wpa-ap.log`, `dnsmasq.log`, `mockportal.log`, `sentinel.log`,
 `nmcli-connect.log`, and the `*.err` files from each D-Bus call.
 
-- **`SetupCaptive refused: …NotCaptive`** — NM never flagged `gpcl0` as
-  `PORTAL`. Check `nmcli -g GENERAL.CONNECTIVITY device show gpcl0`. The client
+- **`SetupCaptive refused: …NotCaptive`** — NM never flagged `wlangp0` as
+  `PORTAL`. Check `nmcli -g GENERAL.CONNECTIVITY device show wlangp0`. The client
   must be associated to `GatepathHwsim` and NM's connectivity poll must have run
   (interval 5s). Confirm the portal answers: `curl http://192.168.77.1/generate_204`
   should `302`.
