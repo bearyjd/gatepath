@@ -246,7 +246,12 @@ impl<
             }
             // `is_captive` doesn't query the access point, so it never returns
             // NotAssociated; map it with DbusFailed for exhaustiveness.
-            Err(NMError::NotAssociated(_)) | Err(NMError::DbusFailed(_)) => {
+            Err(err @ (NMError::NotAssociated(_) | NMError::DbusFailed(_))) => {
+                tracing::error!(
+                    error = %err,
+                    interface = %request.interface_name,
+                    "is_captive NetworkManager query failed"
+                );
                 return SetupCaptiveResponse::Refused {
                     reason: RefusalReason::BackendUnavailable,
                 };
