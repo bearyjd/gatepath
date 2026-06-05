@@ -316,7 +316,8 @@ impl<
         // 6. Kernel ops. On failure, the session does NOT become active.
         let netns_path = match self.ops.create_netns(NETNS_NAME) {
             Ok(p) => p,
-            Err(_) => {
+            Err(err) => {
+                tracing::error!(error = %err, netns = NETNS_NAME, "create_netns failed");
                 return SetupCaptiveResponse::Refused {
                     reason: RefusalReason::KernelError,
                 };

@@ -257,6 +257,13 @@ if ip netns list 2>/dev/null | grep -q "^${NETNS}\b"; then
   warn "stale netns '$NETNS' present — removing it (helper refuses a pre-existing netns)"
   ip netns del "$NETNS" 2>/dev/null || true
 fi
+# Clear a half-state mount/file that would make the helper's `ip netns add` fail.
+for d in /run/netns /var/run/netns; do
+  if [ -e "$d/$NETNS" ]; then
+    umount "$d/$NETNS" 2>/dev/null || true
+    rm -f "$d/$NETNS" 2>/dev/null || true
+  fi
+done
 if ip netns list 2>/dev/null | grep -q "^${AP_NETNS}\b"; then
   warn "stale AP netns '$AP_NETNS' present — removing it (returns its PHY to the host)"
   pkill -f "netns exec $AP_NETNS" 2>/dev/null || true
@@ -487,8 +494,9 @@ wait_for 30 "$CL_IFACE to associate" \
 
 # The helper's is_captive reads the device's Ip4Connectivity (NM has no bare
 # Device.Connectivity property); poll the matching nmcli field.
+# nmcli -g returns e.g. "2 (portal)", so match the word, not the whole line.
 if wait_for 40 "NM to flag $CL_IFACE IPv4 connectivity = PORTAL" \
-   bash -c "nmcli -g GENERAL.IP4-CONNECTIVITY device show '$CL_IFACE' 2>/dev/null | grep -qx portal"; then
+   bash -c "nmcli -g GENERAL.IP4-CONNECTIVITY device show '$CL_IFACE' 2>/dev/null | grep -qiw portal"; then
   ok "$CL_IFACE connected, NM IP4-CONNECTIVITY = portal"
 else
   warn "NM did not flag $CL_IFACE IP4-CONNECTIVITY=portal (got: $(nmcli -g GENERAL.IP4-CONNECTIVITY device show "$CL_IFACE" 2>/dev/null))"
