@@ -1,0 +1,86 @@
+#!/bin/sh
+# tests/e2e-hwsim/portal-webview-runner.hwsim
+#
+# Installed by run.sh at the helper's compile-time PORTAL_RUNNER_PATH
+# (/var/lib/gatepath/hwsim/portal-webview-runner). The REAL privileged helper
+# exec's this AFTER it has:
+#   * created the `gatepath` netns and moved the client Wi-Fi PHY into it,
+#   * re-associated to the open AP with an in-netns wpa_supplicant,
+#   * run the in-netns DHCP client.
+#
+# We are therefore running INSIDE the gatepath netns. In this harness the
+# D-Bus caller is root, so the helper runs us as root (uid 0) — no setcap
+# dance is needed for `ip`. argv is the helper's fixed shape:
+#
+#   argv[1] = portal URL (already validated by the helper via url::Url)
+#
+# What we prove, from inside the netns (the WebView's exact context):
+#   1. NO-LEAK (the core invariant): the host-only sentinel MUST be
+#      UNREACHABLE. The netns holds only the captive link, so it has no route
+#      to the trusted-net sentinel. reachable=true here is a LEAK.
+#   2. PORTAL REACHABLE: the captive portal MUST be reachable over the
+#      captive link, proving the netns still has its intended connectivity.
+#
+# Both verdicts are written to a host-visible /tmp file (the WebView transient
+# unit shares /tmp); run.sh reads it and makes the assertions. The whole probe
+# block is best-effort wrapped so a hiccup can never abort the runner — a
+# genuinely missing verdict is surfaced by run.sh as a hard failure instead.
+set -u
+
+PORTAL_URL="${1:-}"
+
+# These mirror lib.sh; kept inline because the helper's clean unit env carries
+# nothing from run.sh.
+IFACE="gpcl0"
+CLIENT_CIDR="192.168.77.50/24"
+GATEWAY="192.168.77.1"
+SENTINEL_URL="http://10.123.0.1/health"
+VERDICT="/tmp/gatepath-hwsim-runner.json"
+WEBVIEW_MARKER="/var/lib/gatepath/hwsim/webview.enabled"
+
+# `ip` lives in /usr/sbin on Fedora; the transient unit's default PATH may not
+# include it depending on systemd version. Resolve robustly.
+IP_BIN="$(command -v ip 2>/dev/null || echo /usr/sbin/ip)"
+CURL_BIN="$(command -v curl 2>/dev/null || echo /usr/bin/curl)"
+
+# ── Bring the captive link up (idempotent) ───────────────────────────────
+# The in-netns DHCP step already pinned the address; `replace` keeps this safe
+# to re-run and tolerant of either the static-wrapper or real-DHCP path.
+"$IP_BIN" link set dev lo up 2>/dev/null || true
+"$IP_BIN" link set dev "$IFACE" up 2>/dev/null || true
+"$IP_BIN" addr replace "$CLIENT_CIDR" dev "$IFACE" 2>/dev/null || true
+"$IP_BIN" route replace default via "$GATEWAY" dev "$IFACE" 2>/dev/null || true
+
+# ── No-leak + portal probes ──────────────────────────────────────────────
+{
+    # (1) Sentinel — MUST fail (confined).
+    sentinel_rc=0
+    "$CURL_BIN" -sS -m 4 -o /dev/null "$SENTINEL_URL" || sentinel_rc=$?
+    if [ "$sentinel_rc" -eq 0 ]; then
+        sentinel_reachable=true
+    else
+        sentinel_reachable=false
+    fi
+
+    # (2) Portal — MUST succeed. Capture the HTTP status for run.sh.
+    portal_rc=0
+    portal_code="$("$CURL_BIN" -sS -m 6 -o /dev/null -w '%{http_code}' "$PORTAL_URL" 2>/dev/null)" \
+        || portal_rc=$?
+    [ -n "${portal_code:-}" ] || portal_code=0
+
+    printf '{"sentinel_url":"%s","sentinel_reachable":%s,"sentinel_curl_rc":%d,"portal_url":"%s","portal_http_code":%s,"portal_curl_rc":%d,"runner_uid":%d}\n' \
+        "$SENTINEL_URL" "$sentinel_reachable" "$sentinel_rc" \
+        "$PORTAL_URL" "$portal_code" "$portal_rc" "$(id -u)" \
+        > "$VERDICT"
+} || true
+
+# ── Optional: real WebKit WebView ────────────────────────────────────────
+# Headless is the default and is all the no-leak gate needs. run.sh drops the
+# marker only under --webview; that path needs a graphical session + the
+# gatepath package importable, so it is best-effort. We have already written
+# the verdict above either way.
+if [ -e "$WEBVIEW_MARKER" ]; then
+    exec /usr/bin/python3 -m gatepath.portal_webview_runner "$PORTAL_URL"
+fi
+
+exit 0
