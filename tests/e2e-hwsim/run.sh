@@ -321,6 +321,11 @@ ok "radios renamed: $AP_IFACE (AP), $CL_IFACE (client)"
 #  2. Open AP + DHCP/DNS + mock portal
 # ═════════════════════════════════════════════════════════════════════════
 hdr "2. open AP, DHCP/DNS, mock captive portal"
+# hwsim radios often come up SOFT-BLOCKED by rfkill, and NM may have wifi
+# disabled — either one silently breaks BOTH AP-enable and client scanning.
+# Clear them before we touch the radios.
+have rfkill && rfkill unblock all 2>/dev/null || true
+nmcli radio wifi on 2>/dev/null || true
 nmcli device set "$AP_IFACE" managed no >/dev/null 2>&1 || true
 
 cat > "$WORKDIR/ap.conf" <<EOF
@@ -333,7 +338,11 @@ network={
     key_mgmt=NONE
 }
 EOF
-wpa_supplicant -i "$AP_IFACE" -D nl80211 -c "$WORKDIR/ap.conf" \
+# Bring the iface up before handing it to wpa_supplicant (some builds won't
+# transition a down iface into AP mode), and run wpa_supplicant verbose (-dd)
+# so a failure to enable the AP is visible in wpa-ap.log.
+ip link set "$AP_IFACE" up 2>/dev/null || true
+wpa_supplicant -i "$AP_IFACE" -D nl80211 -c "$WORKDIR/ap.conf" -dd \
   >"$WORKDIR/wpa-ap.log" 2>&1 &
 AP_WPA_PID=$!
 
@@ -341,7 +350,7 @@ AP_WPA_PID=$!
 # AP (bad channel / regdomain / no-IR). Wait for it to ACTUALLY beacon — the
 # interface flips to "type AP" and the log prints AP-ENABLED — before we trust it.
 ap_ready=0
-for _ in $(seq 1 12); do
+for _ in $(seq 1 15); do
   kill -0 "$AP_WPA_PID" 2>/dev/null || break
   if iw dev "$AP_IFACE" info 2>/dev/null | grep -qi 'type AP' \
      || grep -q 'AP-ENABLED' "$WORKDIR/wpa-ap.log" 2>/dev/null; then
@@ -351,10 +360,13 @@ for _ in $(seq 1 12); do
 done
 if [ "$ap_ready" -ne 1 ]; then
   err "AP did NOT start beaconing on $AP_IFACE (wpa_supplicant AP-mode failed)."
-  err "wpa-ap.log tail:"; tail -n 25 "$WORKDIR/wpa-ap.log" 2>/dev/null | sed 's/^/      /' >&2
-  err "regdomain (iw reg get):"; iw reg get 2>/dev/null | grep -E 'country|DFS' | sed 's/^/      /' >&2
+  err "wpa-ap.log tail (-dd):"; tail -n 45 "$WORKDIR/wpa-ap.log" 2>/dev/null | sed 's/^/      /' >&2
+  err "key AP/mode/error lines from the log:"
+  grep -iE 'AP-|iftype|interface state|Mode:|channel|freq|Failed|Could not|not (allowed|permitted)|nl80211.*(fail|error)|country|select_network|disabled' \
+    "$WORKDIR/wpa-ap.log" 2>/dev/null | tail -n 25 | sed 's/^/      /' >&2
   err "iface (iw dev $AP_IFACE info):"; iw dev "$AP_IFACE" info 2>/dev/null | sed 's/^/      /' >&2
-  die "AP failed to enable — see the wpa-ap.log tail above"
+  err "rfkill:"; { have rfkill && rfkill list 2>/dev/null || echo "(rfkill not installed)"; } | sed 's/^/      /' >&2
+  die "AP failed to enable — see the wpa-ap.log lines above (full log: $WORKDIR/wpa-ap.log)"
 fi
 
 ip addr replace "$AP_CIDR" dev "$AP_IFACE" || die "could not set AP address"
