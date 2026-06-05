@@ -607,6 +607,19 @@ hdr "7. drive SetupCaptive → LaunchPortal → TeardownCaptive"
 PASS=1
 note_fail() { err "$1"; PASS=0; }
 
+# --- Diagnostics (no rebuild): what NM reports + whether a root process can
+#     reach NM over raw D-Bus the way the helper's is_captive does. This
+#     disambiguates "NM didn't flag PORTAL" (NotCaptive) from "helper can't
+#     talk to NM" (BackendUnavailable = is_captive DbusFailed). ---
+log "diag: NM Device.Connectivity[$CL_IFACE] = $(nmcli -g GENERAL.CONNECTIVITY device show "$CL_IFACE" 2>&1)"
+log "diag: NM global connectivity        = $(nmcli networking connectivity 2>&1)"
+if busctl call org.freedesktop.NetworkManager /org/freedesktop/NetworkManager \
+     org.freedesktop.NetworkManager GetDevices >/dev/null 2>"$WORKDIR/nm-getdevices.err"; then
+  log "diag: raw D-Bus GetDevices(root)     = OK (NM reachable on the system bus)"
+else
+  log "diag: raw D-Bus GetDevices(root)     = FAILED: $(cat "$WORKDIR/nm-getdevices.err")"
+fi
+
 # --- SetupCaptive(client iface) → netns path ---
 if setup_out="$(busctl call "$DBUS_NAME" "$DBUS_OBJ" "$DBUS_IFACE" \
                 SetupCaptive s "$CL_IFACE" 2>"$WORKDIR/setup.err")"; then
