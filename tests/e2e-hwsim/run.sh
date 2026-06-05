@@ -72,6 +72,7 @@ INSTALLED_POLKIT=0
 INSTALLED_NM_DROPIN=0
 INSTALLED_NFT=0
 FW_TRUSTED_IFACE=""
+RPF_ALL_SAVED=""
 NM_CONN_PROFILE="$SSID"
 
 # ── Cleanup (unconditional EXIT trap) ────────────────────────────────────
@@ -124,6 +125,9 @@ cleanup() {
   if [ -n "$FW_TRUSTED_IFACE" ]; then
     firewall-cmd --zone=trusted --remove-interface="$FW_TRUSTED_IFACE" >/dev/null 2>&1 || true
   fi
+
+  # Restore rp_filter.
+  [ -n "$RPF_ALL_SAVED" ] && sysctl -w "net.ipv4.conf.all.rp_filter=$RPF_ALL_SAVED" >/dev/null 2>&1 || true
 
   # nftables / iptables forward block.
   if [ "$INSTALLED_NFT" -eq 1 ] || { have nft && nft list table $NFT_TABLE >/dev/null 2>&1; }; then
@@ -392,6 +396,16 @@ if have firewall-cmd && firewall-cmd --state >/dev/null 2>&1; then
   fi
 fi
 
+# The AP gateway and the client live on the SAME subnet in the SAME (host) netns,
+# so strict reverse-path filtering can drop the cross-radio packets NM's
+# per-device connectivity check relies on (→ device stuck at LIMITED, never
+# PORTAL). Relax rp_filter for the run; restore net.ipv4.conf.all on teardown.
+RPF_ALL_SAVED="$(sysctl -n net.ipv4.conf.all.rp_filter 2>/dev/null || true)"
+sysctl -w net.ipv4.conf.all.rp_filter=0          >/dev/null 2>&1 || true
+sysctl -w "net.ipv4.conf.$AP_IFACE.rp_filter=0"  >/dev/null 2>&1 || true
+sysctl -w "net.ipv4.conf.$CL_IFACE.rp_filter=0"  >/dev/null 2>&1 || true
+[ -n "$RPF_ALL_SAVED" ] && log "rp_filter relaxed (was all=$RPF_ALL_SAVED)"
+
 dnsmasq --keep-in-foreground --bind-interfaces --interface="$AP_IFACE" \
   --no-resolv --no-hosts \
   --dhcp-range="$DHCP_RANGE_LO,$DHCP_RANGE_HI,255.255.255.0,12h" \
@@ -508,6 +522,19 @@ else
   warn "device state:"; nmcli device show "$CL_IFACE" 2>/dev/null | sed 's/^/      /' >&2 || true
   warn "SetupCaptive will likely be refused with NotCaptive. See README troubleshooting."
 fi
+
+# Reproduce NM's per-device check with a bound curl, and dump the routing/rp_filter
+# that govern same-host AP traffic. If this curl gets 302, the path works and NM's
+# LIMITED is a classification quirk; if it fails, it's a routing/binding artifact
+# of the AP gateway being a local address (→ next step: move the AP into its own
+# netns).
+cl_ip="$(nmcli -g IP4.ADDRESS device show "$CL_IFACE" 2>/dev/null | head -1 | cut -d/ -f1)"
+log "diag: bound curl $CL_IFACE (src ${cl_ip:-?}) → http://$AP_ADDR/generate_204:"
+curl --interface "$CL_IFACE" -m 5 -sS -o /dev/null \
+  -w '      http_code=%{http_code} (302 ⇒ portal path works)\n' \
+  "http://$AP_ADDR/generate_204" 2>&1 | sed 's/^/      /' >&2 || true
+log "diag: rp_filter all=$(sysctl -n net.ipv4.conf.all.rp_filter 2>/dev/null) $CL_IFACE=$(sysctl -n "net.ipv4.conf.$CL_IFACE.rp_filter" 2>/dev/null) $AP_IFACE=$(sysctl -n "net.ipv4.conf.$AP_IFACE.rp_filter" 2>/dev/null)"
+log "diag: ip route get $AP_ADDR oif $CL_IFACE: $(ip route get "$AP_ADDR" oif "$CL_IFACE" 2>&1 | head -1)"
 
 # ═════════════════════════════════════════════════════════════════════════
 #  5. Install helper runtime artifacts
