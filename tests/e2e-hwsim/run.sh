@@ -466,8 +466,13 @@ if ! wait_for 25 "SSID '$SSID' to appear in scan" \
   warn "attempting NM connect anyway"
 fi
 
+# Drop any stale profile from a prior run so connect starts clean.
+nmcli connection delete "$SSID" >/dev/null 2>&1 || true
 if ! nmcli device wifi connect "$SSID" ifname "$CL_IFACE" >"$WORKDIR/nmcli-connect.log" 2>&1; then
-  warn "nmcli connect reported an error; see $WORKDIR/nmcli-connect.log"
+  warn "nmcli connect error:"; sed 's/^/      /' "$WORKDIR/nmcli-connect.log" >&2
+  warn "BSS seen by NM (nmcli dev wifi list):"
+  nmcli -f SSID,BSSID,CHAN,SIGNAL,SECURITY device wifi list ifname "$CL_IFACE" 2>/dev/null \
+    | grep -iE "SSID|$SSID" | sed 's/^/      /' >&2 || true
 fi
 wait_for 30 "$CL_IFACE to associate" \
   bash -c "nmcli -g GENERAL.STATE device show '$CL_IFACE' 2>/dev/null | grep -q '100'" \
