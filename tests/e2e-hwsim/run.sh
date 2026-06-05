@@ -70,6 +70,9 @@ INSTALLED_DBUS_CONF=0
 INSTALLED_POLKIT=0
 INSTALLED_NM_DROPIN=0
 AP_NETNS_CREATED=0
+POLKIT_ACTIONS_DIR="/usr/share/polkit-1/actions"
+POLKIT_OVERLAY_MOUNTED=0
+POLKIT_POLICY_COPIED=0
 NM_CONN_PROFILE="$SSID"
 
 # Run the AP-side commands inside the AP netns.
@@ -132,9 +135,22 @@ cleanup() {
   fi
 
   # D-Bus + polkit system files.
+  # Unmount the polkit action overlay first (restores the read-only actions dir).
+  if [ "$POLKIT_OVERLAY_MOUNTED" -eq 1 ] || mountpoint -q "$POLKIT_ACTIONS_DIR" 2>/dev/null; then
+    umount "$POLKIT_ACTIONS_DIR" 2>/dev/null || true
+    rm -rf "$RUNNER_INSTALL_DIR/polkit-upper" "$RUNNER_INSTALL_DIR/polkit-work" 2>/dev/null || true
+  fi
+  # Or, if we used the /usr-remount fallback, remove the copied action file.
+  if [ "$POLKIT_POLICY_COPIED" -eq 1 ]; then
+    mount -o remount,rw /usr 2>/dev/null \
+      && rm -f "$POLKIT_ACTIONS_DIR/${DBUS_NAME}.policy" 2>/dev/null
+    mount -o remount,ro /usr 2>/dev/null || true
+  fi
   if [ "$INSTALLED_POLKIT" -eq 1 ] || [ -f "$POLKIT_RULE_DST" ]; then
     rm -f "$POLKIT_RULE_DST" 2>/dev/null || true
   fi
+  # Restart polkit so it drops our overlaid action + rule from its cache.
+  systemctl restart polkit >/dev/null 2>&1 || true
   if [ "$INSTALLED_DBUS_CONF" -eq 1 ] || [ -f "$DBUS_CONF_DST" ]; then
     rm -f "$DBUS_CONF_DST" 2>/dev/null || true
     busctl call org.freedesktop.DBus / org.freedesktop.DBus ReloadConfig >/dev/null 2>&1 || true
@@ -532,8 +548,13 @@ INSTALLED_DBUS_CONF=1
 busctl call org.freedesktop.DBus / org.freedesktop.DBus ReloadConfig >/dev/null 2>&1 || true
 ok "D-Bus system policy installed + reloaded"
 
-# PolicyKit: the shipped .policy lives under read-only /usr/share, so a rules.d
-# rule (writable) authorizes both action ids regardless of action registration.
+# PolicyKit needs TWO things:
+#   (1) the action REGISTERED — polkit refuses CheckAuthorization for an
+#       unregistered action ("Action ... is not registered"). The shipped
+#       .policy lives under read-only /usr/share, so on an immutable host we
+#       overlay-mount it on top of the actions dir (originals preserved).
+#   (2) a rules.d YES rule so the registered action (default auth_admin_keep)
+#       authorizes without a prompt on a headless box.
 cat > "$POLKIT_RULE_DST" <<'EOF'
 // hwsim harness only — auto-allow Gatepath helper actions (no auth agent on a
 // headless test box). Removed on teardown; never installed on real systems.
@@ -545,6 +566,40 @@ polkit.addRule(function(action, subject) {
 EOF
 INSTALLED_POLKIT=1
 ok "polkit YES rule installed at $POLKIT_RULE_DST"
+
+# Register the action by overlaying our .policy onto the read-only actions dir.
+_pk_ovl_upper="$RUNNER_INSTALL_DIR/polkit-upper"
+_pk_ovl_work="$RUNNER_INSTALL_DIR/polkit-work"
+rm -rf "$_pk_ovl_upper" "$_pk_ovl_work"
+mkdir -p "$_pk_ovl_upper" "$_pk_ovl_work"
+install -m 0644 "$CRATE_DIR/data/${DBUS_NAME}.policy" "$_pk_ovl_upper/${DBUS_NAME}.policy" \
+  || die "could not stage the polkit .policy"
+# Match SELinux context to a sibling action so polkit can read it under enforcing.
+_ref_policy="$(ls "$POLKIT_ACTIONS_DIR"/*.policy 2>/dev/null | head -1)"
+[ -n "$_ref_policy" ] && chcon --reference="$_ref_policy" "$_pk_ovl_upper/${DBUS_NAME}.policy" 2>/dev/null || true
+_pk_policy_dst="$POLKIT_ACTIONS_DIR/${DBUS_NAME}.policy"
+if mount -t overlay gatepath-polkit \
+     -o "lowerdir=$POLKIT_ACTIONS_DIR,upperdir=$_pk_ovl_upper,workdir=$_pk_ovl_work" \
+     "$POLKIT_ACTIONS_DIR" 2>"$WORKDIR/polkit-ovl.err"; then
+  POLKIT_OVERLAY_MOUNTED=1
+  ok "polkit action registered via overlay on $POLKIT_ACTIONS_DIR"
+else
+  warn "overlay-mount failed: $(cat "$WORKDIR/polkit-ovl.err")"
+  # Fallback: transiently remount /usr rw and drop the action file in directly
+  # (restorecon fixes the SELinux label via the real path). Removed on teardown.
+  if mount -o remount,rw /usr 2>/dev/null \
+     && install -m 0644 "$CRATE_DIR/data/${DBUS_NAME}.policy" "$_pk_policy_dst" 2>/dev/null; then
+    restorecon "$_pk_policy_dst" 2>/dev/null || true
+    POLKIT_POLICY_COPIED=1
+    ok "polkit action registered by copy into /usr (transient remount)"
+  else
+    warn "could not register the polkit action — SetupCaptive auth will fail 'not registered'"
+  fi
+  mount -o remount,ro /usr 2>/dev/null || true
+fi
+# Restart polkit so it (re)reads the actions dir (incl. our action) and the
+# rules.d rule, BEFORE the helper connects to it in step 6.
+systemctl restart polkit >/dev/null 2>&1 || warn "could not restart polkit"
 
 # DHCP client shim the helper will exec inside the netns. The helper's argv is
 # `udhcpc -f -q -n -t 6 -i <iface>` (no -s); our shim supplies the rest.
