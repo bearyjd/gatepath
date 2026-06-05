@@ -71,6 +71,7 @@ INSTALLED_DBUS_CONF=0
 INSTALLED_POLKIT=0
 INSTALLED_NM_DROPIN=0
 INSTALLED_NFT=0
+FW_TRUSTED_IFACE=""
 NM_CONN_PROFILE="$SSID"
 
 # ── Cleanup (unconditional EXIT trap) ────────────────────────────────────
@@ -118,6 +119,11 @@ cleanup() {
 
   # Sentinel dummy link.
   ip link del "$SENTINEL_IFACE" 2>/dev/null || true
+
+  # firewalld trusted-zone assignment.
+  if [ -n "$FW_TRUSTED_IFACE" ]; then
+    firewall-cmd --zone=trusted --remove-interface="$FW_TRUSTED_IFACE" >/dev/null 2>&1 || true
+  fi
 
   # nftables / iptables forward block.
   if [ "$INSTALLED_NFT" -eq 1 ] || { have nft && nft list table $NFT_TABLE >/dev/null 2>&1; }; then
@@ -371,6 +377,20 @@ fi
 
 ip addr replace "$AP_CIDR" dev "$AP_IFACE" || die "could not set AP address"
 ok "AP beaconing on $AP_IFACE ($AP_ADDR), SSID '$SSID'"
+
+# Fedora/Bazzite runs firewalld; a freshly-created interface lands in the
+# DEFAULT zone, which DROPs inbound DHCP/DNS/HTTP. Without this the client
+# associates but never gets a lease (NM: ip-config-unavailable), and the
+# in-netns runner can't reach the portal either. Put the AP iface in the
+# trusted (accept-all) zone for the run; removed on teardown.
+if have firewall-cmd && firewall-cmd --state >/dev/null 2>&1; then
+  if firewall-cmd --zone=trusted --add-interface="$AP_IFACE" >/dev/null 2>&1; then
+    FW_TRUSTED_IFACE="$AP_IFACE"
+    ok "firewalld: $AP_IFACE → trusted zone (DHCP/DNS/HTTP now reach the AP)"
+  else
+    warn "firewalld active but couldn't trust $AP_IFACE — DHCP to the client may be dropped"
+  fi
+fi
 
 dnsmasq --keep-in-foreground --bind-interfaces --interface="$AP_IFACE" \
   --no-resolv --no-hosts \
