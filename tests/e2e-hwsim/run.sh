@@ -614,12 +614,31 @@ systemctl restart polkit >/dev/null 2>&1 || warn "could not restart polkit"
 if [ "$DHCP_MODE" = "static" ]; then
   cat > "$WORKDIR/bin/udhcpc" <<EOF
 #!/bin/sh
-# static-lease shim: pin the lease and exit 0 (helper waits on this).
+# static-lease shim. The helper waits on this as its "DHCP" step and treats
+# success as proof L2 is up (in production the real client can't get a lease
+# until wpa_supplicant associates). So MIRROR that: wait for the in-netns
+# association (carrier) before pinning the lease and returning 0 — otherwise we
+# falsely report success into a netns with no L2 and the WebView has no path.
+exec >>/tmp/gatepath-hwsim-dhcp.log 2>&1
+echo "=== dhcp-shim argv=[\$*] ==="
+set -x
 iface=""; prev=""
 for a in "\$@"; do [ "\$prev" = "-i" ] && iface="\$a"; prev="\$a"; done
 [ -n "\$iface" ] || iface="$CL_IFACE"
+assoc=no
+for _ in \$(seq 1 25); do
+  if iw dev "\$iface" link 2>/dev/null | grep -qi 'Connected to'; then assoc=yes; break; fi
+  sleep 1
+done
+iw dev "\$iface" link 2>&1 || true
+ip -br link show "\$iface" 2>&1 || true
 ip addr replace "$CLIENT_STATIC_CIDR" dev "\$iface"
 ip route replace default via "$AP_ADDR" dev "\$iface"
+if [ "\$assoc" != yes ]; then
+  echo "WARN: \$iface never associated (no carrier) after 25s — failing DHCP so SetupCaptive refuses honestly"
+  exit 1
+fi
+echo "associated; lease pinned"
 exit 0
 EOF
 else
