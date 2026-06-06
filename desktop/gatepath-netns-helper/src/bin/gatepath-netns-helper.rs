@@ -193,6 +193,10 @@ async fn run() -> anyhow::Result<()> {
         },
     )));
 
+    // The `?` here only surfaces a SIGTERM/SIGINT handler-install failure, which
+    // happens at startup before any session or netns exists — propagating it
+    // (and unwinding the runtime) leaks nothing. Do NOT "fix" this into the
+    // teardown path below: post-startup this future only ever resolves `Ok`.
     wait_for_shutdown(&conn).await?;
 
     // Shutdown: tear down any still-active session (a SIGTERM / systemd stop
@@ -204,8 +208,16 @@ async fn run() -> anyhow::Result<()> {
     // from within a runtime"). `process::exit` skips those Drops; the netns is
     // already torn down here and the audit log flushes on every append.
     let svc = Arc::clone(&service);
-    let _ = tokio::task::spawn_blocking(move || svc.shutdown_teardown()).await;
-    std::process::exit(0)
+    // A panic inside teardown must not be swallowed into a clean exit: that
+    // would leak the netns AND report rc 0 to systemd. Surface it as rc 1 + a
+    // log so a failed shutdown is loud rather than silent.
+    match tokio::task::spawn_blocking(move || svc.shutdown_teardown()).await {
+        Ok(()) => std::process::exit(0),
+        Err(join_err) => {
+            tracing::error!(error = %join_err, "shutdown teardown panicked; netns may have leaked");
+            std::process::exit(1)
+        }
+    }
 }
 
 async fn wait_for_shutdown(_conn: &zbus::Connection) -> anyhow::Result<()> {

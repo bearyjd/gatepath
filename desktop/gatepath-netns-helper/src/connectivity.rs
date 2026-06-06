@@ -244,14 +244,25 @@ pub fn dhcp_args(client: DhcpClient, netns: &str, interface: &str) -> Vec<String
 /// behavior is unchanged unless the variable is set explicitly.
 pub const DHCP_CLIENT_ENV: &str = "GATEPATH_DHCP_CLIENT";
 
-/// Pure mapping from a [`DHCP_CLIENT_ENV`] value to a [`DhcpClient`]. Split out
-/// from [`LinuxNetnsConnectivity::new`] so it is unit-testable without mutating
-/// process-global environment state.
+/// Maps a [`DHCP_CLIENT_ENV`] value to a [`DhcpClient`]. Split out from
+/// [`LinuxNetnsConnectivity::new`] so it is unit-testable without mutating
+/// process-global environment state. A non-empty, unrecognized value is logged
+/// (the only side effect) before falling back to the compiled-in default.
 fn parse_dhcp_client(value: Option<&str>) -> DhcpClient {
     match value {
         Some("udhcpc") => DhcpClient::Udhcpc,
-        // `dhclient`, unset, empty, or anything unrecognized → compiled-in default.
-        _ => DhcpClient::Dhclient,
+        // `dhclient`, unset, or empty → compiled-in default, silently.
+        Some("dhclient" | "") | None => DhcpClient::Dhclient,
+        // A non-empty, unrecognized value is almost always a typo (`udhcp`,
+        // `dhcpcd`, …). Warn so it doesn't fall back invisibly, then use the
+        // compiled-in default to keep shipping behavior unchanged.
+        Some(other) => {
+            tracing::warn!(
+                value = other,
+                "unrecognized {DHCP_CLIENT_ENV} value; falling back to dhclient"
+            );
+            DhcpClient::Dhclient
+        }
     }
 }
 
