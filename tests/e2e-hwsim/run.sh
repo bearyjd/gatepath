@@ -251,6 +251,37 @@ fi
 hdr "0. preconditions"
 [ "$(id -u)" -eq 0 ] || die "run.sh must be root (sudo bash tests/e2e-hwsim/run.sh)"
 
+# Fail fast if this box can't do the privileged ops the harness needs. It
+# creates network namespaces and loads mac80211_hwsim; a container usually
+# lacks CAP_SYS_ADMIN/CAP_SYS_MODULE (even with sudo) and has no kernel-module
+# tree, so it would otherwise fail deep in the run with a confusing error.
+# Probe the netns op directly (reversible) and, if it fails, tailor the message
+# for a container so the user knows to run this on the host, not the toolbox.
+if have ip; then
+  _pf_err="/tmp/gatepath-hwsim-precheck.$$.err"
+  if ip netns add gp-netns-precheck 2>"$_pf_err"; then
+    ip netns del gp-netns-precheck 2>/dev/null || true
+    rm -f "$_pf_err"
+    ok "privileged netns ops available"
+  else
+    _pf_msg="$(head -n1 "$_pf_err" 2>/dev/null)"
+    rm -f "$_pf_err"
+    # `ip netns add` can leave a stale /run/netns entry even when it fails (the
+    # name is created before the failing step), so clear it before we abort.
+    ip netns del gp-netns-precheck 2>/dev/null || true
+    if [ -f /run/.containerenv ] || [ -f /.dockerenv ]; then
+      err "cannot create a network namespace: ${_pf_msg:-permission denied}"
+      err "This is a CONTAINER — the hwsim harness needs host-level netns + kernel-"
+      err "module privilege it does not have. You CAN build here:"
+      err "    bash tests/e2e-hwsim/build-helper.sh"
+      die "but RUN this script from a host shell on the bare-metal/VM box, not the container."
+    else
+      err "cannot create a network namespace: ${_pf_msg:-permission denied}"
+      die "the harness needs CAP_SYS_ADMIN — run on a host with full privilege."
+    fi
+  fi
+fi
+
 [ -x "$HELPER_BIN" ] || die "helper binary not found at $HELPER_BIN — run: bash tests/e2e-hwsim/build-helper.sh"
 ok "helper binary present: $HELPER_BIN"
 
@@ -269,10 +300,6 @@ if ! systemctl is-active --quiet NetworkManager 2>/dev/null; then
   die "NetworkManager is not active; the helper requires it (Device.Connectivity)"
 fi
 ok "NetworkManager active"
-
-if [ -f /run/.containerenv ] || [ -f /.dockerenv ]; then
-  warn "looks like a container — netns/module ops may be denied; bare metal is expected"
-fi
 
 WORKDIR="$(mktemp -d /tmp/gatepath-hwsim.XXXXXX)" || die "mktemp failed"
 mkdir -p "$WORKDIR/bin"
