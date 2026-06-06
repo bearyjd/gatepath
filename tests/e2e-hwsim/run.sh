@@ -256,6 +256,10 @@ fi
 
 WORKDIR="$(mktemp -d /tmp/gatepath-hwsim.XXXXXX)" || die "mktemp failed"
 mkdir -p "$WORKDIR/bin"
+# World-readable so the logs can be inspected from a shared /tmp (e.g. a
+# toolbox/distrobox container on the same host). Test artifacts only — open
+# network, no secrets. Files inside are written 0644 by default.
+chmod 0755 "$WORKDIR"
 log "workdir: $WORKDIR"
 
 # Pre-clean wedged state from a prior crashed run so we fail at REAL problems,
