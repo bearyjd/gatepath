@@ -743,6 +743,8 @@ if [ -s "$RUNNER_VERDICT" ]; then
     ok "portal reachable from inside the netns (http $p_code)"
   else
     note_fail "portal NOT reachable from inside the netns (curl rc=$p_rc, http $p_code)"
+    err "runner self-log (in-netns network state):"
+    sed 's/^/      /' /tmp/gatepath-hwsim-runner.log 2>/dev/null >&2 || true
   fi
 else
   note_fail "runner never wrote a verdict"

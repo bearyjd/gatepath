@@ -59,6 +59,17 @@ CURL_BIN="$(command -v curl 2>/dev/null || echo /usr/bin/curl)"
 "$IP_BIN" addr replace "$CLIENT_CIDR" dev "$IFACE" 2>/dev/null || true
 "$IP_BIN" route replace default via "$GATEWAY" dev "$IFACE" 2>/dev/null || true
 
+# ── Dump the in-netns network state (to the self-log) so a no-data-path
+#    failure is diagnosable: address, link, routes, gateway reachability. ──
+echo "--- in-netns network state ---"
+"$IP_BIN" -br addr 2>&1 || true
+"$IP_BIN" -br link 2>&1 || true
+"$IP_BIN" route 2>&1 || true
+"$IP_BIN" neigh 2>&1 || true
+command -v iw >/dev/null 2>&1 && iw dev "$IFACE" link 2>&1 || true
+command -v ping >/dev/null 2>&1 && ping -c1 -W2 "$GATEWAY" 2>&1 || true
+echo "--- end network state ---"
+
 # ── No-leak + portal probes ──────────────────────────────────────────────
 {
     # (1) Sentinel — MUST fail (confined).
