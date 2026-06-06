@@ -27,6 +27,13 @@
 # genuinely missing verdict is surfaced by run.sh as a hard failure instead.
 set -u
 
+# Log everything to a host-visible file (the transient unit shares /tmp) so a
+# failure BEFORE the verdict write is still diagnosable. The verdict itself is
+# written with an explicit redirect below, so this doesn't swallow it.
+exec >>/tmp/gatepath-hwsim-runner.log 2>&1
+echo "=== runner start: $(id) pwd=$(pwd) argv=[$*] ==="
+set -x
+
 PORTAL_URL="${1:-}"
 
 # These mirror lib.sh; kept inline because the helper's clean unit env carries

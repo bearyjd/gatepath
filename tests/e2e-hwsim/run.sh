@@ -536,6 +536,10 @@ hdr "5. install helper artifacts"
 mkdir -p "$HELPER_STATE_DIR" "$RUNNER_INSTALL_DIR" "$HELPER_RUNTIME_DIR"
 
 install -m 0755 "$HWSIM_DIR/portal-webview-runner.hwsim" "$RUNNER_INSTALL_PATH"
+# Relabel for SELinux: systemd (init_t) executes the runner as a transient unit;
+# a var_lib_t script would be denied execution under enforcing. bin_t is the
+# standard "executable systemd can run" type. Harmless if SELinux is off.
+chcon -t bin_t "$RUNNER_INSTALL_PATH" 2>/dev/null || true
 ok "runner installed at $RUNNER_INSTALL_PATH"
 if [ "$WEBVIEW" -eq 1 ]; then
   : > "$WEBVIEW_MARKER"
@@ -689,7 +693,7 @@ fi
 # wait-for-verdict → TeardownCaptive, exactly like the real GUI.
 have python3 && python3 -c 'import dbus' 2>/dev/null \
   || die "drive.py needs python3 + python-dbus (import dbus failed)"
-rm -f "$RUNNER_VERDICT"
+rm -f "$RUNNER_VERDICT" /tmp/gatepath-hwsim-runner.log
 log "driving SetupCaptive → LaunchPortal → TeardownCaptive (single connection)"
 drive_out="$(python3 "$HWSIM_DIR/drive.py" "$CL_IFACE" "$PORTAL_URL" "$RUNNER_VERDICT" 25 2>"$WORKDIR/drive.err")"
 [ -s "$WORKDIR/drive.err" ] && cat "$WORKDIR/drive.err" >&2
@@ -741,8 +745,22 @@ if [ -s "$RUNNER_VERDICT" ]; then
     note_fail "portal NOT reachable from inside the netns (curl rc=$p_rc, http $p_code)"
   fi
 else
-  note_fail "runner never wrote a verdict; helper log tail:"
-  tail -n 25 "$WORKDIR/helper.log" 2>/dev/null | sed 's/^/      /' >&2
+  note_fail "runner never wrote a verdict"
+  err "helper log tail:"; tail -n 18 "$WORKDIR/helper.log" 2>/dev/null | sed 's/^/      /' >&2
+  err "runner self-log (/tmp/gatepath-hwsim-runner.log):"
+  if [ -s /tmp/gatepath-hwsim-runner.log ]; then
+    sed 's/^/      /' /tmp/gatepath-hwsim-runner.log >&2
+  else
+    err "      (empty/absent — the runner never executed; likely a systemd-run/SELinux issue)"
+  fi
+  err "recent transient unit journal (run-*.service):"
+  journalctl --no-pager --since '60 sec ago' 2>/dev/null \
+    | grep -iE 'run-[0-9a-f]+\.service|portal-webview-runner|systemd-run' | tail -n 15 | sed 's/^/      /' >&2 || true
+  err "SELinux denials in the last minute:"
+  journalctl --no-pager --since '60 sec ago' 2>/dev/null \
+    | grep -iE 'avc:|SELinux|denied' | tail -n 12 | sed 's/^/      /' >&2 \
+    || echo "      (none / journal unavailable)" >&2
+  err "SELinux mode: $(getenforce 2>/dev/null || echo unknown)"
 fi
 
 # --- TeardownCaptive + netns gone ---
