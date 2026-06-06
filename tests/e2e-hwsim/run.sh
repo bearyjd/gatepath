@@ -73,6 +73,7 @@ AP_NETNS_CREATED=0
 POLKIT_ACTIONS_DIR="/usr/share/polkit-1/actions"
 POLKIT_OVERLAY_MOUNTED=0
 POLKIT_POLICY_COPIED=0
+USR_REMOUNTED_RW=0       # set while /usr is transiently rw (polkit-copy fallback)
 NM_CONN_PROFILE="$SSID"
 
 # Run the AP-side commands inside the AP netns.
@@ -145,6 +146,13 @@ cleanup() {
     mount -o remount,rw /usr 2>/dev/null \
       && rm -f "$POLKIT_ACTIONS_DIR/${DBUS_NAME}.policy" 2>/dev/null
     mount -o remount,ro /usr 2>/dev/null || true
+    USR_REMOUNTED_RW=0
+  fi
+  # Safety net: if we were killed while /usr was transiently rw (before the
+  # in-line re-seal during setup ran), force it back to read-only now.
+  if [ "$USR_REMOUNTED_RW" -eq 1 ]; then
+    mount -o remount,ro /usr 2>/dev/null || true
+    USR_REMOUNTED_RW=0
   fi
   if [ "$INSTALLED_POLKIT" -eq 1 ] || [ -f "$POLKIT_RULE_DST" ]; then
     rm -f "$POLKIT_RULE_DST" 2>/dev/null || true
@@ -179,7 +187,12 @@ cleanup() {
   log "teardown complete"
   exit "$rc"
 }
-trap cleanup EXIT
+# Trap signals too, not just EXIT: bash runs the EXIT trap for an untrapped
+# SIGTERM/SIGINT only if those signals are ALSO trapped. Without this, a
+# logout / `systemctl` session-kill / Ctrl-C mid-run would skip cleanup and
+# leave the polkit YES rule, a transiently-rw /usr, and the NM connectivity
+# override behind on a real machine.
+trap cleanup EXIT INT TERM
 
 # ── small helpers ────────────────────────────────────────────────────────
 kill_pid() {
@@ -318,7 +331,20 @@ hwsim_netdevs() {
 mapfile -t PRE_HWSIM < <(hwsim_netdevs)
 if lsmod 2>/dev/null | grep -q '^mac80211_hwsim'; then
   warn "mac80211_hwsim already loaded — reusing existing virtual radios, NOT unloading on exit"
-  mapfile -t NEW_HWSIM < <(hwsim_netdevs)
+  # Only claim radios that look idle. A radio another tool is using is
+  # administratively UP or already carries an IP; renaming it out from under
+  # that tool would break it. Skip those — the >=2 check below then fails
+  # honestly if fewer than two idle radios remain.
+  NEW_HWSIM=()
+  while IFS= read -r _hw; do
+    [ -n "$_hw" ] || continue
+    if ip link show "$_hw" 2>/dev/null | grep -qw 'state UP' \
+       || ip -o addr show "$_hw" 2>/dev/null | grep -q 'inet'; then
+      warn "  skipping hwsim radio $_hw (in use: UP or has an IP)"
+      continue
+    fi
+    NEW_HWSIM+=("$_hw")
+  done < <(hwsim_netdevs)
 else
   modprobe mac80211_hwsim radios=2 2>"$WORKDIR/modprobe.err" \
     || die "modprobe mac80211_hwsim radios=2 failed: $(cat "$WORKDIR/modprobe.err")"
@@ -546,7 +572,24 @@ curl --interface "$CL_IFACE" -m 5 -sS -o /dev/null \
 hdr "5. install helper artifacts"
 mkdir -p "$HELPER_STATE_DIR" "$RUNNER_INSTALL_DIR" "$HELPER_RUNTIME_DIR"
 
-install -m 0755 "$HWSIM_DIR/portal-webview-runner.hwsim" "$RUNNER_INSTALL_PATH"
+# Render the runner from its template: substitute the @PLACEHOLDER@ tokens with
+# the canonical values from lib.sh so lib.sh stays the single source of truth
+# (the runner runs in the helper's clean unit env and can't source lib.sh). Use
+# '#' as the sed delimiter since the values contain '/'.
+sed -e "s#@IFACE@#$CL_IFACE#g" \
+    -e "s#@CLIENT_CIDR@#$CLIENT_STATIC_CIDR#g" \
+    -e "s#@GATEWAY@#$AP_ADDR#g" \
+    -e "s#@SENTINEL_URL@#$SENTINEL_URL#g" \
+    -e "s#@VERDICT@#$RUNNER_VERDICT#g" \
+    -e "s#@WEBVIEW_MARKER@#$WEBVIEW_MARKER#g" \
+    "$HWSIM_DIR/portal-webview-runner.hwsim" > "$WORKDIR/portal-webview-runner.rendered" \
+  || die "could not render the runner template"
+# Fail loud if any token went unsubstituted (typo'd placeholder / new var) so we
+# never install a runner that probes a literal '@IFACE@'.
+if grep -q '@[A-Z_][A-Z_]*@' "$WORKDIR/portal-webview-runner.rendered"; then
+  die "runner template has unsubstituted placeholders: $(grep -o '@[A-Z_][A-Z_]*@' "$WORKDIR/portal-webview-runner.rendered" | sort -u | tr '\n' ' ')"
+fi
+install -m 0755 "$WORKDIR/portal-webview-runner.rendered" "$RUNNER_INSTALL_PATH"
 # Relabel for SELinux: systemd (init_t) executes the runner as a transient unit;
 # a var_lib_t script would be denied execution under enforcing. bin_t is the
 # standard "executable systemd can run" type. Harmless if SELinux is off.
@@ -602,15 +645,22 @@ else
   warn "overlay-mount failed: $(cat "$WORKDIR/polkit-ovl.err")"
   # Fallback: transiently remount /usr rw and drop the action file in directly
   # (restorecon fixes the SELinux label via the real path). Removed on teardown.
-  if mount -o remount,rw /usr 2>/dev/null \
-     && install -m 0644 "$CRATE_DIR/data/${DBUS_NAME}.policy" "$_pk_policy_dst" 2>/dev/null; then
-    restorecon "$_pk_policy_dst" 2>/dev/null || true
-    POLKIT_POLICY_COPIED=1
-    ok "polkit action registered by copy into /usr (transient remount)"
+  # Track the rw state in USR_REMOUNTED_RW so cleanup can force /usr back to ro
+  # even if we're killed mid-window; re-seal inline so /usr is writable only for
+  # the single install, not the rest of the run.
+  if mount -o remount,rw /usr 2>/dev/null; then
+    USR_REMOUNTED_RW=1
+    if install -m 0644 "$CRATE_DIR/data/${DBUS_NAME}.policy" "$_pk_policy_dst" 2>/dev/null; then
+      restorecon "$_pk_policy_dst" 2>/dev/null || true
+      POLKIT_POLICY_COPIED=1
+      ok "polkit action registered by copy into /usr (transient remount)"
+    else
+      warn "could not register the polkit action — SetupCaptive auth will fail 'not registered'"
+    fi
+    mount -o remount,ro /usr 2>/dev/null && USR_REMOUNTED_RW=0
   else
-    warn "could not register the polkit action — SetupCaptive auth will fail 'not registered'"
+    warn "could not remount /usr rw to register the polkit action — SetupCaptive auth may fail 'not registered'"
   fi
-  mount -o remount,ro /usr 2>/dev/null || true
 fi
 # Restart polkit so it (re)reads the actions dir (incl. our action) and the
 # rules.d rule, BEFORE the helper connects to it in step 6.

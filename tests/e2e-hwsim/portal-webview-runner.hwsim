@@ -36,15 +36,19 @@ set -x
 
 PORTAL_URL="${1:-}"
 
-# These mirror lib.sh; kept inline because the helper's clean unit env carries
-# nothing from run.sh. IFACE must match lib.sh's CL_IFACE (a WiFi-prefixed name
-# the helper's validator accepts) — the PHY keeps this name after the move.
-IFACE="wlangp0"
-CLIENT_CIDR="192.168.77.50/24"
-GATEWAY="192.168.77.1"
-SENTINEL_URL="http://10.123.0.1/health"
-VERDICT="/tmp/gatepath-hwsim-runner.json"
-WEBVIEW_MARKER="/var/lib/gatepath/hwsim/webview.enabled"
+# These values are TEMPLATED IN by run.sh at install time (sed-substituted from
+# lib.sh's canonical vars) so lib.sh stays the single source of truth — the
+# runner executes in the helper's clean unit env and can't source lib.sh. The
+# placeholder tokens below are replaced on install; run.sh hard-fails if any
+# remain. Do NOT run this file directly (the tokens would stay literal). IFACE
+# maps to lib.sh's CL_IFACE, a WiFi-prefixed name the helper's validator
+# accepts — the PHY keeps this name after the move.
+IFACE="@IFACE@"
+CLIENT_CIDR="@CLIENT_CIDR@"
+GATEWAY="@GATEWAY@"
+SENTINEL_URL="@SENTINEL_URL@"
+VERDICT="@VERDICT@"
+WEBVIEW_MARKER="@WEBVIEW_MARKER@"
 
 # `ip` lives in /usr/sbin on Fedora; the transient unit's default PATH may not
 # include it depending on systemd version. Resolve robustly.
