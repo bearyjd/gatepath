@@ -30,6 +30,22 @@ security-sensitive piece of work. `WifiSecurity::Psk` is modelled but
 `bring_up` returns `ConnectivityError::Unsupported` rather than silently
 producing a session that can never associate.
 
+### Testing gap — NM connectivity wire-contract is not covered in CI
+
+`network_manager.rs` reads the NetworkManager Device property `Ip4Connectivity`
+(the bare `Connectivity` property does not exist — reading it raises
+`org.freedesktop.DBus.Error.InvalidArgs`). This wire-contract is exercised
+**only** by the privileged `tests/e2e-hwsim/` harness, which needs netns +
+kernel-module privilege and so cannot run in CI. The unit tests fake
+`CaptiveStateChecker`, so a future rename to another non-existent property name
+would pass every CI check and ship broken.
+
+**Fix (pending):** a `python-dbusmock`-backed integration test that stands up a
+fake NetworkManager on a private session bus and asserts the helper reads
+`Ip4Connectivity` (and not `Connectivity`). `preflight.sh` already probes for
+`python-dbusmock`; this is net-new test infra, tracked here so the gap is
+visible rather than folklore.
+
 ---
 
 ## Resolved
