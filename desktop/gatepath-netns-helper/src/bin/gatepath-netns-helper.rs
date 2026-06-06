@@ -193,7 +193,19 @@ async fn run() -> anyhow::Result<()> {
         },
     )));
 
-    wait_for_shutdown(&conn).await
+    wait_for_shutdown(&conn).await?;
+
+    // Shutdown: tear down any still-active session (a SIGTERM / systemd stop
+    // with a live session would otherwise leak the netns), then exit the
+    // process directly. We deliberately do NOT fall through to a normal return:
+    // unwinding `#[tokio::main]`'s runtime drops the blocking-zbus connections
+    // (PolicyKit / NetworkManager / name-watch / UID-lookup), whose `Drop`
+    // calls `block_on`, which panics on a tokio worker ("Cannot start a runtime
+    // from within a runtime"). `process::exit` skips those Drops; the netns is
+    // already torn down here and the audit log flushes on every append.
+    let svc = Arc::clone(&service);
+    let _ = tokio::task::spawn_blocking(move || svc.shutdown_teardown()).await;
+    std::process::exit(0)
 }
 
 async fn wait_for_shutdown(_conn: &zbus::Connection) -> anyhow::Result<()> {

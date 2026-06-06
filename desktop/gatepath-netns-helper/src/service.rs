@@ -709,6 +709,19 @@ impl<
         self.audit.append(&entry);
     }
 
+    /// Unconditional teardown for process shutdown (SIGTERM / systemd stop).
+    /// Tears down any still-active session — stop wpa_supplicant/DHCP, destroy
+    /// the netns, clear state — via the same auth-free path the backstop uses.
+    /// A no-op when idle. The daemon calls this on shutdown so it cleans up a
+    /// live session rather than leaking the netns, and so it can then exit the
+    /// process directly instead of unwinding `#[tokio::main]`'s runtime (which
+    /// would drop the blocking-zbus connections, whose `Drop` calls `block_on`
+    /// and panics on a tokio worker — "Cannot start a runtime from within a
+    /// runtime"). Audit entries flush on append, so a hard exit loses nothing.
+    pub fn shutdown_teardown(&self) {
+        self.fire_backstop_teardown();
+    }
+
     fn audit_launch(&self, sender: &str, response: &LaunchPortalResponse) {
         let (decision, pid) = match response {
             LaunchPortalResponse::Success { pid } => (AuditDecision::Success, Some(*pid)),
