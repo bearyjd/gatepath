@@ -21,10 +21,18 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 import sys
 import time
 
 import dbus
+
+# Harness-fixed names (match lib.sh). Used only for live diagnostics.
+GATEPATH_NETNS = "gatepath"
+AP_NETNS = "gphwsim_ap"
+AP_IFACE = "gpap0"
+GATEWAY = "192.168.77.1"
+RUNNER_LOG = "/tmp/gatepath-hwsim-runner.log"
 
 BUS_NAME = "cc.grepon.Gatepath.NetNsHelper"
 OBJ_PATH = "/cc/grepon/Gatepath/NetNsHelper"
@@ -102,10 +110,48 @@ def main() -> int:
     else:
         log(f"runner verdict NOT seen within {verdict_timeout:.0f}s")
 
+    # --- Capture the LIVE in-netns state before teardown (we still hold the
+    #     connection, so the session — and the netns — is still up). This is the
+    #     only window to inspect it: TeardownCaptive destroys the netns. ---
+    dump_live_state(interface)
+
     # --- TeardownCaptive ---
     ok = _try_teardown(helper, result)
     print(json.dumps(result))
     return 0 if ok else 1
+
+
+def _run(label: str, argv: list) -> None:
+    print(f"      [diag] --- {label} ---", file=sys.stderr, flush=True)
+    try:
+        out = subprocess.run(argv, capture_output=True, text=True, timeout=10)
+        body = (out.stdout + out.stderr).rstrip()
+        for line in (body.splitlines() or ["(no output)"]):
+            print(f"            {line}", file=sys.stderr)
+    except Exception as exc:  # noqa: BLE001
+        print(f"            (failed: {exc})", file=sys.stderr)
+
+
+def dump_live_state(interface: str) -> None:
+    """Dump the live gatepath-netns + AP state while the session is still up."""
+    g = ["ip", "netns", "exec", GATEPATH_NETNS]
+    _run("netns ip -br addr", g + ["ip", "-br", "addr"])
+    _run("netns ip -br link", g + ["ip", "-br", "link"])
+    _run("netns ip route", g + ["ip", "route"])
+    _run("netns ip neigh", g + ["ip", "neigh"])
+    _run("netns iw link", g + ["iw", "dev", interface, "link"])
+    _run("netns ping gateway", g + ["ping", "-c2", "-W2", GATEWAY])
+    _run("netns curl -v portal", g + ["curl", "-v", "-m", "5", f"http://{GATEWAY}/portal"])
+    _run("AP station dump (does the AP see the client?)",
+         ["ip", "netns", "exec", AP_NETNS, "iw", "dev", AP_IFACE, "station", "dump"])
+    print("      [diag] --- runner self-log ---", file=sys.stderr, flush=True)
+    try:
+        with open(RUNNER_LOG, encoding="utf-8", errors="replace") as fh:
+            data = fh.read()
+        for line in (data.splitlines() or ["(empty)"]):
+            print(f"            {line}", file=sys.stderr)
+    except OSError as exc:
+        print(f"            (no runner log: {exc})", file=sys.stderr)
 
 
 def _try_teardown(helper, result: dict) -> bool:
