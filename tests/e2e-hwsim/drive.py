@@ -110,15 +110,29 @@ def main() -> int:
     else:
         log(f"runner verdict NOT seen within {verdict_timeout:.0f}s")
 
-    # --- Capture the LIVE in-netns state before teardown (we still hold the
-    #     connection, so the session — and the netns — is still up). This is the
-    #     only window to inspect it: TeardownCaptive destroys the netns. ---
-    dump_live_state(interface)
+    # --- Capture the LIVE in-netns state before teardown, but ONLY when the
+    #     verdict looks wrong (missing, portal unreachable, or a leak). This is
+    #     the only window to inspect it — TeardownCaptive destroys the netns —
+    #     but a clean PASS doesn't need the slow/verbose dump. ---
+    if _verdict_looks_bad(verdict_path):
+        log("verdict indicates a problem — capturing live netns state")
+        dump_live_state(interface)
 
     # --- TeardownCaptive ---
     ok = _try_teardown(helper, result)
     print(json.dumps(result))
     return 0 if ok else 1
+
+
+def _verdict_looks_bad(verdict_path: str) -> bool:
+    """True if the runner verdict is missing/garbled, the portal was unreachable,
+    or the sentinel leaked — i.e. worth dumping the live netns state for."""
+    try:
+        with open(verdict_path, encoding="utf-8") as fh:
+            v = json.load(fh)
+    except (OSError, ValueError):
+        return True
+    return v.get("portal_curl_rc") != 0 or v.get("sentinel_reachable") is not False
 
 
 def _run(label: str, argv: list) -> None:

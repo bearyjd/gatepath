@@ -159,6 +159,13 @@ cleanup() {
   # Runner + marker (leave /var/lib/gatepath audit log in place for inspection).
   rm -f "$WEBVIEW_MARKER" 2>/dev/null || true
 
+  # Always keep the last helper.log at a stable path — it survives the
+  # pass-cleanup below, so the helper's shutdown sequence is always inspectable
+  # (the helper has exited via the SIGTERM above by now). The teardown work
+  # between kill_pid and here gives it time to flush.
+  [ -n "$WORKDIR" ] && [ -f "$WORKDIR/helper.log" ] \
+    && cp -f "$WORKDIR/helper.log" /tmp/gatepath-hwsim-helper.last.log 2>/dev/null || true
+
   # Preserve the workdir (all the logs) when the run FAILED so it can be
   # diagnosed; only clean it up on a clean pass.
   if [ -n "$WORKDIR" ]; then
