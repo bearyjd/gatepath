@@ -7,8 +7,8 @@ attack surface / complexity" criticism, met head-on).
 
 It is the *motivation* companion to [`SECURITY_MODEL.md`](SECURITY_MODEL.md)
 (what is and isn't protected) and [`ARCHITECTURE.md`](ARCHITECTURE.md) (how the
-pieces fit). Implementation status — including the blockers that currently gate
-the desktop netns path on real hardware — lives in [`BLOCKERS.md`](BLOCKERS.md).
+pieces fit). Implementation status — including the hwsim validation milestone and the
+remaining physical-card confirmation items — lives in [`BLOCKERS.md`](BLOCKERS.md).
 
 ---
 
@@ -237,11 +237,11 @@ is not a nicety — it is what makes the trade defensible.
 ## 7. Status
 
 The reasoning in §4 is a statement about the **design**. On the desktop, the
-netns path is now implemented end-to-end — the wireless PHY move (`iw phy … set
-netns`) and in-netns association/DHCP re-establishment (`wpa_supplicant` + DHCP)
-both landed — but it is **not yet validated on real Wi-Fi hardware** and covers
-**open** captive networks only (BLOCKER-DESK-003 in
-[`BLOCKERS.md`](BLOCKERS.md)). On Android, the equivalent guarantee
-(`bindProcessToNetwork`) is implemented and shipping. This document is the
-rationale the implementation is being built toward; it does not assert the
-desktop path is hardware-verified today.
+netns path is now implemented and **validated end-to-end on a `mac80211_hwsim`
+virtual radio** (the real kernel Wi-Fi stack) — the wireless PHY move
+(`iw phy … set netns`) and in-netns association/DHCP re-establishment
+(`wpa_supplicant` + DHCP) are proven by the `tests/e2e-hwsim/` harness, which
+also asserts the no-leak invariant. Covers **open** captive networks only.
+Physical-card confirmation (real Wi-Fi firmware/RF quirks) is pending but is no
+longer the core unproven risk — see [`BLOCKERS.md`](BLOCKERS.md). On Android,
+the equivalent guarantee (`bindProcessToNetwork`) is implemented and shipping.

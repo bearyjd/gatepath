@@ -32,7 +32,7 @@ and the security model. They share **no code** — see [`docs/ARCHITECTURE.md`](
 | Capability                                             | Android        | Desktop (Flatpak) |
 |--------------------------------------------------------|----------------|-------------------|
 | Detect captive portal                                  | NetworkCallback| NetworkManager D-Bus + urllib fallback |
-| Bind portal traffic to WiFi interface                  | Yes (kernel)   | **No** in Flatpak; native netns helper implemented (open networks), **pending real-hardware validation** — see [`docs/BLOCKERS.md`](docs/BLOCKERS.md) |
+| Bind portal traffic to WiFi interface                  | Yes (kernel)   | **No** in Flatpak; native netns helper validated on a `mac80211_hwsim` virtual-radio harness (`tests/e2e-hwsim/`), open networks only; physical-card confirmation pending — see [`docs/BLOCKERS.md`](docs/BLOCKERS.md) |
 | Keep VPN tunnel active during portal session           | Yes            | Best-effort, **user warned** |
 | Block off-domain navigation in portal window           | Yes            | Yes |
 | Block analytics / tracker resource requests            | Yes            | Yes |
@@ -45,9 +45,10 @@ the security model. A privileged netns helper (`desktop/gatepath-netns-helper/`)
 closes the WiFi-binding gap for native (non-Flatpak) installs on Linux, including
 atomic distros like Bazzite: it moves the whole Wi-Fi PHY into a dedicated netns
 (`iw phy … set netns`) and re-establishes connectivity inside it (`wpa_supplicant`
-+ DHCP). This is implemented for **open** captive networks but still **pending
-real-hardware validation** — its status, the remaining blocker, and the deployment
-options are documented in
++ DHCP). This is validated end-to-end on a `mac80211_hwsim` virtual-radio harness
+(`tests/e2e-hwsim/`) for **open** captive networks; physical-card confirmation is
+pending. Its status, the remaining confirmation items, and the deployment options
+are documented in
 [`docs/DESKTOP_NETNS_DEPLOYMENT.md`](docs/DESKTOP_NETNS_DEPLOYMENT.md) and
 [`docs/BLOCKERS.md`](docs/BLOCKERS.md).
 
