@@ -1,0 +1,55 @@
+name: desktop-hwsim
+
+# Privileged mac80211_hwsim no-leak harness (ROADMAP P0.2): drives the REAL
+# gatepath-netns-helper end-to-end on a virtual radio — PHY move into a throwaway
+# netns, in-netns wpa_supplicant + DHCP, portal, and the trusted-net sentinel.
+#
+# This runs on a SELF-HOSTED runner (label `gatepath-hwsim`), NOT a GitHub-hosted
+# one: GitHub's hosted runners use an Azure cloud kernel that ships no
+# mac80211_hwsim (confirmed — `modinfo mac80211_hwsim` is "not found" even after
+# installing linux-modules-extra). The box behind the runner must have the
+# virtual-radio stack (e.g. the Bazzite dev box where this harness is validated
+# 3/3). See tests/e2e-hwsim/README.md → "Running in CI" for runner setup.
+#
+# SECURITY: manual-dispatch ONLY. This executes privileged repo code as root on
+# your box, so it is deliberately NOT auto-triggered by pull_request/push — you
+# decide when to run it, on code you've reviewed.
+on:
+  workflow_dispatch:
+    inputs:
+      dhcp:
+        description: 'DHCP mode passed to run.sh'
+        default: static
+        type: choice
+        options: [static, real]
+
+jobs:
+  e2e-hwsim:
+    name: Desktop E2E (mac80211_hwsim, privileged)
+    runs-on: [self-hosted, gatepath-hwsim]
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      # Builds the helper as the (non-root) runner user; bootstraps rustup into
+      # ~/.cargo if cargo isn't already on PATH. Bakes the hwsim runner path in
+      # via GATEPATH_PORTAL_RUNNER_PATH (option_env!), so the shipping default is
+      # untouched.
+      - name: Build the privileged helper
+        run: bash tests/e2e-hwsim/build-helper.sh
+
+      # run.sh needs root (netns + PHY move + module load). The runner user must
+      # have passwordless sudo for this (see README). The harness does its own
+      # host setup (radios, AP netns, NM connect, polkit/dbus install) and tears
+      # everything down unconditionally via an EXIT/INT/TERM trap.
+      - name: Run the hwsim no-leak harness
+        run: sudo bash tests/e2e-hwsim/run.sh --dhcp "${{ inputs.dhcp }}"
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-hwsim-artifacts
+          path: |
+            /tmp/gatepath-hwsim*
+          if-no-files-found: ignore
