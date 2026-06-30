@@ -461,6 +461,202 @@ pub fn validate_portal_url(raw: &str) -> Result<(), SpawnError> {
     }
 }
 
+#[cfg(test)]
+mod validator_proptests {
+    //! Property tests for the spawn-boundary validators (ROADMAP P1.2): the
+    //! portal URL and the DESK-004 display-env values. All run on arbitrary,
+    //! attacker-controlled input. Invariants: "never panics" and "anything
+    //! accepted is provably safe" — http(s) only, no control bytes, and the
+    //! per-value charset/shape constraints upheld.
+    use super::*;
+    use proptest::prelude::*;
+
+    /// Arbitrary UTF-8 strings, incl. control bytes and non-ASCII.
+    fn arb_string() -> impl Strategy<Value = String> {
+        proptest::collection::vec(any::<u8>(), 0..300)
+            .prop_map(|b| String::from_utf8_lossy(&b).into_owned())
+    }
+
+    /// Wild bytes mixed with plausible URLs (http(s) + disallowed schemes), so
+    /// the accept path fires — pure random bytes essentially never parse as a
+    /// URL, which would make "accepted ⇒ http(s)" vacuously green.
+    fn arb_url() -> impl Strategy<Value = String> {
+        prop_oneof![
+            arb_string(),
+            "https?://[a-z0-9]{1,20}\\.[a-z]{2,4}(/[a-z0-9._-]{0,30})?",
+            "(file|ftp|data|javascript|ws|gopher)://[a-z0-9/._-]{1,20}",
+        ]
+    }
+
+    /// Wild bytes mixed with plausible display-env values (socket names, `:0`
+    /// displays, absolute paths, and space-bearing strings that must reject),
+    /// so the accept paths of all three display validators actually fire.
+    fn arb_display_value() -> impl Strategy<Value = String> {
+        prop_oneof![
+            arb_string(),
+            "[A-Za-z0-9._:/ -]{0,24}",
+            "[A-Za-z0-9._-]{0,12}:[0-9.]{0,4}",
+            "/[A-Za-z0-9._/-]{0,24}",
+        ]
+    }
+
+    fn has_control_byte(s: &str) -> bool {
+        s.bytes().any(|b| b < 0x20 || b == 0x7F)
+    }
+
+    proptest! {
+        // ── validate_portal_url ──────────────────────────────────────────
+        #[test]
+        fn url_never_panics(s in arb_url()) {
+            let _ = validate_portal_url(&s);
+        }
+
+        /// Anything accepted is bounded, control-byte-free, parses, and is
+        /// http/https only — the scheme allowlist is the key boundary.
+        #[test]
+        fn url_accepted_is_http_or_https_and_clean(s in arb_url()) {
+            if validate_portal_url(&s).is_ok() {
+                prop_assert!(s.len() <= 4096);
+                prop_assert!(!has_control_byte(&s));
+                let parsed = url::Url::parse(&s);
+                prop_assert!(parsed.is_ok());
+                if let Ok(u) = parsed {
+                    prop_assert!(
+                        matches!(u.scheme(), "http" | "https"),
+                        "accepted non-http(s) scheme: {:?}",
+                        u.scheme()
+                    );
+                }
+            }
+        }
+
+        #[test]
+        fn url_non_http_scheme_rejected(
+            scheme in "(file|ftp|data|javascript|mailto|chrome|gopher|ws|wss)",
+            rest in "[a-z0-9/._-]{1,30}",
+        ) {
+            let raw = format!("{scheme}://{rest}");
+            prop_assert!(
+                validate_portal_url(&raw).is_err(),
+                "accepted disallowed scheme: {raw:?}"
+            );
+        }
+
+        #[test]
+        fn url_with_control_byte_rejected(
+            host in "[a-z]{1,10}\\.[a-z]{2,3}",
+            ctl in 0u8..0x20,
+            tail in "[a-z0-9/]{0,10}",
+        ) {
+            let raw = format!("http://{host}{}{tail}", ctl as char);
+            prop_assert!(
+                validate_portal_url(&raw).is_err(),
+                "accepted URL with control byte 0x{ctl:02X}: {raw:?}"
+            );
+        }
+
+        #[test]
+        fn wellformed_http_url_accepted(
+            s in "https?://[a-z0-9]{1,20}\\.[a-z]{2,4}(/[a-z0-9._-]{0,30})?",
+        ) {
+            prop_assert!(
+                validate_portal_url(&s).is_ok(),
+                "rejected a well-formed URL: {s:?}"
+            );
+        }
+
+        // ── validate_wayland_display ─────────────────────────────────────
+        #[test]
+        fn wayland_never_panics(s in arb_display_value()) {
+            let _ = validate_wayland_display(&s);
+        }
+
+        #[test]
+        fn wayland_accepted_is_clean(s in arb_display_value()) {
+            if validate_wayland_display(&s).is_ok() {
+                prop_assert!(
+                    s.is_empty()
+                        || (s.len() <= MAX_DISPLAY_ENV_LEN
+                            && !has_control_byte(&s)
+                            && s.chars().all(|c| c.is_ascii_alphanumeric()
+                                || matches!(c, '.' | '_' | '-' | '/')))
+                );
+            }
+        }
+
+        // ── validate_display ─────────────────────────────────────────────
+        #[test]
+        fn display_never_panics(s in arb_display_value()) {
+            let _ = validate_display(&s);
+        }
+
+        #[test]
+        fn display_accepted_is_clean_and_has_colon(s in arb_display_value()) {
+            if validate_display(&s).is_ok() {
+                prop_assert!(
+                    s.is_empty()
+                        || (s.contains(':')
+                            && s.len() <= MAX_DISPLAY_ENV_LEN
+                            && !has_control_byte(&s)
+                            && s.chars().all(|c| c.is_ascii_alphanumeric()
+                                || matches!(c, '.' | ':' | '_' | '-')))
+                );
+            }
+        }
+
+        #[test]
+        fn display_without_colon_rejected(s in "[a-zA-Z0-9._-]{1,20}") {
+            prop_assert!(
+                validate_display(&s).is_err(),
+                "accepted DISPLAY without ':': {s:?}"
+            );
+        }
+
+        // ── validate_xauthority ──────────────────────────────────────────
+        #[test]
+        fn xauthority_never_panics(s in arb_display_value()) {
+            let _ = validate_xauthority(&s);
+        }
+
+        #[test]
+        fn xauthority_accepted_is_safe(s in arb_display_value()) {
+            if validate_xauthority(&s).is_ok() {
+                prop_assert!(
+                    s.is_empty()
+                        || (s.starts_with('/')
+                            && !s.split('/').any(|seg| seg == "..")
+                            && s.len() <= MAX_DISPLAY_ENV_LEN
+                            && !has_control_byte(&s)
+                            && s.chars().all(|c| c.is_ascii_alphanumeric()
+                                || matches!(c, '.' | '_' | '-' | '/')))
+                );
+            }
+        }
+
+        #[test]
+        fn xauthority_dotdot_segment_rejected(
+            head in "/[a-z]{1,8}",
+            tail in "[a-z]{0,8}",
+        ) {
+            let raw = format!("{head}/../{tail}");
+            prop_assert!(
+                validate_xauthority(&raw).is_err(),
+                "accepted XAUTHORITY with '..' segment: {raw:?}"
+            );
+        }
+
+        #[test]
+        fn xauthority_relative_path_rejected(
+            s in "[a-zA-Z0-9._-][a-zA-Z0-9._/-]{0,20}",
+        ) {
+            prop_assert!(
+                validate_xauthority(&s).is_err(),
+                "accepted a relative XAUTHORITY: {s:?}"
+            );
+        }
+    }
+}
+
 // ── Fake impl for tests ────────────────────────────────────────────────
 
 #[cfg(test)]

@@ -249,3 +249,112 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+mod proptests {
+    //! Property tests for the interface-name trust boundary (ROADMAP P1.2).
+    //!
+    //! The validator is fed attacker-controlled names, so the properties that
+    //! matter are "never panics" and "anything accepted is provably safe" — a
+    //! WiFi prefix and *never* a forbidden VPN/tunnel/bridge/loopback prefix
+    //! (the leak the whole helper exists to prevent). Example-based tests above
+    //! pin specific cases; these assert the invariants hold for *all* input.
+    use super::*;
+    use proptest::prelude::*;
+
+    /// Arbitrary UTF-8 strings, incl. control bytes and non-ASCII (lossy decode
+    /// of random bytes) — a wider domain than a `".*"` regex strategy.
+    fn arb_string() -> impl Strategy<Value = String> {
+        proptest::collection::vec(any::<u8>(), 0..200)
+            .prop_map(|b| String::from_utf8_lossy(&b).into_owned())
+    }
+
+    /// A union of wild bytes and structurally-plausible names. A pure
+    /// random-byte generator almost never produces an *accepted* name, which
+    /// would leave the "accepted ⇒ safe" property vacuously green; the
+    /// structured branches make the accept path (and every reject path)
+    /// actually fire.
+    fn arb_iface_name() -> impl Strategy<Value = String> {
+        prop_oneof![
+            arb_string(),
+            "[A-Za-z0-9_-]{0,18}",
+            "wl(an|p|x)[A-Za-z0-9_-]{0,14}",
+            "(tun|tap|wg|eth|en|br|docker|lo|veth|zt)[A-Za-z0-9_-]{0,10}",
+        ]
+    }
+
+    proptest! {
+        /// The boundary never panics, for any input.
+        #[test]
+        fn never_panics(s in arb_iface_name()) {
+            let _ = validate_interface_name(&s);
+        }
+
+        /// Anything ACCEPTED satisfies every gate — including, crucially, that
+        /// it is NOT a forbidden prefix. This is the VPN-leak boundary.
+        #[test]
+        fn accepted_names_are_provably_safe(s in arb_iface_name()) {
+            if validate_interface_name(&s).is_ok() {
+                prop_assert!(!s.is_empty());
+                prop_assert!(s.len() <= MAX_IFNAME_LEN);
+                prop_assert!(
+                    s.bytes()
+                        .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+                );
+                prop_assert!(WIFI_PREFIXES.iter().any(|p| s.starts_with(p)));
+                prop_assert!(
+                    !FORBIDDEN_PREFIXES.iter().any(|p| s.starts_with(p)),
+                    "accepted a forbidden-prefixed interface: {s:?}"
+                );
+            }
+        }
+
+        /// Any name starting with a forbidden prefix is rejected, whatever the
+        /// suffix — generated from the live FORBIDDEN_PREFIXES list so a new
+        /// blocked prefix is covered automatically.
+        #[test]
+        fn forbidden_prefix_is_never_accepted(
+            idx in 0usize..FORBIDDEN_PREFIXES.len(),
+            suffix in arb_string(),
+        ) {
+            let name = format!("{}{}", FORBIDDEN_PREFIXES[idx], suffix);
+            prop_assert!(
+                validate_interface_name(&name).is_err(),
+                "accepted a forbidden-prefixed interface: {name:?}"
+            );
+        }
+
+        /// A well-formed WiFi name within IFNAMSIZ is always accepted —
+        /// `wlan` + 11 hits the len-15 accept boundary (one below the TooLong
+        /// cliff at 16).
+        #[test]
+        fn wellformed_wifi_names_are_accepted(s in "wl(an|p|x)[A-Za-z0-9_-]{0,11}") {
+            prop_assert!(
+                validate_interface_name(&s).is_ok(),
+                "rejected a well-formed WiFi name: {s:?}"
+            );
+        }
+
+        /// A charset-valid, length-valid name with a forbidden prefix errors
+        /// *specifically* as `Forbidden`. This strengthens the boundary: a
+        /// regression that removed the forbidden-prefix check (leaving only the
+        /// default-deny WiFi gate) would still reject these as `NotWiFi`, so the
+        /// is_err properties above wouldn't catch it — but this one would. The
+        /// suffix is capped so TooLong/InvalidChars can't preempt the Forbidden
+        /// arm (longest prefix `tailscale` = 9, + 5 = 14 ≤ IFNAMSIZ).
+        #[test]
+        fn forbidden_prefix_errors_as_forbidden(
+            idx in 0usize..FORBIDDEN_PREFIXES.len(),
+            suffix in "[A-Za-z0-9_-]{0,5}",
+        ) {
+            let name = format!("{}{}", FORBIDDEN_PREFIXES[idx], suffix);
+            prop_assert!(
+                matches!(
+                    validate_interface_name(&name),
+                    Err(InterfaceValidationError::Forbidden(_))
+                ),
+                "expected Forbidden for {name:?}"
+            );
+        }
+    }
+}
