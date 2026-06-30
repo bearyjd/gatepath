@@ -250,10 +250,36 @@ def step_liveness_probe(state: dict) -> dict:
         ):
             captured = True
             break
+    # Quiescence settle BEFORE opening the bound window. The unbound TCP probe
+    # hits the VPN black hole (no SYN-ACK), so its SYNs keep RETRANSMITTING into
+    # the sink for several seconds after the connect. If bound_begin is laid
+    # while they're still arriving, those retransmits land inside the window and
+    # read as a D2 leak — even though the bound WebView's own sentinel traffic
+    # correctly egresses WiFi (ERR_CONNECTION_REFUSED, never the sink). Wait
+    # until the sentinel-packet count is stable across consecutive polls (the
+    # retransmits have drained) before marking bound_begin.
+    def _sentinel_count() -> int:
+        return sum(
+            1 for e in _pull_sink(serial)
+            if e.get("dst") == SENTINEL_DST and e.get("port") == SENTINEL_PORT
+        )
+
+    last, stable = -1, 0
+    quiet_deadline = time.monotonic() + 15
+    while time.monotonic() < quiet_deadline:
+        cur = _sentinel_count()
+        if cur == last:
+            stable += 1
+            if stable >= 2:  # ~3s with no new sentinel packets → drained
+                break
+        else:
+            last, stable = cur, 0
+        time.sleep(1.5)
     _mark(serial, "bound_begin")
     return {
         "sentinel": f"{SENTINEL_DST}:{SENTINEL_PORT}",
         "captured": captured,
+        "settled_count": last,
         "marked": "bound_begin",
     }
 
