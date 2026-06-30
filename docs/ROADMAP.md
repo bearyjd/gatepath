@@ -165,9 +165,16 @@ follow-up.
 ## P3 — Operability
 
 ### P3.1 — Field diagnostics / troubleshooting
-**Status:** not started. The Android diagnostic engine and JSONL audit logs
-exist, but there's no "export diagnostics" path and no `TROUBLESHOOTING.md` for
-operators deploying the desktop helper.
+**Status:** **desktop done (2026-06-30)**; Android share-path still open.
+`docs/TROUBLESHOOTING.md` documents the desktop preconditions, the 14
+`RefusalReason` causes/fixes, the 9 Android `DiagnosticEngine` findings, how to
+read the audit logs, and common scenarios; and
+`desktop/gatepath-netns-helper/packaging/collect-diagnostics.sh` produces a
+redactable support bundle (unit status + journal, sysext/netns/NM state, tool
+versions, helper + user audit logs). **Still open:** an in-app Android "Share
+Diagnostics" path (`Intent.ACTION_SEND` of the audit log + latest
+`DiagnosticReport`) — needs a UI placement (no settings screen yet) and is its
+own Kotlin/Gradle change.
 
 ---
 
