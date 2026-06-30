@@ -165,10 +165,20 @@ def step_grant_vpn(state: dict) -> dict:
 
 
 def step_start_test_vpn(state: dict) -> dict:
-    """Bring up the debug leak-detector VPN as the system default network."""
-    _testvpn(state["serial"], "start")
-    time.sleep(3)  # let establish() bring up the TUN before probing
-    return {"started": True}
+    """Bring up the debug leak-detector VPN as the system default network, then
+    wait for the service to log that the TUN is established before returning — a
+    fixed sleep raced establish() on slower emulators and false-failed D1."""
+    serial = state["serial"]
+    _testvpn(serial, "start")
+    deadline = time.monotonic() + 20
+    established = False
+    while time.monotonic() < deadline:
+        log = adb_helper.shell(serial, "logcat -d", timeout=15, check=False)
+        if "test VPN sink established" in log:
+            established = True
+            break
+        time.sleep(1)
+    return {"started": True, "established": established}
 
 
 def step_liveness_probe(state: dict) -> dict:

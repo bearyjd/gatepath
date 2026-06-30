@@ -138,6 +138,12 @@ the bound window, and no responder is required.
 
 ## The proof (assertions)
 
+> **Implementation note:** the shipped harness delimits the bound window with
+> `bound_begin`/`bound_end` **marker lines** appended into the sink (append order),
+> not wall-clock timestamps — this avoids any host↔device clock comparison. The
+> timestamp-bucketing description below was the original design; the marker-based
+> approach in the implementation plan supersedes it.
+
 `check_vpn_confinement()` over `vpn-sink.jsonl`. **Order matters** — the liveness
 gate is what makes a silent sink *mean* something.
 

@@ -23,16 +23,16 @@ class GatepathTestVpnService : VpnService() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
-            ACTION_STOP -> { teardown(); stopSelf(); return START_NOT_STICKY }
+            ACTION_STOP -> { teardown(); stopSelf() }
             ACTION_MARK -> {
                 val label = intent.getStringExtra(EXTRA_LABEL) ?: "?"
                 append(JSONObject().put("marker", label)
                     .put("t", System.currentTimeMillis() / 1000.0).toString())
-                return START_STICKY
             }
-            else -> startTun()
+            ACTION_START -> startTun()
+            else -> Log.w(TAG, "ignoring unknown/null action: ${intent?.action}")
         }
-        return START_STICKY
+        return START_NOT_STICKY
     }
 
     private fun append(line: String) {
