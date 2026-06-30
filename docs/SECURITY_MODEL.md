@@ -41,6 +41,13 @@ session**.
 - All probe and WebView traffic is bound to the captive portal `Network` object via
   `ConnectivityManager.bindProcessToNetwork()`, scoping it to the WiFi/Ethernet interface
   that NetworkManager flagged as captive.
+
+> An eval for this is implemented (`tests/e2e-android` no-leak sentinel: a
+> debug-only `VpnService` runs as the system default network and the build fails
+> if any bound-session traffic escapes onto it — ROADMAP P0.1). It is **pending
+> its first green CI run**; until then this remains a structural/unit-level
+> claim, not an eval-validated one.
+
 - VPN tunnel (Tailscale, TorGuard, WireGuard, OpenVPN) remains active and unmodified
   on all other connections — Gatepath never touches the VPN service.
 - Encrypted DNS (Private DNS / NextDNS / DoT / DoH) remains active on all other

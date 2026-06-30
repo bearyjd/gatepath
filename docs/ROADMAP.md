@@ -29,8 +29,13 @@ exercised only through fakes. Closing that is the highest-value work.
 ## P0 — Evals that test the actual intent
 
 ### P0.1 — No-leak sentinel test (both platforms)
-**Status:** **desktop confinement gate is now proven** — see P0.2. Android: not
-started.
+**Status:** desktop confinement gate is proven (see P0.2). **Android:
+implemented, pending its first green CI run.** A debug-only `VpnService` leak
+detector + harness steps + the D1-liveness/D2-confinement assertion are wired into
+`tests/e2e-android` and run in CI; the invariant is not yet *validated* because the
+harness has not completed a green emulator run (the local dev-container emulator
+segfaults on boot, so the CI emulator is the gate). The negative control (prove the
+eval can fail) is also pending that run.
 
 Stand up a sentinel the confined client **must not** reach, and fail the test if
 it does:
@@ -42,9 +47,13 @@ it does:
   the captive portal IS reachable. Green and reproducible (3/3) on real hardware
   (Bazzite). The docker harness continues exercising the portal flow + off-domain
   blocking (with faked PHY) and is wired into CI (`desktop-e2e.yml`).
-- **Android** (`tests/e2e-android`): not started — a VPN (or second network)
-  active + a server reachable only off the captive `Network`; must not be hit.
-  (The literal claim in `SECURITY_MODEL.md`.)
+- **Android** (`tests/e2e-android`): **implemented, pending validation** — a
+  debug-only `VpnService` becomes the default network; an unbound liveness probe
+  must reach it (D1) while the WiFi-bound portal session must leave it
+  packet-silent (D2). The release build provably excludes the apparatus
+  (`release-vpn-guard`, verified locally). Awaiting the first green CI E2E run to
+  validate the invariant; negative control pending. (The literal claim in
+  `SECURITY_MODEL.md`.)
 
 ### P0.2 — Virtual-radio integration harness (`mac80211_hwsim` + `hostapd`)
 **Status:** **done — validated end-to-end on a `mac80211_hwsim` virtual radio.**

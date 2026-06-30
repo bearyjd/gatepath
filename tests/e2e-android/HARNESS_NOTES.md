@@ -94,3 +94,24 @@ wait_validated          # reevaluate same wifi netid; poll IS_VALIDATED
                         #   portal_completed audit
 pull_audit_log          # run-as cat files/audit.jsonl
 ```
+
+## No-leak sentinel (ROADMAP P0.1)
+
+A debug-only `VpnService` (`android/app/src/debug/.../testvpn/`) becomes the system
+default network and logs every packet the Gatepath app emits while unbound to
+`files/vpn-sink.jsonl`. Because `bindProcessToNetwork(wifi)` bypasses the VPN, the
+sink is a leak detector:
+
+- `liveness_probe` sends an UNBOUND UDP burst to the sentinel `203.0.113.7` — it
+  MUST appear in the sink (D1: proves the sink intercepts the default route).
+- The portal session runs bound to WiFi between the `bound_begin`/`bound_end`
+  marker lines — the sink MUST be packet-silent there (D2: proves confinement).
+
+`appops set cc.grepon.gatepath ACTIVATE_VPN allow` suppresses the consent dialog
+(no root). The apparatus is `src/debug/` only; `release-vpn-guard` CI asserts the
+release build excludes it. Negative control: comment out the bind at
+`GatepathWebView.kt` and `vpn.confinement` goes RED.
+
+**Status:** implemented and wired into CI; pending its first green emulator run for
+validation (the local dev-container emulator segfaults on boot, so CI is the gate).
+The negative control has not been executed yet.
