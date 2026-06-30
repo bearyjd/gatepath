@@ -33,6 +33,7 @@ written in a finally block regardless of failure.
 from __future__ import annotations
 
 import argparse
+import base64
 import json
 import re
 import sys
@@ -60,6 +61,62 @@ CAPTIVE_KEYS = (
 # the app is debuggable and the file lives in app-private storage.
 AUDIT_LOG_RELATIVE = "files/audit.jsonl"
 APP_PACKAGE = "cc.grepon.gatepath"
+TESTVPN_ACTIVITY = f"{APP_PACKAGE}/.testvpn.TestVpnControlActivity"
+VPN_SINK_RELATIVE = "files/vpn-sink.jsonl"
+# The unbound liveness probe targets a dedicated sentinel host:port the captive
+# monitor never touches (it probes 10.0.2.2:18080), so the bound WebView's
+# attempt to reach the same sentinel is unambiguous in the VPN sink. Single
+# source of truth — must match the Kotlin probe, the mock's injected URL, and
+# the assertion (PR #55).
+SENTINEL_DST = "10.0.2.2"
+SENTINEL_PORT = 18081
+
+
+def _testvpn(serial: str, action: str, label: str | None = None) -> None:
+    cmd = f"am start -n {TESTVPN_ACTIVITY} --es gatepath.testvpn.action {action}"
+    if label:
+        cmd += f" --es gatepath.testvpn.label {label}"
+    adb_helper.shell(serial, cmd, timeout=20, check=False)
+
+
+def _mark(serial: str, label: str) -> None:
+    """Append a phase-marker line to the VPN sink DIRECTLY via run-as.
+
+    Marks were previously laid by `am start`-ing the debug control activity,
+    which Android drops under rapid successive launches (the NoDisplay activity
+    races its own finish()), so markers went missing in CI (begin/end=None).
+    Writing straight into the app-private sink with run-as is component-free and
+    race-proof; base64 sidesteps shell-quoting the JSON. The marker's `t` is the
+    host clock — irrelevant, since the assertion buckets by append ORDER, not
+    time. Concurrent O_APPEND writes (this + the service's TUN thread) are atomic
+    for a single short line, so packets and markers interleave cleanly."""
+    line = json.dumps({"marker": label, "t": time.time()}) + "\n"
+    b64 = base64.b64encode(line.encode()).decode()
+    adb_helper.shell(
+        serial,
+        f"run-as {APP_PACKAGE} sh -c 'echo {b64} | base64 -d >> {VPN_SINK_RELATIVE}'",
+        timeout=10,
+        check=False,
+    )
+
+
+def _pull_sink(serial: str) -> list[dict]:
+    """run-as cat the VPN sink and parse it into JSON objects, one per line.
+    Blank lines and unparseable lines are skipped (the sink is appended to
+    concurrently, so a partial trailing line can appear mid-read)."""
+    raw = adb_helper.shell(
+        serial, f"run-as {APP_PACKAGE} cat {VPN_SINK_RELATIVE}", timeout=10, check=False
+    )
+    entries: list[dict] = []
+    for line in raw.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            entries.append(json.loads(line))
+        except (json.JSONDecodeError, ValueError):
+            continue
+    return entries
 
 
 # ── Step helpers ──────────────────────────────────────────────────────────────
@@ -143,6 +200,129 @@ def step_wait_for_captive(state: dict) -> dict:
             return {"detected_via": "dumpsys", "wait_sec": int(time.monotonic() - (deadline - 45))}
         time.sleep(2)
     raise RuntimeError("captive portal not detected within 45s")
+
+
+def step_grant_vpn(state: dict) -> dict:
+    """Pre-authorize the VpnService so establish() needs no consent dialog.
+    appops runs as the adb shell uid — no root required on the emulator."""
+    adb_helper.shell(
+        state["serial"], f"appops set {APP_PACKAGE} ACTIVATE_VPN allow", timeout=10
+    )
+    return {"granted": "ACTIVATE_VPN"}
+
+
+def step_start_test_vpn(state: dict) -> dict:
+    """Bring up the debug leak-detector VPN as the system default network, then
+    wait for the service to log that the TUN is established before returning — a
+    fixed sleep raced establish() on slower emulators and false-failed D1."""
+    serial = state["serial"]
+    _testvpn(serial, "start")
+    deadline = time.monotonic() + 20
+    established = False
+    while time.monotonic() < deadline:
+        log = adb_helper.shell(serial, "logcat -d", timeout=15, check=False)
+        if "test VPN sink established" in log:
+            established = True
+            break
+        time.sleep(1)
+    return {"started": True, "established": established}
+
+
+def step_liveness_probe(state: dict) -> dict:
+    """Poll-until-captured, THEN open the bound window.
+
+    Each pass fires the unbound TCP sentinel probe, settles, and pulls the sink;
+    it breaks once an entry with the sentinel dst:port is present. Only then is
+    the bound_begin marker laid. This deterministically guarantees the unbound
+    sentinel packet is in the sink BEFORE the bound window opens (fixing issue
+    #2 — the probe was previously absent / raced). If the sentinel is never
+    captured within the window, captured=False surfaces it to the assertion
+    rather than silently opening a vacuous bound window."""
+    serial = state["serial"]
+    deadline = time.monotonic() + 25
+    captured = False
+    while time.monotonic() < deadline:
+        _testvpn(serial, "probe")
+        time.sleep(1.5)
+        if any(
+            e.get("dst") == SENTINEL_DST and e.get("port") == SENTINEL_PORT
+            for e in _pull_sink(serial)
+        ):
+            captured = True
+            break
+    # Quiescence settle BEFORE opening the bound window. The unbound TCP probe
+    # hits the VPN black hole (no SYN-ACK), so its SYNs keep RETRANSMITTING into
+    # the sink for several seconds after the connect. If bound_begin is laid
+    # while they're still arriving, those retransmits land inside the window and
+    # read as a D2 leak — even though the bound WebView's own sentinel traffic
+    # correctly egresses WiFi (ERR_CONNECTION_REFUSED, never the sink). Wait
+    # until the sentinel-packet count is stable across consecutive polls (the
+    # retransmits have drained) before marking bound_begin.
+    def _sentinel_count() -> int:
+        return sum(
+            1 for e in _pull_sink(serial)
+            if e.get("dst") == SENTINEL_DST and e.get("port") == SENTINEL_PORT
+        )
+
+    last, stable = -1, 0
+    quiet_deadline = time.monotonic() + 15
+    while time.monotonic() < quiet_deadline:
+        cur = _sentinel_count()
+        if cur == last:
+            stable += 1
+            if stable >= 2:  # ~3s with no new sentinel packets → drained
+                break
+        else:
+            last, stable = cur, 0
+        time.sleep(1.5)
+    _mark(serial, "bound_begin")
+    return {
+        "sentinel": f"{SENTINEL_DST}:{SENTINEL_PORT}",
+        "captured": captured,
+        "settled_count": last,
+        "marked": "bound_begin",
+    }
+
+
+def step_mark_bound_end(state: dict) -> dict:
+    """Close the bound window. The portal session is still bound at this point
+    (right after validation), so the window spans the whole bound lifetime."""
+    _mark(state["serial"], "bound_end")
+    return {"marked": "bound_end"}
+
+
+def step_pull_vpn_sink(state: dict) -> dict:
+    """Pull the VPN sink after mark_bound_end has been issued.
+
+    mark_bound_end dispatches via an async `am start`, so reading the sink
+    immediately raced the marker write and missed bound_end (issue #1). Poll up
+    to ~10s until the bound_end marker line is present, then write the artifact.
+    Always write the last pull (even if bound_end never appears) so the artifact
+    stays diagnosable; bound_end_seen surfaces whether the race was won."""
+    serial = state["serial"]
+    deadline = time.monotonic() + 10
+    contents = ""
+    bound_end_seen = False
+    while True:
+        contents = adb_helper.shell(
+            serial, f"run-as {APP_PACKAGE} cat {VPN_SINK_RELATIVE}", timeout=10, check=False
+        )
+        for line in contents.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                if json.loads(line).get("marker") == "bound_end":
+                    bound_end_seen = True
+                    break
+            except (json.JSONDecodeError, ValueError):
+                continue
+        if bound_end_seen or time.monotonic() >= deadline:
+            break
+        time.sleep(1.0)
+    out = state["artifacts_dir"] / "vpn-sink.jsonl"
+    out.write_text(contents)
+    return {"path": str(out), "size": len(contents), "bound_end_seen": bound_end_seen}
 
 
 def _foreground(serial: str) -> str:
@@ -308,7 +488,11 @@ def step_wait_validated(state: dict) -> dict:
 
 def step_pull_logcat(state: dict) -> dict:
     serial = state["serial"]
-    log = adb_helper.shell(serial, "logcat -d -t 2000", timeout=20)
+    # Full post-clear buffer (launch_debug_portal cleared it just before the
+    # portal load), not a -t window: the D2 positive control greps this for the
+    # WebView's sentinel attempt, and a bounded tail buried it under device spam
+    # in CI (run #3 had zero GatepathWebView lines in -t 2000).
+    log = adb_helper.shell(serial, "logcat -d", timeout=30)
     out = state["artifacts_dir"] / "logcat.txt"
     out.write_text(log)
     return {"path": str(out), "size": len(log)}
@@ -368,10 +552,15 @@ STEPS: list[Callable[[dict], dict]] = [
     step("set_probe_urls", step_set_probe_urls),
     step("cycle_wifi", step_cycle_wifi),
     step("wait_for_captive", step_wait_for_captive),
+    step("grant_vpn", step_grant_vpn),
+    step("start_test_vpn", step_start_test_vpn),
+    step("liveness_probe", step_liveness_probe),
     step("launch_debug_portal", step_launch_debug_portal),
     step("wait_portal_screen", step_wait_portal_screen),
     step("submit_login", step_submit_login),
     step("wait_validated", step_wait_validated),
+    step("mark_bound_end", step_mark_bound_end),
+    step("pull_vpn_sink", step_pull_vpn_sink),
     step("pull_logcat", step_pull_logcat),
     step("pull_audit_log", step_pull_audit_log),
     step("fetch_gateway_log", step_fetch_gateway_log),
@@ -431,6 +620,15 @@ def main() -> int:
         # no device logs to diagnose from.
         serial = state.get("serial")
         if serial:
+            try:
+                adb_helper.shell(
+                    serial,
+                    f"am start -n {TESTVPN_ACTIVITY} --es gatepath.testvpn.action stop",
+                    timeout=15,
+                    check=False,
+                )
+            except Exception:  # noqa: BLE001 — teardown must never mask the rc
+                pass
             try:
                 log = adb_helper.shell(
                     serial, "logcat -d -t 3000", timeout=20, check=False

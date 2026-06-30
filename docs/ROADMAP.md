@@ -29,8 +29,14 @@ exercised only through fakes. Closing that is the highest-value work.
 ## P0 — Evals that test the actual intent
 
 ### P0.1 — No-leak sentinel test (both platforms)
-**Status:** **desktop confinement gate is now proven** — see P0.2. Android: not
-started.
+**Status:** **proven on both platforms.** Desktop — see P0.2. Android — a
+debug-only `VpnService` leak detector + harness + the D1-liveness/D2-confinement
+assertion run green end-to-end on the CI emulator (`android-e2e`): an unbound
+liveness probe reaches the default route (D1) while the WiFi-bound portal session's
+own attempt to reach the sentinel egresses WiFi and never hits the VPN sink (D2),
+non-vacuously — a positive control confirms the WebView actually attempted the
+sentinel. The VPN-as-default leak-detector mechanism is also confirmed on a
+physical Pixel. Release builds provably exclude the apparatus (`release-vpn-guard`).
 
 Stand up a sentinel the confined client **must not** reach, and fail the test if
 it does:
@@ -42,9 +48,12 @@ it does:
   the captive portal IS reachable. Green and reproducible (3/3) on real hardware
   (Bazzite). The docker harness continues exercising the portal flow + off-domain
   blocking (with faked PHY) and is wired into CI (`desktop-e2e.yml`).
-- **Android** (`tests/e2e-android`): not started — a VPN (or second network)
-  active + a server reachable only off the captive `Network`; must not be hit.
-  (The literal claim in `SECURITY_MODEL.md`.)
+- **Android** (`tests/e2e-android`): **proven** — a debug-only `VpnService`
+  becomes the default network; the assertion verifies an unbound probe reaches the
+  sentinel (D1) and the WiFi-bound portal session's sentinel attempt never reaches
+  the VPN sink (D2), with a positive control that the WebView actually attempted
+  it. Green on the CI emulator; release builds provably exclude the apparatus
+  (`release-vpn-guard`). (The literal claim in `SECURITY_MODEL.md`.)
 
 ### P0.2 — Virtual-radio integration harness (`mac80211_hwsim` + `hostapd`)
 **Status:** **done — validated end-to-end on a `mac80211_hwsim` virtual radio.**
