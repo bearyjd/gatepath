@@ -5,9 +5,10 @@ deliver Android-grade captive-portal isolation on an **immutable/atomic**
 Fedora distribution (the concrete target is **Bazzite**), and how the
 privileged network-namespace ("netns") helper should be deployed there.
 
-It is a findings/design doc, not an implementation. Where it identifies work
-that must happen before the isolated path functions on real hardware, those
-items are tracked in [`BLOCKERS.md`](BLOCKERS.md).
+It is a findings/design doc, not an implementation. The privileged path is now
+validated end-to-end on a `mac80211_hwsim` virtual radio — see
+[`BLOCKERS.md`](BLOCKERS.md) (BLOCKER-DESK-003 resolved). Remaining
+confirmation items (physical-card, buildable package) are tracked there.
 
 ---
 
@@ -87,8 +88,10 @@ guarantee. The question is therefore *how to deploy that helper on an immutable
 ## 3. The two evaluation blockers — now implemented
 
 The evaluation surfaced two code-level blockers. Both are now **implemented**
-(tracked as RESOLVED in [`BLOCKERS.md`](BLOCKERS.md)); what remains is
-on-hardware validation of the privileged exec paths (BLOCKER-DESK-003).
+(tracked as RESOLVED in [`BLOCKERS.md`](BLOCKERS.md)). The privileged exec
+paths are now also **validated end-to-end on a `mac80211_hwsim` virtual radio**
+(BLOCKER-DESK-003 resolved, `tests/e2e-hwsim/`). Physical-card confirmation
+and a buildable package remain.
 
 ### 3a. Moving the Wi-Fi interface — fixed to move the whole PHY
 
@@ -125,11 +128,11 @@ session — stopping both processes — before destroying the netns). This adds
 set (the WebView launch adds `systemd-run` too — see §4). Only **open** captive
 SSIDs are supported for now (see BLOCKERS.md).
 
-> Implication for the parity table: 3a and 3b have **landed in code**. Desktop
-> "bind portal traffic to the Wi-Fi interface" is implemented but **pending
-> real-hardware validation** (BLOCKER-DESK-003) and limited to open networks —
-> the README and SECURITY_MODEL should describe it as such, not as fully
-> verified.
+> Implication for the parity table: 3a and 3b have **landed in code** and the
+> privileged path is **validated end-to-end on a `mac80211_hwsim` virtual radio**
+> (BLOCKER-DESK-003 resolved). Desktop "bind portal traffic to the Wi-Fi
+> interface" is hwsim-validated, open networks only; physical-card confirmation
+> is pending.
 
 ---
 
@@ -248,10 +251,10 @@ Option B (systemd-sysext) as the primary path on Bazzite**, with **Option A
 Use **Option C only for development iteration** while 3a/3b are being built —
 not as the shipping mechanism.
 
-The wiphy move + in-netns supplicant/DHCP are now built (§3). The remaining
-gate before shipping a polished installer is **on-hardware validation**
-(BLOCKER-DESK-003): confirm the path works end-to-end on a real open captive
-network, then package with sysext (or RPM).
+The wiphy move + in-netns supplicant/DHCP are now built (§3) and
+**hwsim-validated** (BLOCKER-DESK-003 resolved). The remaining gates before
+shipping a polished installer are: physical-card confirmation on a real open
+captive network, and producing the sysext (or RPM) package (ROADMAP P2.1).
 
 ---
 

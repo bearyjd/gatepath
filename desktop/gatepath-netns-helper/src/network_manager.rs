@@ -8,10 +8,18 @@
 //! trying to sign into) and migrate it into the gatepath netns — disrupting
 //! the user's actual home WiFi.
 //!
-//! This module asks NetworkManager for the device's `Connectivity`
-//! property. We accept only `NM_CONNECTIVITY_PORTAL = 2` as captive. The
-//! check fires between the auth pass and the kernel ops; failure short-
+//! This module asks NetworkManager for the device's IPv4 connectivity
+//! (`Ip4Connectivity`). We accept only `NM_CONNECTIVITY_PORTAL = 2` as captive.
+//! The check fires between the auth pass and the kernel ops; failure short-
 //! circuits with [`crate::RefusalReason::NotCaptive`].
+//!
+//! NOTE: the Device interface has **no** bare `Connectivity` property — it was
+//! split into `Ip4Connectivity` / `Ip6Connectivity` in NetworkManager 1.16.
+//! Reading `Connectivity` raises `org.freedesktop.DBus.Error.InvalidArgs: No
+//! such property`. Gatepath targets open IPv4 captive networks, so we read
+//! `Ip4Connectivity`. (Caught by the mac80211_hwsim integration harness; the
+//! unit tests fake `CaptiveStateChecker` and so never exercised the real
+//! property name.)
 //!
 //! Trait abstraction so service tests can substitute a fake.
 
@@ -71,8 +79,18 @@ trait NMDevice {
     #[zbus(property)]
     fn interface(&self) -> zbus::Result<String>;
 
-    #[zbus(property)]
-    fn connectivity(&self) -> zbus::Result<u32>;
+    /// Per-device IPv4 connectivity (`NMConnectivityState`). The Device
+    /// interface has no bare `Connectivity` property (see module docs); this
+    /// maps to `Ip4Connectivity`, present since NetworkManager 1.16.
+    #[zbus(property, name = "Ip4Connectivity")]
+    fn ip4_connectivity(&self) -> zbus::Result<u32>;
+
+    /// Per-device IPv6 connectivity (`NMConnectivityState`). Read only for
+    /// diagnostics: an IPv6-only captive portal is logged but still refused,
+    /// because the in-netns re-connect path is IPv4-only. Present since
+    /// NetworkManager 1.16.
+    #[zbus(property, name = "Ip6Connectivity")]
+    fn ip6_connectivity(&self) -> zbus::Result<u32>;
 }
 
 #[proxy(
@@ -241,12 +259,26 @@ impl CaptiveStateChecker for NMCaptiveCheck {
                 continue;
             }
             let conn_state = device
-                .connectivity()
+                .ip4_connectivity()
                 .map_err(|e| NMError::DbusFailed(e.to_string()))?;
             return match conn_state {
                 NM_CONNECTIVITY_PORTAL => Ok(true),
                 NM_CONNECTIVITY_UNKNOWN => Err(NMError::Pending(interface.to_string())),
-                _ => Ok(false),
+                _ => {
+                    // IPv4 isn't captive. Peek IPv6 purely to disambiguate
+                    // "genuinely not a portal" from "captive on IPv6 only",
+                    // which gatepath does not service yet (the netns re-connect
+                    // path is IPv4). Log it so a field report reads as an
+                    // unsupported v6 portal rather than a bare NotCaptive.
+                    if let Ok(NM_CONNECTIVITY_PORTAL) = device.ip6_connectivity() {
+                        tracing::warn!(
+                            interface = %interface,
+                            "NM reports an IPv6-only captive portal; gatepath \
+                             handles IPv4 captive networks only — refusing as NotCaptive"
+                        );
+                    }
+                    Ok(false)
+                }
             };
         }
         Err(NMError::InterfaceNotFound(interface.to_string()))
