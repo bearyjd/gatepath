@@ -171,13 +171,18 @@ class TestVpnControlActivity : Activity() {
         Intent(this, GatepathTestVpnService::class.java).setAction(action)
 
     private fun sendUnboundProbe() {
+        // Off the main thread: DatagramSocket.send is network I/O and would throw
+        // NetworkOnMainThreadException in onCreate. join() so the activity doesn't
+        // finish before the datagrams are flushed to the (VPN) default route.
         val addr = InetAddress.getByName(SENTINEL_IP)
-        DatagramSocket().use { sock ->
-            repeat(PROBE_COUNT) {
-                val p = "gatepath-liveness".toByteArray()
-                sock.send(DatagramPacket(p, p.size, addr, SENTINEL_PORT))
+        Thread {
+            DatagramSocket().use { sock ->
+                repeat(PROBE_COUNT) {
+                    val p = "gatepath-liveness".toByteArray()
+                    sock.send(DatagramPacket(p, p.size, addr, SENTINEL_PORT))
+                }
             }
-        }
+        }.apply { start(); join() }
         Log.i(TAG, "sent $PROBE_COUNT datagrams to $SENTINEL_IP:$SENTINEL_PORT")
     }
 
