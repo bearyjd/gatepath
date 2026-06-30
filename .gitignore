@@ -56,3 +56,4 @@ desktop/repo/
 # Cursor / similar tooling
 .cursor/
 proptest-regressions/
+desktop/gatepath-netns-helper/dist/

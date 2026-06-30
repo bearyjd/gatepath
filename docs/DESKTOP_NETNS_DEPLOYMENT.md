@@ -274,3 +274,58 @@ captive network, and producing the sysext (or RPM) package (ROADMAP P2.1).
 - For packaging, **systemd-sysext** is the recommended primary on Bazzite, with
   a **layered RPM** as the conventional alternative; a writable-path installer
   is for dev only.
+
+---
+
+## 6. Building & installing the sysext (ROADMAP P2.1)
+
+The helper ships as a **systemd-sysext** image — a squashfs that overlays a
+read-only `/usr`. Every helper file lives under `/usr`, so the image merges with
+**no source edits** and survives OS updates (it is re-merged on boot).
+
+### Build
+
+```bash
+desktop/gatepath-netns-helper/packaging/build-sysext.sh
+# → desktop/gatepath-netns-helper/dist/gatepath-netns-helper.raw
+```
+
+Requires `cargo` and `squashfs-tools` (`mksquashfs`). CI builds and uploads the
+image on every desktop change (the `build-sysext` job in
+`.github/workflows/desktop.yml`); `packaging/validate-sysext.sh <image>`
+structurally checks the layout. The image contains (all root-owned):
+
+| Path in image | Purpose |
+|---|---|
+| `usr/libexec/gatepath-netns-helper` | the privileged D-Bus daemon |
+| `usr/lib/gatepath/portal-webview-runner` | netns portal-WebView launcher |
+| `usr/lib/systemd/system/gatepath-netns-helper.service` | the unit |
+| `usr/share/dbus-1/system.d/…conf` + `system-services/…service` | D-Bus policy + activation |
+| `usr/share/polkit-1/actions/…policy` | PolicyKit actions |
+| `usr/lib/tmpfiles.d/gatepath.conf` | pre-creates `/var/lib/gatepath`; copies the logrotate config into `/etc` |
+| `usr/share/factory/etc/logrotate.d/gatepath-netns-helper` | audit-log rotation — factory-copied to `/etc` on `systemd-tmpfiles --create` (a sysext can't ship `/etc` directly) |
+| `usr/lib/extension-release.d/extension-release.gatepath-netns-helper` | sysext metadata (`ID=_any`) |
+
+`ID=_any` means the image merges on any distribution (systemd skips the OS
+version match); it is x86-64-only.
+
+### Install (on the target box, as root)
+
+```bash
+install -Dm0644 gatepath-netns-helper.raw /var/lib/extensions/gatepath-netns-helper.raw
+systemd-sysext merge          # overlay the files into /usr
+systemctl daemon-reload       # pick up the new unit
+systemd-tmpfiles --create     # create /var/lib/gatepath + install the logrotate config into /etc
+systemctl reload dbus         # load the system-bus policy
+# D-Bus activation starts the helper on the first SetupCaptive call; or pre-start:
+#   systemctl start gatepath-netns-helper.service
+```
+
+Persist the merge across reboots with `systemctl enable systemd-sysext`. Remove
+with `rm /var/lib/extensions/gatepath-netns-helper.raw && systemd-sysext refresh`.
+
+> **Not yet wired:** a real `systemd-sysext merge` + helper-start smoke test on a
+> privileged host (the self-hosted hwsim runner is the natural place). CI today
+> builds and structurally validates the image but does not merge it. The image is
+> also **unsigned** — signing for verified-sysext is future work (tracked under
+> P2.3 supply-chain hardening).
