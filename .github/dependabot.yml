@@ -1,0 +1,59 @@
+# Dependabot — weekly dependency-update PRs across every ecosystem in the repo
+# (ROADMAP P2.3). Updates are grouped per ecosystem so a week's bumps land as a
+# single PR instead of one-per-dependency noise. Rust CVE scanning is handled
+# separately by the cargo-audit job (desktop.yml); Python deps by pip-audit
+# (supply-chain.yml).
+version: 2
+updates:
+  # Rust helper crate.
+  - package-ecosystem: cargo
+    directory: /desktop/gatepath-netns-helper
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    labels:
+      - dependencies
+    groups:
+      cargo:
+        patterns:
+          - "*"
+
+  # Desktop Python package (gatepath). Core is stdlib-only; this tracks the
+  # optional [gui]/[dev] extras (dasbus, PyGObject, pytest).
+  - package-ecosystem: pip
+    directory: /desktop
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    labels:
+      - dependencies
+    groups:
+      python:
+        patterns:
+          - "*"
+
+  # Android app (Gradle version catalog + plugins).
+  - package-ecosystem: gradle
+    directory: /android
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    labels:
+      - dependencies
+    groups:
+      gradle:
+        patterns:
+          - "*"
+
+  # The third-party GitHub Actions pinned across .github/workflows/.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    labels:
+      - dependencies
+    groups:
+      actions:
+        patterns:
+          - "*"
