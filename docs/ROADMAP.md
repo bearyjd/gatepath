@@ -149,8 +149,16 @@ F-Droid metadata (the natural channel for a privacy tool), no release/tag
 automation.
 
 ### P2.3 — Supply-chain hardening
-**Status:** not started. `cargo-audit` exists; add `pip-audit` for the Python
-side, a `dependabot`/`renovate` config, signed releases, and an SBOM.
+**Status:** **core done (2026-06-30)**; signed releases still open. `cargo-audit`
+already scanned Rust advisories; now `.github/dependabot.yml` opens weekly grouped
+update PRs across all four ecosystems (cargo, pip, gradle, github-actions), and
+`.github/workflows/supply-chain.yml` adds a `pip-audit` job (Python deps) and a
+`syft` SBOM job (CycloneDX, all ecosystems, uploaded as an artifact). **Still open
+— signed releases:** there is no release pipeline yet (no tags / `release.yml` /
+`gh release`), so signing presupposes building one. Candidates: the sysext `.raw`,
+the Android AAB/APK (keystore secret; overlaps P2.2), the Flatpak bundle, and the
+SBOM — keyless cosign (sigstore/OIDC) is the lightest path. Deferred to a focused
+follow-up.
 
 ---
 
