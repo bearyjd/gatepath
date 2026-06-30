@@ -173,3 +173,33 @@ Logs land under `/tmp/gatepath-hwsim.XXXXXX/` (kept with `--keep`):
 - **`LEAK` reported** — the netns reached the sentinel. If your host has
   `ip_forward=1` and no `nft`/`iptables` was available to install the forward
   block, the AP gateway may be routing the netns onward; install `nftables`.
+
+## Running in CI (self-hosted runner)
+
+This harness needs a **real kernel with `mac80211_hwsim`** plus host-level netns +
+module privilege. **GitHub-hosted runners can't do it** — their Azure cloud kernel
+ships no `mac80211_hwsim` (`modinfo mac80211_hwsim` → "not found", even after
+installing `linux-modules-extra`). So `.github/workflows/desktop-hwsim.yml` targets
+a **self-hosted runner** on a box that has the virtual-radio stack (e.g. the Bazzite
+box this harness is validated on).
+
+It is **`workflow_dispatch` only** — it runs privileged repo code as root on your
+box, so it is deliberately not auto-triggered by PRs.
+
+**Set up the runner (one-time):**
+1. On GitHub: repo → **Settings → Actions → Runners → New self-hosted runner**;
+   follow the install steps on the target box.
+2. Give the runner the label **`gatepath-hwsim`** (during `config.sh`, or later in
+   the runner settings) — the workflow's `runs-on: [self-hosted, gatepath-hwsim]`
+   targets exactly that box.
+3. Ensure the box has the harness prerequisites (see "Requirements" above):
+   `mac80211_hwsim` loadable, **NetworkManager active**, `iw`, `wpa_supplicant`,
+   `dnsmasq`, `busctl`/dbus, `python3` + `dbus`/`dasbus`, `curl`, `jq`. `cargo` is
+   bootstrapped by `build-helper.sh` if absent.
+4. Give the runner's user **passwordless sudo** for the harness — the run step is
+   `sudo bash tests/e2e-hwsim/run.sh`. Scope it to that user if you prefer; the
+   harness tears everything down unconditionally and never touches a real `phy0`.
+
+**Run it:** GitHub → **Actions → desktop-hwsim → Run workflow** (pick `static` or
+`real` DHCP). Logs upload as the `e2e-hwsim-artifacts` artifact; on failure the
+harness preserves its work dir under `/tmp/gatepath-hwsim*`.

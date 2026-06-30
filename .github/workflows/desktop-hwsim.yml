@@ -3,89 +3,47 @@ name: desktop-hwsim
 # Privileged mac80211_hwsim no-leak harness (ROADMAP P0.2): drives the REAL
 # gatepath-netns-helper end-to-end on a virtual radio — PHY move into a throwaway
 # netns, in-netns wpa_supplicant + DHCP, portal, and the trusted-net sentinel.
-# Ported from the Bazzite dev box to a GitHub-hosted Ubuntu VM runner (a VM, not a
-# container, so it has CAP_SYS_ADMIN + kernel-module load). Starts manual + on PRs
-# that touch the harness/helper; promote to a required check once it's proven green.
+#
+# This runs on a SELF-HOSTED runner (label `gatepath-hwsim`), NOT a GitHub-hosted
+# one: GitHub's hosted runners use an Azure cloud kernel that ships no
+# mac80211_hwsim (confirmed — `modinfo mac80211_hwsim` is "not found" even after
+# installing linux-modules-extra). The box behind the runner must have the
+# virtual-radio stack (e.g. the Bazzite dev box where this harness is validated
+# 3/3). See tests/e2e-hwsim/README.md → "Running in CI" for runner setup.
+#
+# SECURITY: manual-dispatch ONLY. This executes privileged repo code as root on
+# your box, so it is deliberately NOT auto-triggered by pull_request/push — you
+# decide when to run it, on code you've reviewed.
 on:
-  workflow_dispatch: {}
-  pull_request:
-    paths:
-      - 'tests/e2e-hwsim/**'
-      - 'desktop/gatepath-netns-helper/**'
-      - 'mockportal/**'
-      - '.github/workflows/desktop-hwsim.yml'
+  workflow_dispatch:
+    inputs:
+      dhcp:
+        description: 'DHCP mode passed to run.sh'
+        default: static
+        type: choice
+        options: [static, real]
 
 jobs:
   e2e-hwsim:
     name: Desktop E2E (mac80211_hwsim, privileged)
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, gatepath-hwsim]
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-
-      - uses: dtolnay/rust-toolchain@stable
-
-      - name: Install deps + mac80211_hwsim for this kernel
-        run: |
-          set -euxo pipefail
-          sudo apt-get update
-          # mac80211_hwsim ships in linux-modules-extra for the running kernel.
-          # If this package is missing for the runner's kernel, the preflight
-          # gate below fails loudly (the harness can't run without the module).
-          sudo apt-get install -y "linux-modules-extra-$(uname -r)"
-          # Rebuild the module dep index so modinfo/modprobe resolve newly-added
-          # modules (the package postinst doesn't always run depmod for the
-          # non-running build flavor on the GH azure kernel).
-          sudo depmod -a "$(uname -r)" || true
-          # Diagnostic: is mac80211_hwsim actually on disk for this kernel? This
-          # disambiguates "needs depmod" from "azure kernel genuinely lacks it".
-          echo "=== mac80211_hwsim presence on $(uname -r) ==="
-          sudo find "/lib/modules/$(uname -r)" -iname 'mac80211*hwsim*' 2>/dev/null \
-            || echo "(no hwsim module file found on disk)"
-          modinfo mac80211_hwsim 2>&1 | head -3 || true
-          sudo apt-get install -y \
-            iw wpasupplicant dnsmasq-base network-manager \
-            dbus python3-dbus curl jq
-
-      - name: Preflight gate — load mac80211_hwsim + move a PHY into a netns
-        run: |
-          set -uxo pipefail
-          # preflight.sh is read-mostly and always exits 0 (it prints a summary +
-          # cleans up its probe netns / unloads the module via an EXIT trap), so we
-          # gate on its reported must-haves rather than its exit code.
-          sudo bash tests/e2e-hwsim/preflight.sh | tee /tmp/hwsim-preflight.out
-          for must in hwsim_module=yes hwsim_load=yes phy_move=yes; do
-            grep -q "$must" /tmp/hwsim-preflight.out \
-              || { echo "::error::hwsim substrate unavailable on this runner ($must)"; exit 1; }
-          done
-
-      - name: Start NetworkManager (runner uplink left unmanaged)
-        run: |
-          set -euxo pipefail
-          # The harness needs NM active, but GH runners don't run it. Start it
-          # WITHOUT letting it grab the runner's primary NIC (that would drop the
-          # job's connectivity) — mark the default-route iface unmanaged first.
-          PRIMARY="$(ip route show default | awk '{print $5; exit}')"
-          echo "runner uplink left unmanaged: ${PRIMARY:-<none>}"
-          sudo install -d /etc/NetworkManager/conf.d
-          printf '[keyfile]\nunmanaged-devices=interface-name:%s\n' "$PRIMARY" \
-            | sudo tee /etc/NetworkManager/conf.d/00-gatepath-unmanage-uplink.conf
-          sudo systemctl start NetworkManager
-          for _ in $(seq 1 15); do
-            systemctl is-active --quiet NetworkManager && break || sleep 1
-          done
-          systemctl is-active --quiet NetworkManager
-          nmcli -t -f DEVICE,TYPE,STATE device || true
-
+      # Builds the helper as the (non-root) runner user; bootstraps rustup into
+      # ~/.cargo if cargo isn't already on PATH. Bakes the hwsim runner path in
+      # via GATEPATH_PORTAL_RUNNER_PATH (option_env!), so the shipping default is
+      # untouched.
       - name: Build the privileged helper
         run: bash tests/e2e-hwsim/build-helper.sh
 
+      # run.sh needs root (netns + PHY move + module load). The runner user must
+      # have passwordless sudo for this (see README). The harness does its own
+      # host setup (radios, AP netns, NM connect, polkit/dbus install) and tears
+      # everything down unconditionally via an EXIT/INT/TERM trap.
       - name: Run the hwsim no-leak harness
-        run: sudo bash tests/e2e-hwsim/run.sh
+        run: sudo bash tests/e2e-hwsim/run.sh --dhcp "${{ inputs.dhcp }}"
 
       - name: Upload artifacts
         if: always()
@@ -94,5 +52,4 @@ jobs:
           name: e2e-hwsim-artifacts
           path: |
             /tmp/gatepath-hwsim*
-            /tmp/hwsim-preflight.out
           if-no-files-found: ignore
