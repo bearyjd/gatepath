@@ -31,3 +31,11 @@ def test_missing_markers_fails():
     failures: list[str] = []
     assertions.check_vpn_confinement([SENTINEL], failures)
     assert any("marker" in f for f in failures)
+
+
+def test_reversed_markers_fail():
+    # bound_end appearing before bound_begin must hard-fail, never pass — the
+    # spec calls out out-of-order markers as a hard fail.
+    failures: list[str] = []
+    assertions.check_vpn_confinement([SENTINEL, END, BEGIN], failures)
+    assert any("marker" in f for f in failures)
