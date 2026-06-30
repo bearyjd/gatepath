@@ -37,7 +37,13 @@ OFF_DOMAIN_HOSTNAMES = frozenset(
     }
 )
 
-SENTINEL_IP = "203.0.113.7"
+# The no-leak sentinel: a dedicated host:port the captive monitor never probes
+# (it hits 10.0.2.2:18080). The unbound liveness probe and the bound WebView's
+# <img> both target it, so they are distinguishable from captive-monitor noise
+# in the VPN sink. Single source of truth — must match the Kotlin probe, the
+# scenario harness, and the mock's injected URL (PR #55).
+SENTINEL_DST = "10.0.2.2"
+SENTINEL_PORT = 18081
 
 EXPECTED_STEPS = [
     "connect",
@@ -192,8 +198,12 @@ def check_vpn_confinement(lines: list[dict[str, Any]], failures: list[str]) -> N
         fail("vpn.markers", f"bound_end ({end}) precedes bound_begin ({begin})", failures)
         return
 
-    # D1 — liveness gate: a sentinel packet must appear BEFORE bound_begin.
-    pre = [e for e in lines[:begin] if e.get("dst") == SENTINEL_IP]
+    # D1 — liveness gate: an unbound sentinel packet (dst:port) must appear
+    # BEFORE bound_begin, proving the sink intercepts the default route.
+    pre = [
+        e for e in lines[:begin]
+        if e.get("dst") == SENTINEL_DST and e.get("port") == SENTINEL_PORT
+    ]
     if not pre:
         fail(
             "vpn.liveness",
@@ -205,18 +215,25 @@ def check_vpn_confinement(lines: list[dict[str, Any]], failures: list[str]) -> N
         return
     ok("vpn.liveness", f"{len(pre)} unbound sentinel packet(s) captured")
 
-    # D2 — confinement: the bound window must be packet-silent.
-    leaks = [e for e in lines[begin + 1:end] if "dst" in e]
+    # D2 — confinement: the bound WebView must NOT reach the sentinel via the
+    # default (VPN) network. Only the dedicated sentinel port counts — the
+    # captive monitor's own probes to 10.0.2.2:18080 are expected unbound noise
+    # in this window and MUST be ignored (they are not a Gatepath leak).
+    leaks = [
+        e for e in lines[begin + 1:end]
+        if e.get("dst") == SENTINEL_DST and e.get("port") == SENTINEL_PORT
+    ]
     if leaks:
         s = leaks[0]
         fail(
             "vpn.confinement",
-            f"LEAK: bound-phase Gatepath traffic to {s.get('dst')}:{s.get('port')} "
-            f"escaped onto the default (VPN) network ({len(leaks)} packet(s))",
+            f"LEAK: bound-phase WebView traffic reached the sentinel "
+            f"{s.get('dst')}:{s.get('port')} via the default (VPN) network "
+            f"({len(leaks)} packet(s))",
             failures,
         )
     else:
-        ok("vpn.confinement", "bound window silent — traffic confined to WiFi")
+        ok("vpn.confinement", "sentinel unreached in bound window — traffic confined to WiFi")
 
 
 def _summarise(data: dict[str, Any]) -> str:

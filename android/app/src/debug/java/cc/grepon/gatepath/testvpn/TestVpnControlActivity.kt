@@ -6,9 +6,8 @@ import android.net.VpnService
 import android.os.Bundle
 import android.util.Log
 import cc.grepon.gatepath.BuildConfig
-import java.net.DatagramPacket
-import java.net.DatagramSocket
-import java.net.InetAddress
+import java.net.InetSocketAddress
+import java.net.Socket
 
 /** DEBUG-ONLY harness control surface, driven by `am start … --es gatepath.testvpn.action <a>`. */
 class TestVpnControlActivity : Activity() {
@@ -38,27 +37,39 @@ class TestVpnControlActivity : Activity() {
         Intent(this, GatepathTestVpnService::class.java).setAction(action)
 
     private fun sendUnboundProbe() {
-        // Off the main thread: DatagramSocket.send is network I/O and would throw
+        // Off the main thread: Socket.connect is network I/O and would throw
         // NetworkOnMainThreadException in onCreate. join() so the activity doesn't
-        // finish before the datagrams are flushed to the (VPN) default route.
-        val addr = InetAddress.getByName(SENTINEL_IP)
+        // finish before the SYN(s) are flushed to the (VPN) default route.
+        //
+        // An UNBOUND TCP connect to the routable sentinel host:port. Nothing
+        // listens there, so the connect fails (refused / timed out / black-holed)
+        // — that is expected; the outbound SYN is the signal the VPN sink must
+        // capture. TCP-to-routable reaches the TUN reliably on the emulator where
+        // unroutable UDP did not (PR #55, issue #2). A few attempts for robustness.
         Thread {
-            DatagramSocket().use { sock ->
-                repeat(PROBE_COUNT) {
-                    val p = "gatepath-liveness".toByteArray()
-                    sock.send(DatagramPacket(p, p.size, addr, SENTINEL_PORT))
+            repeat(PROBE_COUNT) {
+                try {
+                    Socket().use { sock ->
+                        sock.connect(
+                            InetSocketAddress(SENTINEL_HOST, SENTINEL_PORT),
+                            CONNECT_TIMEOUT_MS,
+                        )
+                    }
+                } catch (_: Exception) {
+                    // Expected: nothing listens at the sentinel — the SYN is the signal.
                 }
             }
         }.apply { start(); join() }
-        Log.i(TAG, "sent $PROBE_COUNT datagrams to $SENTINEL_IP:$SENTINEL_PORT")
+        Log.i(TAG, "sent sentinel probe to $SENTINEL_HOST:$SENTINEL_PORT")
     }
 
     companion object {
         private const val TAG = "GatepathTestVpnCtl"
         const val EXTRA_ACTION = "gatepath.testvpn.action"
         const val EXTRA_LABEL = "gatepath.testvpn.label"
-        const val SENTINEL_IP = "203.0.113.7"
-        const val SENTINEL_PORT = 9
-        const val PROBE_COUNT = 3
+        const val SENTINEL_HOST = "10.0.2.2"
+        const val SENTINEL_PORT = 18081
+        private const val PROBE_COUNT = 3
+        private const val CONNECT_TIMEOUT_MS = 1500
     }
 }

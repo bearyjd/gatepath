@@ -62,7 +62,13 @@ AUDIT_LOG_RELATIVE = "files/audit.jsonl"
 APP_PACKAGE = "cc.grepon.gatepath"
 TESTVPN_ACTIVITY = f"{APP_PACKAGE}/.testvpn.TestVpnControlActivity"
 VPN_SINK_RELATIVE = "files/vpn-sink.jsonl"
-SENTINEL_IP = "203.0.113.7"
+# The unbound liveness probe targets a dedicated sentinel host:port the captive
+# monitor never touches (it probes 10.0.2.2:18080), so the bound WebView's
+# attempt to reach the same sentinel is unambiguous in the VPN sink. Single
+# source of truth — must match the Kotlin probe, the mock's injected URL, and
+# the assertion (PR #55).
+SENTINEL_DST = "10.0.2.2"
+SENTINEL_PORT = 18081
 
 
 def _testvpn(serial: str, action: str, label: str | None = None) -> None:
@@ -70,6 +76,25 @@ def _testvpn(serial: str, action: str, label: str | None = None) -> None:
     if label:
         cmd += f" --es gatepath.testvpn.label {label}"
     adb_helper.shell(serial, cmd, timeout=20, check=False)
+
+
+def _pull_sink(serial: str) -> list[dict]:
+    """run-as cat the VPN sink and parse it into JSON objects, one per line.
+    Blank lines and unparseable lines are skipped (the sink is appended to
+    concurrently, so a partial trailing line can appear mid-read)."""
+    raw = adb_helper.shell(
+        serial, f"run-as {APP_PACKAGE} cat {VPN_SINK_RELATIVE}", timeout=10, check=False
+    )
+    entries: list[dict] = []
+    for line in raw.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            entries.append(json.loads(line))
+        except (json.JSONDecodeError, ValueError):
+            continue
+    return entries
 
 
 # ── Step helpers ──────────────────────────────────────────────────────────────
@@ -182,14 +207,33 @@ def step_start_test_vpn(state: dict) -> dict:
 
 
 def step_liveness_probe(state: dict) -> dict:
-    """Unbound UDP burst to the sentinel (must hit the VPN sink), then a settle
-    and the bound_begin marker. The settle keeps any late probe packet from
-    landing inside the bound window."""
+    """Poll-until-captured, THEN open the bound window.
+
+    Each pass fires the unbound TCP sentinel probe, settles, and pulls the sink;
+    it breaks once an entry with the sentinel dst:port is present. Only then is
+    the bound_begin marker laid. This deterministically guarantees the unbound
+    sentinel packet is in the sink BEFORE the bound window opens (fixing issue
+    #2 — the probe was previously absent / raced). If the sentinel is never
+    captured within the window, captured=False surfaces it to the assertion
+    rather than silently opening a vacuous bound window."""
     serial = state["serial"]
-    _testvpn(serial, "probe")
-    time.sleep(2)  # quiescence settle before the bound window opens
+    deadline = time.monotonic() + 25
+    captured = False
+    while time.monotonic() < deadline:
+        _testvpn(serial, "probe")
+        time.sleep(1.5)
+        if any(
+            e.get("dst") == SENTINEL_DST and e.get("port") == SENTINEL_PORT
+            for e in _pull_sink(serial)
+        ):
+            captured = True
+            break
     _testvpn(serial, "mark", label="bound_begin")
-    return {"sentinel": SENTINEL_IP, "marked": "bound_begin"}
+    return {
+        "sentinel": f"{SENTINEL_DST}:{SENTINEL_PORT}",
+        "captured": captured,
+        "marked": "bound_begin",
+    }
 
 
 def step_mark_bound_end(state: dict) -> dict:
@@ -200,13 +244,37 @@ def step_mark_bound_end(state: dict) -> dict:
 
 
 def step_pull_vpn_sink(state: dict) -> dict:
+    """Pull the VPN sink after mark_bound_end has been issued.
+
+    mark_bound_end dispatches via an async `am start`, so reading the sink
+    immediately raced the marker write and missed bound_end (issue #1). Poll up
+    to ~10s until the bound_end marker line is present, then write the artifact.
+    Always write the last pull (even if bound_end never appears) so the artifact
+    stays diagnosable; bound_end_seen surfaces whether the race was won."""
     serial = state["serial"]
-    contents = adb_helper.shell(
-        serial, f"run-as {APP_PACKAGE} cat {VPN_SINK_RELATIVE}", timeout=10, check=False
-    )
+    deadline = time.monotonic() + 10
+    contents = ""
+    bound_end_seen = False
+    while True:
+        contents = adb_helper.shell(
+            serial, f"run-as {APP_PACKAGE} cat {VPN_SINK_RELATIVE}", timeout=10, check=False
+        )
+        for line in contents.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                if json.loads(line).get("marker") == "bound_end":
+                    bound_end_seen = True
+                    break
+            except (json.JSONDecodeError, ValueError):
+                continue
+        if bound_end_seen or time.monotonic() >= deadline:
+            break
+        time.sleep(1.0)
     out = state["artifacts_dir"] / "vpn-sink.jsonl"
     out.write_text(contents)
-    return {"path": str(out), "size": len(contents)}
+    return {"path": str(out), "size": len(contents), "bound_end_seen": bound_end_seen}
 
 
 def _foreground(serial: str) -> str:

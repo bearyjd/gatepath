@@ -34,6 +34,13 @@ from typing import Any
 PORTAL_HOST = os.environ.get("PORTAL_HOST", "127.0.0.1")
 PORTAL_PORT = int(os.environ.get("PORTAL_PORT", "18080"))
 PORTAL_COMPLETE_AFTER = int(os.environ.get("PORTAL_COMPLETE_AFTER", "3"))
+# Optional URL injected as a 1x1 <img> sub-resource into /portal so an embedding
+# WebView attempts to load it — the android no-leak sentinel (PR #55). Default
+# empty: when unset the portal HTML is served byte-for-byte unchanged, so the
+# desktop e2e path is unaffected. The android harness sets it to a dedicated
+# sentinel host:port (e.g. http://10.0.2.2:18081/leak.png) the captive monitor
+# never touches, making bound-phase WebView traffic unambiguous in the VPN sink.
+PORTAL_LEAK_SENTINEL = os.environ.get("PORTAL_LEAK_SENTINEL", "")
 
 
 PORTAL_HTML = """<!doctype html>
@@ -95,7 +102,9 @@ class _State:
             return list(self.requests)
 
 
-def _make_handler(state: _State, host: str, port: int) -> type[BaseHTTPRequestHandler]:
+def _make_handler(
+    state: _State, host: str, port: int, leak_sentinel: str
+) -> type[BaseHTTPRequestHandler]:
     portal_url = f"http://{host}:{port}/portal"
     probe_url = f"http://{host}:{port}/generate_204"
 
@@ -132,9 +141,18 @@ def _make_handler(state: _State, host: str, port: int) -> type[BaseHTTPRequestHa
                     self._send(204)
                 return
             if self.path.startswith("/portal"):
+                # Build the response per-request so the module-level PORTAL_HTML
+                # constant is never mutated. With leak_sentinel empty the body is
+                # byte-identical to PORTAL_HTML (desktop e2e unaffected); when set,
+                # inject a 1x1 sentinel <img> into the body so the WebView fetches
+                # it (the android no-leak sentinel).
+                html = PORTAL_HTML
+                if leak_sentinel:
+                    img = f'<img src="{leak_sentinel}" width="1" height="1" alt="">'
+                    html = html.replace("</body>", f"{img}\n</body>", 1)
                 self._send(
                     200,
-                    PORTAL_HTML.encode("utf-8"),
+                    html.encode("utf-8"),
                     {"Content-Type": "text/html; charset=utf-8"},
                 )
                 return
@@ -165,11 +183,12 @@ def build_server(
     host: str = PORTAL_HOST,
     port: int = PORTAL_PORT,
     complete_after: int = PORTAL_COMPLETE_AFTER,
+    leak_sentinel: str = PORTAL_LEAK_SENTINEL,
 ) -> tuple[ThreadingHTTPServer, _State]:
     state = _State(complete_after)
     server = ThreadingHTTPServer((host, port), lambda *a, **kw: None)
     actual_host, actual_port = server.server_address[:2]
-    server.RequestHandlerClass = _make_handler(state, actual_host, actual_port)
+    server.RequestHandlerClass = _make_handler(state, actual_host, actual_port, leak_sentinel)
     return server, state
 
 
