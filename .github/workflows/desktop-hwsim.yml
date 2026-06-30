@@ -37,6 +37,16 @@ jobs:
           # If this package is missing for the runner's kernel, the preflight
           # gate below fails loudly (the harness can't run without the module).
           sudo apt-get install -y "linux-modules-extra-$(uname -r)"
+          # Rebuild the module dep index so modinfo/modprobe resolve newly-added
+          # modules (the package postinst doesn't always run depmod for the
+          # non-running build flavor on the GH azure kernel).
+          sudo depmod -a "$(uname -r)" || true
+          # Diagnostic: is mac80211_hwsim actually on disk for this kernel? This
+          # disambiguates "needs depmod" from "azure kernel genuinely lacks it".
+          echo "=== mac80211_hwsim presence on $(uname -r) ==="
+          sudo find "/lib/modules/$(uname -r)" -iname 'mac80211*hwsim*' 2>/dev/null \
+            || echo "(no hwsim module file found on disk)"
+          modinfo mac80211_hwsim 2>&1 | head -3 || true
           sudo apt-get install -y \
             iw wpasupplicant dnsmasq-base network-manager \
             dbus python3-dbus curl jq
