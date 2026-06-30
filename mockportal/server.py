@@ -34,6 +34,16 @@ from typing import Any
 PORTAL_HOST = os.environ.get("PORTAL_HOST", "127.0.0.1")
 PORTAL_PORT = int(os.environ.get("PORTAL_PORT", "18080"))
 PORTAL_COMPLETE_AFTER = int(os.environ.get("PORTAL_COMPLETE_AFTER", "3"))
+# Optional BASE url for the android no-leak sentinel (PR #55). When set, /portal
+# injects a <head> carrying BOTH a favicon <link> and a blocking <script>, each
+# pointing at this base — the favicon is the one sub-resource a captive-portal
+# WebView fetches reliably before the session tears down, and the head script is
+# a deterministic second trigger. Default empty: when unset the portal HTML is
+# served byte-for-byte unchanged, so the desktop e2e path is unaffected. The
+# android harness sets it to a dedicated sentinel host:port (e.g.
+# http://10.0.2.2:18081) the captive monitor never touches, making bound-phase
+# WebView traffic unambiguous in the VPN sink.
+PORTAL_LEAK_SENTINEL = os.environ.get("PORTAL_LEAK_SENTINEL", "")
 
 
 PORTAL_HTML = """<!doctype html>
@@ -95,7 +105,9 @@ class _State:
             return list(self.requests)
 
 
-def _make_handler(state: _State, host: str, port: int) -> type[BaseHTTPRequestHandler]:
+def _make_handler(
+    state: _State, host: str, port: int, leak_sentinel: str
+) -> type[BaseHTTPRequestHandler]:
     portal_url = f"http://{host}:{port}/portal"
     probe_url = f"http://{host}:{port}/generate_204"
 
@@ -132,9 +144,27 @@ def _make_handler(state: _State, host: str, port: int) -> type[BaseHTTPRequestHa
                     self._send(204)
                 return
             if self.path.startswith("/portal"):
+                # Build the response per-request so the module-level PORTAL_HTML
+                # constant is never mutated. With leak_sentinel empty the body is
+                # byte-identical to PORTAL_HTML (desktop e2e unaffected); when set,
+                # inject a <head> carrying a favicon <link> and a blocking <script>,
+                # both pointing at the sentinel base. The favicon is the one
+                # sub-resource a captive-portal WebView fetches reliably before the
+                # session tears down; the head script is a deterministic second
+                # trigger (the android no-leak sentinel).
+                html = PORTAL_HTML
+                if leak_sentinel:
+                    base = leak_sentinel.rstrip("/")
+                    head = (
+                        f"<head>"
+                        f'<link rel="icon" href="{base}/favicon.ico">'
+                        f'<script src="{base}/leak.js"></script>'
+                        f"</head>"
+                    )
+                    html = html.replace("<body>", f"{head}\n<body>", 1)
                 self._send(
                     200,
-                    PORTAL_HTML.encode("utf-8"),
+                    html.encode("utf-8"),
                     {"Content-Type": "text/html; charset=utf-8"},
                 )
                 return
@@ -165,11 +195,12 @@ def build_server(
     host: str = PORTAL_HOST,
     port: int = PORTAL_PORT,
     complete_after: int = PORTAL_COMPLETE_AFTER,
+    leak_sentinel: str = PORTAL_LEAK_SENTINEL,
 ) -> tuple[ThreadingHTTPServer, _State]:
     state = _State(complete_after)
     server = ThreadingHTTPServer((host, port), lambda *a, **kw: None)
     actual_host, actual_port = server.server_address[:2]
-    server.RequestHandlerClass = _make_handler(state, actual_host, actual_port)
+    server.RequestHandlerClass = _make_handler(state, actual_host, actual_port, leak_sentinel)
     return server, state
 
 

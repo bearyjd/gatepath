@@ -10,11 +10,12 @@ import threading
 import time
 import urllib.request
 from collections.abc import Iterator
+from contextlib import contextmanager
 from urllib.error import HTTPError
 
 import pytest
 
-from mockportal.server import build_server
+from mockportal.server import PORTAL_HTML, build_server
 
 
 def _free_port() -> int:
@@ -25,10 +26,16 @@ def _free_port() -> int:
         return s.getsockname()[1]
 
 
-@pytest.fixture
-def portal() -> Iterator[str]:
+@contextmanager
+def _serve(*, leak_sentinel: str = "") -> Iterator[str]:
+    """Run a mock portal on a free loopback port; yield its base URL.
+
+    leak_sentinel is threaded through build_server so a test can drive the
+    /portal sentinel injection without reloading the module."""
     port = _free_port()
-    server, _ = build_server(host="127.0.0.1", port=port, complete_after=3)
+    server, _ = build_server(
+        host="127.0.0.1", port=port, complete_after=3, leak_sentinel=leak_sentinel
+    )
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     base = f"http://127.0.0.1:{port}"
@@ -45,6 +52,12 @@ def portal() -> Iterator[str]:
         server.shutdown()
         server.server_close()
         thread.join(timeout=2)
+
+
+@pytest.fixture
+def portal() -> Iterator[str]:
+    with _serve() as base:
+        yield base
 
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -140,3 +153,29 @@ def test_portal_host_env_overrides_default(monkeypatch: pytest.MonkeyPatch) -> N
         monkeypatch.delenv("PORTAL_HOST", raising=False)
         importlib.reload(srv)
         assert srv.PORTAL_HOST == "127.0.0.1"
+
+
+def test_portal_injects_leak_sentinel_when_set() -> None:
+    # With PORTAL_LEAK_SENTINEL set to a BASE url (threaded through build_server),
+    # /portal injects a <head> carrying a favicon <link> and a blocking <script>,
+    # both pointing at the sentinel base, so an embedding WebView fetches them (the
+    # android no-leak sentinel).
+    sentinel = "http://10.0.2.2:18081"
+    with _serve(leak_sentinel=sentinel) as base:
+        resp = _open(f"{base}/portal")
+        assert resp.status == 200
+        body = resp.read().decode("utf-8")
+        assert "10.0.2.2:18081" in body
+        assert '<link rel="icon"' in body
+        assert "<script src=" in body
+
+
+def test_portal_unchanged_when_sentinel_unset() -> None:
+    # Default OFF: the body must be byte-identical to PORTAL_HTML (so the desktop
+    # e2e path is unaffected) and must not mention the sentinel port.
+    with _serve() as base:
+        resp = _open(f"{base}/portal")
+        assert resp.status == 200
+        body = resp.read().decode("utf-8")
+        assert "18081" not in body
+        assert body == PORTAL_HTML

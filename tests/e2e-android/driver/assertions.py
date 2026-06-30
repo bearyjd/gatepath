@@ -37,6 +37,14 @@ OFF_DOMAIN_HOSTNAMES = frozenset(
     }
 )
 
+# The no-leak sentinel: a dedicated host:port the captive monitor never probes
+# (it hits 10.0.2.2:18080). The unbound liveness probe and the bound WebView's
+# <img> both target it, so they are distinguishable from captive-monitor noise
+# in the VPN sink. Single source of truth — must match the Kotlin probe, the
+# scenario harness, and the mock's injected URL (PR #55).
+SENTINEL_DST = "10.0.2.2"
+SENTINEL_PORT = 18081
+
 EXPECTED_STEPS = [
     "connect",
     "reset_settings",
@@ -45,10 +53,15 @@ EXPECTED_STEPS = [
     "set_probe_urls",
     "cycle_wifi",
     "wait_for_captive",
+    "grant_vpn",
+    "start_test_vpn",
+    "liveness_probe",
     "launch_debug_portal",
     "wait_portal_screen",
     "submit_login",
     "wait_validated",
+    "mark_bound_end",
+    "pull_vpn_sink",
     "pull_logcat",
     "pull_audit_log",
     "fetch_gateway_log",
@@ -166,6 +179,97 @@ def check_gateway_log(
         ok("gateway.off_domain_blocked", "no off-domain requests observed")
 
 
+def _webview_attempted_sentinel(logcat: str) -> bool:
+    """D2 positive control: did the portal WebView actually try to reach the
+    sentinel? True iff a GatepathWebView line names the sentinel host:port (an
+    onReceivedError for the injected <img>, like the evil-tracker one). Without
+    this, 'sentinel absent from the VPN sink' is ambiguous — it could mean
+    CONFINED, or that the portal page never loaded the sentinel <img> at all (a
+    vacuous pass). The unbound probe (logged by GatepathTestVpnCtl) names the
+    same host:port and is deliberately NOT counted — only the WebView's own log."""
+    needle = f"{SENTINEL_DST}:{SENTINEL_PORT}"
+    for line in logcat.splitlines():
+        if needle in line and "GatepathWebView" in line:
+            return True
+    return False
+
+
+def check_vpn_confinement(
+    lines: list[dict[str, Any]], failures: list[str], sentinel_attempted: bool
+) -> None:
+    """D. The network-level no-leak proof over the VPN sink (ROADMAP P0.1).
+
+    The bound window is delimited by 'bound_begin'/'bound_end' marker lines the
+    test VpnService wrote into the sink (append-order, so no host/device clock
+    comparison is needed). D1 (liveness) must hold before D2 (confinement) means
+    anything: if the sink never saw the unbound probe it is not intercepting the
+    default route, and a silent bound window is vacuous. D2 additionally requires
+    `sentinel_attempted` (the WebView actually tried the sentinel) so a silent
+    window can't pass when the page simply never loaded the sentinel <img>.
+    """
+    print("D. VPN sink (no-leak confinement)")
+    begin = next((i for i, e in enumerate(lines) if e.get("marker") == "bound_begin"), None)
+    end = next((i for i, e in enumerate(lines) if e.get("marker") == "bound_end"), None)
+    if begin is None or end is None:
+        fail("vpn.markers", f"missing bound-window markers (begin={begin}, end={end})", failures)
+        return
+    if end < begin:
+        fail("vpn.markers", f"bound_end ({end}) precedes bound_begin ({begin})", failures)
+        return
+
+    # D1 — liveness gate: an unbound sentinel packet (dst:port) must appear
+    # BEFORE bound_begin, proving the sink intercepts the default route.
+    pre = [
+        e for e in lines[:begin]
+        if e.get("dst") == SENTINEL_DST and e.get("port") == SENTINEL_PORT
+    ]
+    if not pre:
+        fail(
+            "vpn.liveness",
+            "the VPN sink never captured the unbound probe to the sentinel — the "
+            "sink is not intercepting the default route, so a silent bound window "
+            "proves nothing",
+            failures,
+        )
+        return
+    ok("vpn.liveness", f"{len(pre)} unbound sentinel packet(s) captured")
+
+    # D2 — confinement: the bound WebView must NOT reach the sentinel via the
+    # default (VPN) network. Only the dedicated sentinel port counts — the
+    # captive monitor's own probes to 10.0.2.2:18080 are expected unbound noise
+    # in this window and MUST be ignored (they are not a Gatepath leak).
+    leaks = [
+        e for e in lines[begin + 1:end]
+        if e.get("dst") == SENTINEL_DST and e.get("port") == SENTINEL_PORT
+    ]
+    if leaks:
+        s = leaks[0]
+        fail(
+            "vpn.confinement",
+            f"LEAK: bound-phase WebView traffic reached the sentinel "
+            f"{s.get('dst')}:{s.get('port')} via the default (VPN) network "
+            f"({len(leaks)} packet(s))",
+            failures,
+        )
+    elif not sentinel_attempted:
+        # Positive control failed: the sink is clean, but there's no evidence the
+        # WebView ever tried the sentinel, so "clean" can't be read as confined.
+        fail(
+            "vpn.confinement",
+            f"inconclusive: no evidence the portal WebView attempted the sentinel "
+            f"{SENTINEL_DST}:{SENTINEL_PORT} (no GatepathWebView error for it in "
+            f"logcat) — a clean bound window cannot confirm confinement vs. a "
+            f"portal that never loaded the sentinel <img>",
+            failures,
+        )
+    else:
+        ok(
+            "vpn.confinement",
+            "WebView attempted the sentinel but it never reached the VPN sink — "
+            "confined to WiFi",
+        )
+
+
 def _summarise(data: dict[str, Any]) -> str:
     parts = []
     for k, v in data.items():
@@ -208,6 +312,24 @@ def main(argv: list[str]) -> int:
     else:
         entries = json.loads(gateway_path.read_text())
         check_gateway_log(entries, report, failures)
+
+    sink_path = root / "vpn-sink.jsonl"
+    if not sink_path.exists() or sink_path.stat().st_size == 0:
+        failures.append("vpn.file: vpn-sink.jsonl missing or empty")
+        print(f"  ✗ vpn-sink.jsonl missing or empty in {root}", file=sys.stderr)
+    else:
+        sink_lines = [
+            json.loads(line)
+            for line in sink_path.read_text().splitlines()
+            if line.strip()
+        ]
+        # D2 positive control: did the WebView actually attempt the sentinel?
+        logcat_path = root / "logcat.txt"
+        logcat_text = (
+            logcat_path.read_text(errors="replace") if logcat_path.exists() else ""
+        )
+        sentinel_attempted = _webview_attempted_sentinel(logcat_text)
+        check_vpn_confinement(sink_lines, failures, sentinel_attempted)
 
     if failures:
         print(f"\n{len(failures)} failure(s):", file=sys.stderr)

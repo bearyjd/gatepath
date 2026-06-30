@@ -29,6 +29,15 @@ services:
       # after the first probe; subsequent probes return 204 and the system
       # marks the network VALIDATED before captive can be detected.
       PORTAL_COMPLETE_AFTER: "1000"
+      # Sentinel BASE url injected into /portal as a <head> favicon <link> +
+      # blocking <script> so the PortalScreen WebView fetches them. The favicon is
+      # the one sub-resource that loads reliably before the WebView session tears
+      # down. The sentinel lives on a dedicated host:port the captive monitor
+      # never touches (10.0.2.2:18081 vs the mock's :18080), so bound-phase
+      # WebView traffic is unambiguous in the VPN sink. The entrypoint
+      # `exec python3` inherits this env; server.py reads it at import via
+      # os.environ (default empty → desktop e2e unaffected).
+      PORTAL_LEAK_SENTINEL: "http://10.0.2.2:18081"
 
   emulator:
     container_name: gatepath-e2e-emulator

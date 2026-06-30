@@ -94,3 +94,36 @@ wait_validated          # reevaluate same wifi netid; poll IS_VALIDATED
                         #   portal_completed audit
 pull_audit_log          # run-as cat files/audit.jsonl
 ```
+
+## No-leak sentinel (ROADMAP P0.1)
+
+A debug-only `VpnService` (`android/app/src/debug/.../testvpn/`) becomes the system
+default network and logs every packet the Gatepath app emits while unbound to
+`files/vpn-sink.jsonl`. Because `bindProcessToNetwork(wifi)` bypasses the VPN, the
+sink is a leak detector:
+
+- `liveness_probe` sends an UNBOUND UDP burst to the sentinel `203.0.113.7` — it
+  MUST appear in the sink (D1: proves the sink intercepts the default route).
+- The portal session runs bound to WiFi between the `bound_begin`/`bound_end`
+  marker lines — the sink MUST be packet-silent there (D2: proves confinement).
+
+`appops set cc.grepon.gatepath ACTIVATE_VPN allow` suppresses the consent dialog
+(no root). The apparatus is `src/debug/` only; `release-vpn-guard` CI asserts the
+release build excludes it. Negative control: comment out the bind at
+`GatepathWebView.kt` and `vpn.confinement` goes RED.
+
+**Status:** proven — green and reproducible on the CI emulator (`android-e2e`):
+D1 liveness + D2 confinement pass non-vacuously (the positive control confirms the
+WebView attempted the sentinel). The VPN-as-default mechanism is also confirmed on
+a physical Pixel. Subtleties the emulator surfaced, baked into the harness:
+- Write phase markers from the harness via `run-as` append, NOT by `am start`-ing
+  the control activity — Android drops the activity launch under rapid succession
+  (the NoDisplay activity races its own `finish()`), so marks went missing.
+- Use a routable sentinel host with a dedicated port (`10.0.2.2:18081`) the captive
+  monitor never touches — an unroutable TEST-NET address never reached the TUN, and
+  the captive monitor's own `:18080` probes are otherwise indistinguishable from
+  WebView traffic in the sink.
+- Trigger the WebView's sentinel attempt via a `<head>` favicon + blocking script
+  (body sub-resources are cancelled when the session tears down post-validation).
+- Settle until the unbound probe's TCP SYN retransmits drain before opening the
+  bound window, else they bleed past `bound_begin` and read as a leak.
