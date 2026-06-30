@@ -22,7 +22,21 @@ def merged_manifest(app_dir: Path, variant: str) -> Path:
     hits = [h for h in hits if "merged" in str(h).lower()]
     if not hits:
         raise SystemExit(f"no merged manifest found for '{variant}' under {app_dir}/build")
-    return hits[0]
+    # Require the canonical task output (process{Variant}Manifest).  Do NOT fall back
+    # to secondary intermediates like process{Variant}MainManifest — CI always runs the
+    # exact task, so the canonical output must exist; guessing an intermediate is the
+    # silent degradation this guard exists to prevent.
+    variant_cap = variant.capitalize()
+    task_seg = f"process{variant_cap}Manifest"
+    canonical = sorted(h for h in hits if task_seg in str(h))
+    if not canonical:
+        raise SystemExit(
+            f"no '{variant}' merged manifest from {task_seg} under {app_dir}/build"
+            f" — run :app:{task_seg} first"
+        )
+    chosen = canonical[0]
+    print(f"[guard] {variant}: using {chosen}", file=sys.stderr)
+    return chosen
 
 
 def main(argv: list[str]) -> int:
