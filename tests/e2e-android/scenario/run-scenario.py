@@ -60,6 +60,16 @@ CAPTIVE_KEYS = (
 # the app is debuggable and the file lives in app-private storage.
 AUDIT_LOG_RELATIVE = "files/audit.jsonl"
 APP_PACKAGE = "cc.grepon.gatepath"
+TESTVPN_ACTIVITY = f"{APP_PACKAGE}/.testvpn.TestVpnControlActivity"
+VPN_SINK_RELATIVE = "files/vpn-sink.jsonl"
+SENTINEL_IP = "203.0.113.7"
+
+
+def _testvpn(serial: str, action: str, label: str | None = None) -> None:
+    cmd = f"am start -n {TESTVPN_ACTIVITY} --es gatepath.testvpn.action {action}"
+    if label:
+        cmd += f" --es gatepath.testvpn.label {label}"
+    adb_helper.shell(serial, cmd, timeout=20, check=False)
 
 
 # ── Step helpers ──────────────────────────────────────────────────────────────
@@ -143,6 +153,50 @@ def step_wait_for_captive(state: dict) -> dict:
             return {"detected_via": "dumpsys", "wait_sec": int(time.monotonic() - (deadline - 45))}
         time.sleep(2)
     raise RuntimeError("captive portal not detected within 45s")
+
+
+def step_grant_vpn(state: dict) -> dict:
+    """Pre-authorize the VpnService so establish() needs no consent dialog.
+    appops runs as the adb shell uid — no root required on the emulator."""
+    adb_helper.shell(
+        state["serial"], f"appops set {APP_PACKAGE} ACTIVATE_VPN allow", timeout=10
+    )
+    return {"granted": "ACTIVATE_VPN"}
+
+
+def step_start_test_vpn(state: dict) -> dict:
+    """Bring up the debug leak-detector VPN as the system default network."""
+    _testvpn(state["serial"], "start")
+    time.sleep(3)  # let establish() bring up the TUN before probing
+    return {"started": True}
+
+
+def step_liveness_probe(state: dict) -> dict:
+    """Unbound UDP burst to the sentinel (must hit the VPN sink), then a settle
+    and the bound_begin marker. The settle keeps any late probe packet from
+    landing inside the bound window."""
+    serial = state["serial"]
+    _testvpn(serial, "probe")
+    time.sleep(2)  # quiescence settle before the bound window opens
+    _testvpn(serial, "mark", label="bound_begin")
+    return {"sentinel": SENTINEL_IP, "marked": "bound_begin"}
+
+
+def step_mark_bound_end(state: dict) -> dict:
+    """Close the bound window. The portal session is still bound at this point
+    (right after validation), so the window spans the whole bound lifetime."""
+    _testvpn(state["serial"], "mark", label="bound_end")
+    return {"marked": "bound_end"}
+
+
+def step_pull_vpn_sink(state: dict) -> dict:
+    serial = state["serial"]
+    contents = adb_helper.shell(
+        serial, f"run-as {APP_PACKAGE} cat {VPN_SINK_RELATIVE}", timeout=10, check=False
+    )
+    out = state["artifacts_dir"] / "vpn-sink.jsonl"
+    out.write_text(contents)
+    return {"path": str(out), "size": len(contents)}
 
 
 def _foreground(serial: str) -> str:
@@ -368,10 +422,15 @@ STEPS: list[Callable[[dict], dict]] = [
     step("set_probe_urls", step_set_probe_urls),
     step("cycle_wifi", step_cycle_wifi),
     step("wait_for_captive", step_wait_for_captive),
+    step("grant_vpn", step_grant_vpn),
+    step("start_test_vpn", step_start_test_vpn),
+    step("liveness_probe", step_liveness_probe),
     step("launch_debug_portal", step_launch_debug_portal),
     step("wait_portal_screen", step_wait_portal_screen),
     step("submit_login", step_submit_login),
     step("wait_validated", step_wait_validated),
+    step("mark_bound_end", step_mark_bound_end),
+    step("pull_vpn_sink", step_pull_vpn_sink),
     step("pull_logcat", step_pull_logcat),
     step("pull_audit_log", step_pull_audit_log),
     step("fetch_gateway_log", step_fetch_gateway_log),
@@ -431,6 +490,15 @@ def main() -> int:
         # no device logs to diagnose from.
         serial = state.get("serial")
         if serial:
+            try:
+                adb_helper.shell(
+                    serial,
+                    f"am start -n {TESTVPN_ACTIVITY} --es gatepath.testvpn.action stop",
+                    timeout=15,
+                    check=False,
+                )
+            except Exception:  # noqa: BLE001 — teardown must never mask the rc
+                pass
             try:
                 log = adb_helper.shell(
                     serial, "logcat -d -t 3000", timeout=20, check=False
