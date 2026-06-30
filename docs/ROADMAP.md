@@ -71,8 +71,9 @@ P0.1's desktop confinement gate.
 ## P1 — Stable contracts (no hidden drift)
 
 ### P1.1 — `UnsupportedSecurity` contract drift + drift guard
-**Status:** core fix landed (#51); follow-ups below. **Why it matters:** a
-present bug on a path we built.
+**Status:** core fix landed (#51); **guard refinements landed (2026-06-30)**; the
+heavier shared-schema guard is still open (below). **Why it matters:** a present
+bug on a path we built.
 
 The Rust helper could emit `RefusalReason::UnsupportedSecurity` (secured captive
 network refused pre-setup), but the Python `RefusalReason` enum and
@@ -81,21 +82,20 @@ so the UI saw `UNKNOWN`. #51 fixed the mapping and added a cross-language drift
 guard (`test_python_refusal_reasons_cover_every_rust_variant`) that parses
 `RefusalReason::as_str()` out of the Rust `lib.rs`.
 
-**Guard refinements (from the devils-advocate review of #51):**
-- **Round-trip through `from_dbus_error_name`** instead of asserting enum-value
-  membership — the current guard would miss "enum value present but mapping entry
-  absent" (the half that actually broke) and wrong-mapping. Highest value.
-- Add a **negative test** (an unknown suffix must resolve to `UNKNOWN`) so the
-  guard can't silently go vacuous.
-- Fix the guard's **over-claim**: it covers *RefusalReason* wire names, not
-  literally "every wire error" — `HelperError` (`dbus_service.rs`) also carries
-  `NotActive`/`ZBus`, which aren't `RefusalReason`s (`NotActive`'s mapping is
-  pinned in `test_refusal_reason_maps_known_variants`).
-- Optionally **parse `HelperError`** (the real wire-error enum) for full wire
-  coverage incl. `NotActive`.
-- Polish: name the likely cause in the parse-failure message, document the
-  PascalCase↔snake 1:1 convention the reconstruction relies on, and
-  cross-reference `schema-parity.yml` as the heavier shared-artifact alternative.
+**Guard refinements — DONE (2026-06-30, `test_netns_client.py`):** the guard now
+parses the real wire-error enum (`HelperError` in `dbus_service.rs`, excluding the
+`#[zbus(error)]` `ZBus` passthrough) and **round-trips every wire name through
+`from_dbus_error_name`**, asserting non-`UNKNOWN` *and* the correct member — so it
+catches the exact #51 failure (value present, mapping entry absent) AND
+wrong-mappings, which the old enum-value-membership check could catch neither of.
+Added: a non-vacuity/teeth test (synthetic name → `UNKNOWN`; parser must yield the
+exact expected variant count); a lockstep test pinning `HelperError` ↔
+`RefusalReason::as_str()` 1:1 (modulo teardown-only `NotActive`, which the old
+`as_str`-based guard structurally could not cover) so `from_refusal` totality is a
+tested invariant; the `PascalCase↔snake` 1:1 convention documented; parse-failure
+messages name the likely cause; and `schema-parity.yml` cross-referenced as the
+heavier alternative. Mutation-tested (missing + swapped mapping both fail the
+guard) and independently code-reviewed (APPROVE; 5 LOW hardening notes applied).
 
 **Bigger drift guard (still open):** extend the `schema-parity.yml` pattern
 (shared artifact + per-language conformance tests) to the **D-Bus interface +

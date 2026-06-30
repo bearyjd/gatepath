@@ -126,16 +126,22 @@ def test_refusal_reason_foreign_prefix_maps_to_unknown() -> None:
 
 
 # ── cross-language drift guard (roadmap P1.1) ────────────────────────────
-
-# RefusalReason lives in the privileged Rust helper crate; it is the source of
-# truth for the wire names. The Python enum above must mirror every variant the
-# helper can emit, or the UI silently degrades a typed refusal to UNKNOWN — which
-# is exactly the `UnsupportedSecurity` drift this guard was added for.
 #
-# Scope: this guard checks *value coverage* (every Rust wire name has a matching
-# Python enum value). It does NOT check *mapping correctness* — that a PascalCase
-# suffix in from_dbus_error_name resolves to the RIGHT member;
-# test_refusal_reason_maps_known_variants covers that for every known variant.
+# The privileged Rust helper is the source of truth for the wire contract. Two
+# Rust enums define it, and the Python `RefusalReason` + `from_dbus_error_name`
+# must mirror them or the UI silently degrades a typed refusal to UNKNOWN — the
+# exact `UnsupportedSecurity` drift (#51) this guard exists for.
+#
+#   * `HelperError` (dbus_service.rs) — the `zbus::DBusError` enum. ITS variant
+#     names (PascalCase, under the `.Error.` prefix) are what literally land on
+#     the bus. This is the real source of truth for wire names.
+#   * `RefusalReason::as_str()` (lib.rs) — the snake_case *audit-log* spelling.
+#     1:1 with HelperError except teardown-only `NotActive` (no RefusalReason).
+#
+# These parsers are deliberately lightweight; the heavier, more robust pattern is
+# a shared checked-in schema both languages validate against — see
+# `schema-parity.yml`, which already does this for the audit-log schema. Extending
+# that to the D-Bus error names is the open "bigger drift guard" in ROADMAP P1.1.
 _RUST_LIB_RS = (
     Path(__file__).resolve().parents[2]
     / "desktop"
@@ -143,6 +149,20 @@ _RUST_LIB_RS = (
     / "src"
     / "lib.rs"
 )
+_DBUS_SERVICE_RS = _RUST_LIB_RS.parent / "dbus_service.rs"
+
+
+def _pascal_to_snake(name: str) -> str:
+    """Convert a PascalCase wire suffix to its snake_case audit spelling.
+
+    Relies on the helper's 1:1 PascalCase↔snake_case convention: every word
+    boundary is a single leading capital, with NO multi-letter acronyms
+    (`InvalidPortalUrl`, never `InvalidPortalURL`). If that convention is ever
+    broken on the Rust side, this and `RefusalReason::as_str()` must change
+    together — and `test_helper_error_and_refusal_reason_stay_in_lockstep`
+    will fail loudly until they do.
+    """
+    return re.sub(r"(?<!^)(?=[A-Z])", "_", name).lower()
 
 
 def _rust_refusal_reason_wire_names() -> set[str]:
@@ -152,20 +172,135 @@ def _rust_refusal_reason_wire_names() -> set[str]:
     # Assumes `impl RefusalReason` sits at 0-indent (so the fn closes at a
     # 4-space `}`); adjust the terminator if lib.rs moves it into a submodule.
     match = re.search(r"fn as_str\(self\)[^{]*\{(.*?)\n    \}", text, re.DOTALL)
-    assert match, "could not locate RefusalReason::as_str() in lib.rs"
-    return set(re.findall(r'=>\s*"([a-z_]+)"', match.group(1)))
+    assert match, (
+        "could not locate RefusalReason::as_str() in lib.rs — did the fn move, "
+        "change signature, or stop being 4-space-indented under `impl RefusalReason`?"
+    )
+    return set(re.findall(r'=>\s*"([a-z0-9_]+)"', match.group(1)))
 
 
-def test_python_refusal_reasons_cover_every_rust_variant() -> None:
-    if not _RUST_LIB_RS.exists():
-        pytest.skip(f"Rust source not present at {_RUST_LIB_RS}")
-    rust_names = _rust_refusal_reason_wire_names()
-    assert rust_names, "parsed no RefusalReason::as_str() arms from lib.rs"
-    python_names = {r.value for r in RefusalReason}
-    missing = rust_names - python_names
-    assert not missing, (
-        f"Python RefusalReason omits variant(s) the helper can emit: {sorted(missing)}. "
-        "Add each to the enum AND from_dbus_error_name (PascalCase suffix)."
+def _rust_helper_error_wire_suffixes() -> set[str]:
+    """The PascalCase wire suffixes from the `HelperError` enum in dbus_service.rs.
+
+    These are the actual `cc.grepon.Gatepath.NetNsHelper.Error.<Suffix>` names
+    the helper puts on the bus. Excludes the `#[zbus(error)]` transport
+    passthrough (`ZBus`), which zbus serialises as the standard
+    `org.freedesktop.DBus.Error.*` — not one of our typed names, and correctly
+    UNKNOWN client-side.
+    """
+    text = _DBUS_SERVICE_RS.read_text(encoding="utf-8")
+    match = re.search(r"pub enum HelperError\s*\{(.*?)\n\}", text, re.DOTALL)
+    assert match, (
+        "could not locate `pub enum HelperError { … }` in dbus_service.rs — did "
+        "the enum move, stop being 0-indented, or change shape? Update this parser "
+        "(or migrate to a shared schema; see schema-parity.yml)."
+    )
+    suffixes: set[str] = set()
+    pending_zbus_error = False
+    for line in match.group(1).splitlines():
+        stripped = line.strip()
+        if stripped.startswith("#[zbus(error)]"):
+            pending_zbus_error = True
+            continue
+        # Match any variant shape — tuple `Name(...)`, struct `Name {...}`, or
+        # unit `Name,` — so a future non-tuple variant can't be silently dropped
+        # (which would let the round-trip guard under-cover). Doc/attribute/field/
+        # brace lines never start with an uppercase identifier, so they don't match.
+        variant = re.match(r"([A-Z][A-Za-z0-9]*)\s*(?:[({,]|$)", stripped)
+        if variant:
+            if not pending_zbus_error:
+                suffixes.add(variant.group(1))
+            pending_zbus_error = False
+    return suffixes
+
+
+def test_python_round_trips_every_helper_wire_error() -> None:
+    """Every wire error the helper can emit must round-trip to a concrete reason.
+
+    THE drift guard. Unlike a value-membership check, this exercises the actual
+    `from_dbus_error_name` *mapping*, so it catches the exact #51 failure — an
+    enum value present but its mapping entry absent → UI saw UNKNOWN — AND
+    wrong-mappings. Source of truth is `HelperError` (what lands on the bus),
+    which also covers `NotActive` (no `RefusalReason::as_str()` arm).
+    """
+    if not _DBUS_SERVICE_RS.exists():
+        pytest.skip(f"Rust source not present at {_DBUS_SERVICE_RS}")
+    suffixes = _rust_helper_error_wire_suffixes()
+    assert suffixes, "parsed no HelperError variants from dbus_service.rs"
+    resolved = {
+        s: RefusalReason.from_dbus_error_name(ERROR_PREFIX + s) for s in suffixes
+    }
+
+    unmapped = sorted(s for s, r in resolved.items() if r is RefusalReason.UNKNOWN)
+    assert not unmapped, (
+        f"from_dbus_error_name degrades helper wire error(s) to UNKNOWN: {unmapped}. "
+        "The helper can emit these but the UI would treat them as a generic refusal. "
+        "Add each to RefusalReason AND the from_dbus_error_name mapping (PascalCase suffix)."
+    )
+
+    # Mapping correctness, not just presence: each PascalCase suffix must resolve
+    # to the member whose value is its snake_case form (catches a swapped entry,
+    # e.g. NotActive → KERNEL_ERROR).
+    mismatched = {
+        s: r.value for s, r in resolved.items() if r.value != _pascal_to_snake(s)
+    }
+    assert not mismatched, (
+        f"from_dbus_error_name resolves wire name(s) to the wrong reason: {mismatched}. "
+        "Each PascalCase suffix must map to the member whose value is its snake_case form."
+    )
+
+
+def test_drift_guard_machinery_is_not_vacuous() -> None:
+    """Prove the round-trip guard has teeth rather than passing vacuously.
+
+    A synthetic name the helper can't emit must resolve to UNKNOWN (so the
+    "not UNKNOWN" assertion above is meaningful), and the HelperError parser must
+    yield exactly the expected number of variants (so a regex that silently
+    under-matches can't make the round-trip guard green by under-covering).
+    """
+    assert (
+        RefusalReason.from_dbus_error_name(ERROR_PREFIX + "TotallyNotARealVariant")
+        is RefusalReason.UNKNOWN
+    )
+    if not (_DBUS_SERVICE_RS.exists() and _RUST_LIB_RS.exists()):
+        pytest.skip("Rust source not present")
+    # Parser integrity: HelperError must yield exactly one more wire name than
+    # RefusalReason::as_str() has arms — the teardown-only NotActive. Pinning the
+    # exact relationship (not a loose floor) trips on a single silently-dropped
+    # variant, the one false-green the loose `>= N` check would have allowed.
+    helper = _rust_helper_error_wire_suffixes()
+    refusal = _rust_refusal_reason_wire_names()
+    assert len(helper) == len(refusal) + 1, (
+        f"HelperError parser yielded {len(helper)} wire name(s); expected "
+        f"{len(refusal) + 1} (RefusalReason::as_str arms + teardown-only NotActive). "
+        "A silently-dropped variant would make the round-trip guard under-cover."
+    )
+
+
+def test_helper_error_and_refusal_reason_stay_in_lockstep() -> None:
+    """The two Rust enums that define the wire contract must agree.
+
+    Every `RefusalReason::as_str()` name has a matching `HelperError` variant
+    (so `HelperError::from_refusal` stays total) and vice-versa — except
+    teardown-only `NotActive`, which is a typed error with no refusal. Pins both
+    the lockstep and the PascalCase↔snake_case convention `_pascal_to_snake`
+    relies on.
+    """
+    if not (_RUST_LIB_RS.exists() and _DBUS_SERVICE_RS.exists()):
+        pytest.skip("Rust source not present")
+    refusal_snake = _rust_refusal_reason_wire_names()
+    helper_snake = {_pascal_to_snake(s) for s in _rust_helper_error_wire_suffixes()}
+
+    helper_only = helper_snake - refusal_snake
+    assert helper_only == {"not_active"}, (
+        "HelperError carries typed error(s) with no RefusalReason: "
+        f"{sorted(helper_only)} (expected only {{'not_active'}}). "
+        "Either add the matching RefusalReason or confirm it is teardown-only."
+    )
+    refusal_only = refusal_snake - helper_snake
+    assert not refusal_only, (
+        f"RefusalReason(s) with no HelperError variant: {sorted(refusal_only)}. "
+        "HelperError::from_refusal would not be total — add the variant."
     )
 
 
