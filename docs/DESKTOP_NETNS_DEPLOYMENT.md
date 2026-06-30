@@ -324,6 +324,10 @@ systemctl reload dbus         # load the system-bus policy
 Persist the merge across reboots with `systemctl enable systemd-sysext`. Remove
 with `rm /var/lib/extensions/gatepath-netns-helper.raw && systemd-sysext refresh`.
 
+If install or sign-in misbehaves, see [`TROUBLESHOOTING.md`](TROUBLESHOOTING.md)
+— the preconditions checklist, the refusal-reason table, and
+`packaging/collect-diagnostics.sh` for a support bundle.
+
 > **Not yet wired:** a real `systemd-sysext merge` + helper-start smoke test on a
 > privileged host (the self-hosted hwsim runner is the natural place). CI today
 > builds and structurally validates the image but does not merge it. The image is
