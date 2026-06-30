@@ -24,6 +24,12 @@ class GatepathTestVpnService : VpnService() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_STOP -> { teardown(); stopSelf(); return START_NOT_STICKY }
+            ACTION_MARK -> {
+                val label = intent.getStringExtra(EXTRA_LABEL) ?: "?"
+                append(JSONObject().put("marker", label)
+                    .put("t", System.currentTimeMillis() / 1000.0).toString())
+                return START_STICKY
+            }
             else -> startTun()
         }
         return START_STICKY
@@ -86,6 +92,8 @@ class GatepathTestVpnService : VpnService() {
         private const val TAG = "GatepathTestVpn"
         const val ACTION_START = "cc.grepon.gatepath.testvpn.START"
         const val ACTION_STOP = "cc.grepon.gatepath.testvpn.STOP"
+        const val ACTION_MARK = "cc.grepon.gatepath.testvpn.MARK"
+        const val EXTRA_LABEL = "cc.grepon.gatepath.testvpn.label"
         const val SINK_FILE = "vpn-sink.jsonl"
         private const val TUN_ADDR = "10.111.0.2"
         private const val MTU = 1500

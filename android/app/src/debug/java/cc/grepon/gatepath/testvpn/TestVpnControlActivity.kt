@@ -25,6 +25,10 @@ class TestVpnControlActivity : Activity() {
                 startService(svc(GatepathTestVpnService.ACTION_START))
             }
             "probe" -> sendUnboundProbe()
+            "mark" -> startService(
+                svc(GatepathTestVpnService.ACTION_MARK).putExtra(
+                    GatepathTestVpnService.EXTRA_LABEL,
+                    intent.getStringExtra(EXTRA_LABEL) ?: "?"))
             "stop" -> startService(svc(GatepathTestVpnService.ACTION_STOP))
             else -> Log.w(TAG, "unknown action")
         }
@@ -52,6 +56,7 @@ class TestVpnControlActivity : Activity() {
     companion object {
         private const val TAG = "GatepathTestVpnCtl"
         const val EXTRA_ACTION = "gatepath.testvpn.action"
+        const val EXTRA_LABEL = "gatepath.testvpn.label"
         const val SENTINEL_IP = "203.0.113.7"
         const val SENTINEL_PORT = 9
         const val PROBE_COUNT = 3
