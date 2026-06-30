@@ -1,0 +1,66 @@
+name: supply-chain
+
+# Supply-chain hardening (ROADMAP P2.3): audit Python dependencies for known
+# advisories, and emit a repo-wide SBOM. Rust advisories are covered by the
+# cargo-audit job in desktop.yml.
+on:
+  push:
+    branches: [main]
+    paths:
+      - '**/Cargo.toml'
+      - '**/Cargo.lock'
+      - 'desktop/pyproject.toml'
+      - 'android/**/*.gradle*'
+      - 'android/gradle/libs.versions.toml'
+      - '.github/workflows/supply-chain.yml'
+  pull_request:
+    paths:
+      - '**/Cargo.toml'
+      - '**/Cargo.lock'
+      - 'desktop/pyproject.toml'
+      - 'android/**/*.gradle*'
+      - 'android/gradle/libs.versions.toml'
+      - '.github/workflows/supply-chain.yml'
+
+jobs:
+  pip-audit:
+    name: pip-audit (python deps)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install pip-audit
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install pip-audit
+      - name: Audit the project's Python dependencies
+        # The gatepath core is stdlib-only (pyproject `dependencies = []`); audit
+        # the pure-Python optional deps. PyGObject is a system
+        # GObject-introspection binding (audited via the pinned Flatpak/distro
+        # runtime, not PyPI), so it is intentionally excluded.
+        #
+        # Audit an explicit dep list (`--requirement`), NOT the installed
+        # environment, so pip-audit's own transitive deps can't introduce a
+        # spurious failure. Keep this list in sync with
+        # desktop/pyproject.toml [project.optional-dependencies].
+        run: |
+          printf '%s\n' 'dasbus>=1.7' 'pytest>=8.0' 'pytest-timeout' > py-deps.txt
+          pip-audit --strict --desc --requirement py-deps.txt
+
+  sbom:
+    name: SBOM (CycloneDX, all ecosystems)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Generate SBOM with syft
+        # syft catalogs the repo's manifests/lockfiles — Cargo.lock (Rust, full),
+        # pyproject.toml (Python), and the Gradle build files (Android). It is a
+        # source-tree scan, so resolution depth varies by ecosystem (Cargo.lock
+        # is exact; Gradle/Python are best-effort from declarations).
+        uses: anchore/sbom-action@v0
+        with:
+          path: .
+          format: cyclonedx-json
+          artifact-name: gatepath-sbom.cdx.json
