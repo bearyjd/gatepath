@@ -105,3 +105,31 @@ jobs:
           bundle: gatepath.flatpak
           manifest-path: desktop/cc.grepon.Gatepath.yml
           cache-key: flatpak-builder-${{ hashFiles('desktop/cc.grepon.Gatepath.yml') }}
+
+  build-sysext:
+    name: build sysext (gatepath-netns-helper)
+    runs-on: ubuntu-latest
+    # Assembles the helper into a systemd-sysext image (squashfs .raw) — the
+    # primary deployment path for immutable/atomic distros (Bazzite, Fedora
+    # Atomic), where the helper's /usr-only files overlay a read-only /usr.
+    # Builds + structurally validates the image and uploads it as an artifact.
+    # (A real `systemd-sysext merge` smoke-test needs a privileged host; see
+    # docs/DESKTOP_NETNS_DEPLOYMENT.md.)
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: desktop/gatepath-netns-helper
+      - name: Install squashfs-tools
+        run: sudo apt-get update && sudo apt-get install -y squashfs-tools
+      - name: Build sysext image
+        run: desktop/gatepath-netns-helper/packaging/build-sysext.sh
+      - name: Validate sysext layout
+        run: desktop/gatepath-netns-helper/packaging/validate-sysext.sh desktop/gatepath-netns-helper/dist/gatepath-netns-helper.raw
+      - name: Upload sysext artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: gatepath-netns-helper-sysext
+          path: desktop/gatepath-netns-helper/dist/gatepath-netns-helper.raw
+          if-no-files-found: error

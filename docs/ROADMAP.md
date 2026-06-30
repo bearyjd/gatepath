@@ -131,10 +131,17 @@ plus an out-of-CI run, so it's lower-priority than the in-CI proptest suite now 
 ## P2 — Rollout safety (the intent isn't met if users can't run it)
 
 ### P2.1 — A buildable helper package
-**Status:** not started. `DESKTOP_NETNS_DEPLOYMENT.md` *analyses* sysext vs RPM
-but ships **no artifact** (no `.spec`, no sysext build, no `install.sh`); the
-Flatpak contains the GUI only. Produce one (sysext fits the atomic-distro target)
-plus a CI job that builds it.
+**Status:** **sysext done (2026-06-30)**; an RPM `.spec` remains an optional
+alternative. `DESKTOP_NETNS_DEPLOYMENT.md` analysed sysext vs RPM but shipped no
+artifact; now `desktop/gatepath-netns-helper/packaging/build-sysext.sh` produces a
+`systemd-sysext` squashfs image (binary + runner + unit + D-Bus policy/activation +
+polkit action + tmpfiles.d + `extension-release` `ID=_any`), `validate-sysext.sh`
+structurally checks it, and a `build-sysext` CI job (`desktop.yml`) builds,
+validates, and uploads it. Every file installs under `/usr`, so it overlays a
+read-only `/usr` with **no source edits**; build + install steps are in
+`DESKTOP_NETNS_DEPLOYMENT.md` §6. **Follow-ups:** a real `systemd-sysext merge` +
+helper-start smoke test on a privileged host (the self-hosted runner is the natural
+place); sysext signing (→ P2.3); an optional RPM `.spec` for Fedora/RHEL.
 
 ### P2.2 — Android release pipeline
 **Status:** not started. Debug/unsigned only — no signing config, no AAB, no
