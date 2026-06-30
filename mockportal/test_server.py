@@ -121,3 +121,22 @@ def test_log_returns_recorded_requests(portal: str) -> None:
 def test_unknown_path_404(portal: str) -> None:
     resp = _open(f"{portal}/does-not-exist")
     assert resp.status == 404
+
+
+def test_portal_host_env_overrides_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    # The module-level PORTAL_HOST default is read from the environment at import
+    # time, so harnesses (e.g. mac80211_hwsim) can bind a routable AP IP. Reload
+    # the module under a patched env and restore the default afterwards so other
+    # tests keep the loopback binding.
+    import importlib
+
+    import mockportal.server as srv
+
+    monkeypatch.setenv("PORTAL_HOST", "192.0.2.7")
+    try:
+        reloaded = importlib.reload(srv)
+        assert reloaded.PORTAL_HOST == "192.0.2.7"
+    finally:
+        monkeypatch.delenv("PORTAL_HOST", raising=False)
+        importlib.reload(srv)
+        assert srv.PORTAL_HOST == "127.0.0.1"

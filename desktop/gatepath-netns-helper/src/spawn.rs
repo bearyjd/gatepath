@@ -35,9 +35,11 @@
 //!   so a missing netns fails the unit rather than silently isolating the child.
 //! - **Privilege drop** is `--uid`/`--gid` to the caller's identity; systemd
 //!   resets supplementary groups too (the old in-process `setresuid` did not).
-//! - **Hardcoded exec path** ([`PORTAL_RUNNER_PATH`]). No caller input reaches
-//!   the command path; only the validated portal URL is passed, after `--` so
-//!   it can never be mistaken for a `systemd-run` option.
+//! - **Build-fixed exec path** ([`PORTAL_RUNNER_PATH`]) — baked into the binary
+//!   at compile time (packagers may relocate it via a build-time env var, but no
+//!   *runtime* or caller input reaches the command path); only the validated
+//!   portal URL is passed, after `--` so it can never be mistaken for a
+//!   `systemd-run` option.
 //! - **One controlled argument**: the portal URL, validated against [`url::Url`]
 //!   (RFC 3986) — `http`/`https` only, no control bytes, length-bounded.
 //! - **Fail-closed**: any error spawning `systemd-run` aborts the launch; the
@@ -58,12 +60,21 @@ use std::sync::{Arc, Mutex};
 
 use thiserror::Error;
 
-/// Hardcoded exec path for the portal WebView runner. The helper refuses
-/// to start if this file is missing — installers must place the runner
-/// here regardless of how they ship the rest of the app. Flatpak users
-/// do not get isolation; the system path is set up by the
-/// distro-packaged helper, not by the Flatpak.
-pub const PORTAL_RUNNER_PATH: &str = "/usr/lib/gatepath/portal-webview-runner";
+/// Exec path for the portal WebView runner. The helper refuses to start if this
+/// file is missing — installers must place the runner here regardless of how
+/// they ship the rest of the app. Flatpak users do not get isolation; the system
+/// path is set up by the distro-packaged helper, not by the Flatpak.
+///
+/// Overridable **at compile time only** via the `GATEPATH_PORTAL_RUNNER_PATH`
+/// build env var, so packagers — and the `mac80211_hwsim` test harness, which
+/// can't install into a read-only `/usr` on an immutable host — can relocate the
+/// runner. This is baked into the binary at build time, never read at runtime
+/// and never caller-supplied, so the spawn path still carries no caller input
+/// (see the trust-surface note above).
+pub const PORTAL_RUNNER_PATH: &str = match option_env!("GATEPATH_PORTAL_RUNNER_PATH") {
+    Some(path) => path,
+    None => "/usr/lib/gatepath/portal-webview-runner",
+};
 
 /// Default `systemd-run` binary. Resolved via the unit's pinned `PATH`
 /// (`/usr/sbin:/usr/bin:/sbin:/bin`), exactly like the helper's other execs

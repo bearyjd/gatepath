@@ -8,114 +8,17 @@ the workaround (if any).
 
 The two code-level blockers that gated the desktop **netns isolation** path
 (the Android-parity "bind portal traffic to the Wi-Fi interface" capability)
-are now **implemented** — see RESOLVED entries below. One open item remains:
-real-hardware validation of the privileged exec paths (the unit suite still
-exercises them only through fakes), tracked as **BLOCKER-DESK-003**, plus the
-documented open-networks-only limitation. See
-[`DESKTOP_NETNS_DEPLOYMENT.md`](DESKTOP_NETNS_DEPLOYMENT.md) for the full
-findings and the atomic-distro deployment analysis.
+are now **implemented** — see RESOLVED entries below. The privileged exec paths
+are now **validated end-to-end on a `mac80211_hwsim` virtual radio** by
+`tests/e2e-hwsim/` — see BLOCKER-DESK-003 (RESOLVED) below. Remaining:
+physical-card confirmation and a buildable package (tracked in
+[`ROADMAP.md`](ROADMAP.md) P2.1), plus the documented open-networks-only
+limitation. See [`DESKTOP_NETNS_DEPLOYMENT.md`](DESKTOP_NETNS_DEPLOYMENT.md)
+for the full findings and the atomic-distro deployment analysis.
 
 ---
 
 ## Open
-
-### BLOCKER-DESK-003 — Privileged exec paths are not yet hardware-validated
-
-**Files:** `desktop/gatepath-netns-helper/src/netns.rs`
-(`LinuxNetnsOps::move_interface` → `iw`), `src/connectivity.rs`
-(`LinuxNetnsConnectivity` → `wpa_supplicant` + DHCP client).
-
-**Symptom:** None observable in CI. The DESK-001/002 fixes are covered by
-unit tests at the **command-construction** and **orchestration** level
-(`phy_set_netns_args`, `render_wpa_config`, the `*_args` builders, and
-service-level setup/teardown tests via `FakeNetnsConnectivity`), but the
-actual privileged execution — moving a real PHY, re-associating with
-`wpa_supplicant`, and pulling a DHCP lease inside the netns — has never run
-against real Wi-Fi hardware in this environment (`iw`/`wpa_supplicant`/DHCP
-clients aren't installed on the build host).
-
-**Diagnosis:** This is the same fakes-hide-the-kernel gap that the original
-DESK-001/002 entries called out, now narrowed to "the code is correct by
-construction and review, but unverified end-to-end on hardware." The
-`tests/dbus_integration.rs` `--ignored` suite is the intended home for
-on-hardware checks.
-
-**Workaround:** Validate on a real (non-Flatpak) Linux box with an **open**
-captive SSID:
-
-```
-cd desktop/gatepath-netns-helper
-cargo test --test dbus_integration -- --ignored --nocapture   # wire-shape checks
-# then a manual end-to-end run of SetupCaptive → LaunchPortal → TeardownCaptive
-```
-
-Confirm: the PHY appears inside `ip netns exec gatepath iw dev`, the interface
-gets an IPv4 address, the portal loads, and teardown removes the netns and
-leaves no `wpa_supplicant`/DHCP strays (`ip netns pids gatepath`).
-
-**Hardware-validation checklist** (items the unit suite cannot cover; several
-surfaced in security/code review):
-
-- [ ] `iw phy <phyN> set netns name gatepath` is accepted by the deployed `iw`
-      version (older `iw` may only support `set netns <pid>`).
-- [ ] The wireless netdev keeps its name after the PHY move (no udev rename
-      inside the bare netns); otherwise `link_up_args` / DHCP target the wrong
-      iface.
-- [ ] DHCP actually completes (the one-shot client exits 0) on a real open
-      captive AP, and `bring_up` returns only after a lease.
-- [ ] systemd hardening is compatible with the in-netns children: `AF_PACKET`
-      present and `IPAddressDeny` not blocking DHCP for wpa_supplicant + the
-      DHCP client (which share the helper's unit/cgroup), with the helper proper
-      now under `MemoryDenyWriteExecute=true` (verify end-to-end in
-      `data/gatepath-netns-helper.service`).
-- [ ] **DESK-003 C4 transient WebView unit** (`src/spawn.rs` `systemd_run_args`):
-      `systemd-run` joins the netns via `NetworkNamespacePath=/var/run/netns/gatepath`,
-      drops to the caller via `--uid` (systemd derives the caller's real primary
-      group + resets supplementary groups), and the WebKit JIT runs under that
-      unit's `MemoryDenyWriteExecute=no` while the helper keeps W^X.
-- [ ] **DESK-004 display-env plumbing** (`LaunchPortal` now carries
-      `wayland_display`/`x_display`/`x_authority`; helper derives
-      `XDG_RUNTIME_DIR`/`DBUS_SESSION_BUS_ADDRESS` from the caller UID and sets
-      all via `--setenv`). The *mechanism* is implemented and unit-tested at the
-      argv level; on hardware confirm: the WebView actually connects to the
-      Wayland/X socket and renders from inside the netns; `/run/user/<uid>/bus`
-      is reachable at runtime (the helper must NOT pre-stat it — `ProtectHome`
-      hides it; let a missing socket fail at the child → non-zero `--wait` →
-      `SpawnFailed`); and the XWayland `XAUTHORITY` cookie round-trips for X11.
-- [ ] Teardown leaves no stray privileged processes; the SIGTERM→SIGKILL
-      straggler sweep reaps the DHCP client and supplicant before `ip netns del`.
-      The transient WebView unit is `--collect`-cleaned by systemd; confirm no
-      orphan `run-*.service` survives a teardown.
-- [x] `cargo audit` runs in CI — **done**: a `cargo audit` job gates the
-      desktop workflow against the RustSec advisory DB, and `Cargo.lock` is now
-      committed for determinism.
-- [x] **Detect the captive network's security from NetworkManager** —
-      **done**: `active_network_is_open` reads the AP `flags`/`wpa_flags`/
-      `rsn_flags`, and setup refuses a secured network with
-      `RefusalReason::UnsupportedSecurity` **before** the PHY move (no more
-      tearing away the user's Wi-Fi only to fail at DHCP).
-- [x] **Move connectivity teardown out from under the `active` lock** —
-      **done**: all three teardown paths now take the session out under the
-      lock, release it, and stop wpa_supplicant/DHCP lock-free before
-      `destroy_netns` (each path keeps its own error-clearing semantics).
-- [x] **Restore `MemoryDenyWriteExecute` on the helper proper** —
-      **implemented (DESK-003 C4), end-to-end pending hardware.** The unit now
-      sets `MemoryDenyWriteExecute=true`, so the long-lived root helper keeps
-      W^X. The only process that needs W+X (the WebKitGTK JIT) is launched in
-      its **own transient systemd `.service`** via `systemd-run` with
-      `MemoryDenyWriteExecute=no` on that unit alone (`src/spawn.rs`,
-      `systemd_run_args`). Because the transient unit is forked by PID 1, it does
-      not inherit the helper's (non-removable) W^X seccomp filter; wpa_supplicant
-      and the DHCP client don't JIT, so they run fine under it. The argv shape is
-      pinned by unit tests; the **exec** — `systemd-run` joining the netns via
-      `NetworkNamespacePath=`, dropping privilege via `--uid`/`--gid`, and the
-      JIT actually running under `MemoryDenyWriteExecute=no` — is unverified off
-      hardware and stays on the validation list below.
-
-**Known limitation — non-UTF-8 SSIDs:** `active_ssid` returns a lossy UTF-8
-`String`, so an SSID with non-UTF-8 bytes is hex-encoded from the lossy form and
-won't match the real beacon. Plumb raw `Vec<u8>` end-to-end if a real captive
-network with a non-UTF-8 SSID is encountered (rare).
 
 ### Known limitation — secured captive networks are not supported
 
@@ -127,9 +30,64 @@ security-sensitive piece of work. `WifiSecurity::Psk` is modelled but
 `bring_up` returns `ConnectivityError::Unsupported` rather than silently
 producing a session that can never associate.
 
+### Testing gap — NM connectivity wire-contract is not covered in CI
+
+`network_manager.rs` reads the NetworkManager Device property `Ip4Connectivity`
+(the bare `Connectivity` property does not exist — reading it raises
+`org.freedesktop.DBus.Error.InvalidArgs`). This wire-contract is exercised
+**only** by the privileged `tests/e2e-hwsim/` harness, which needs netns +
+kernel-module privilege and so cannot run in CI. The unit tests fake
+`CaptiveStateChecker`, so a future rename to another non-existent property name
+would pass every CI check and ship broken.
+
+**Fix (pending):** a `python-dbusmock`-backed integration test that stands up a
+fake NetworkManager on a private session bus and asserts the helper reads
+`Ip4Connectivity` (and not `Connectivity`). `preflight.sh` already probes for
+`python-dbusmock`; this is net-new test infra, tracked here so the gap is
+visible rather than folklore.
+
 ---
 
 ## Resolved
+
+### BLOCKER-DESK-003 (RESOLVED 2026-06-06) — Privileged exec paths validated on `mac80211_hwsim`
+
+**Files:** `desktop/gatepath-netns-helper/src/netns.rs`
+(`LinuxNetnsOps::move_interface` → `iw`), `src/connectivity.rs`
+(`LinuxNetnsConnectivity` → `wpa_supplicant` + DHCP client).
+
+**Resolution:** The `tests/e2e-hwsim/` harness drives the **real** privileged
+helper against a `mac80211_hwsim` virtual radio — the real kernel Wi-Fi stack
+(nl80211/cfg80211): PHY move into a throwaway `gatepath` netns → in-netns
+`wpa_supplicant` re-association → DHCP → portal WebView runner → teardown.
+The no-leak invariant is asserted: a trusted-net sentinel is **UNREACHABLE**
+from inside the netns while the captive portal IS reachable. Green and
+reproducible (3/3) on real hardware (Bazzite). See `tests/e2e-hwsim/README.md`.
+
+**Remaining confirmation items** (not blockers; de-risked, not eliminated):
+
+- [ ] `iw phy <phyN> set netns name gatepath` accepted by physical-card `iw`
+      version (older `iw` may only support `set netns <pid>`).
+- [ ] Wireless netdev keeps its name after PHY move on real firmware (no udev
+      rename inside the bare netns).
+- [ ] DHCP completes on a real open captive AP (one-shot client exits 0).
+- [ ] systemd hardening compatible with in-netns children on physical hardware
+      (`AF_PACKET` present, `IPAddressDeny` not blocking DHCP).
+- [ ] **DESK-003 C4 transient WebView unit**: `systemd-run` joins the netns via
+      `NetworkNamespacePath=`, drops to caller via `--uid`, WebKit JIT runs under
+      `MemoryDenyWriteExecute=no` on that unit while the helper keeps W^X.
+- [ ] **DESK-004 display-env plumbing**: WebView connects to Wayland/X socket
+      and renders from inside the netns on real hardware.
+- [ ] Teardown leaves no stray privileged processes on physical hardware.
+- [x] `cargo audit` runs in CI — done.
+- [x] Detect captive network's security from NetworkManager — done.
+- [x] Move connectivity teardown out from under the `active` lock — done.
+- [x] Restore `MemoryDenyWriteExecute` on the helper proper — implemented
+      (DESK-003 C4); exec-path confirmed by hwsim harness.
+
+**Known limitation — non-UTF-8 SSIDs:** `active_ssid` returns a lossy UTF-8
+`String`; plumb raw `Vec<u8>` end-to-end if a real captive network with a
+non-UTF-8 SSID is encountered (rare).
 
 ### BLOCKER-DESK-001 (RESOLVED 2026-06-01) — Wi-Fi PHY now moved with `iw`
 

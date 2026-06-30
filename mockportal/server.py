@@ -23,11 +23,15 @@ import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 
-# PORTAL_HOST is hard-coded to loopback to prevent the test endpoint from
-# being exposed on the LAN. /log returns request headers verbatim — exposing
-# that to non-loopback peers would leak Authorization tokens passed to the
-# mock during integration tests.
-PORTAL_HOST = "127.0.0.1"
+# PORTAL_HOST defaults to loopback so the test endpoint isn't exposed on the
+# LAN: /log returns request headers verbatim, and exposing that to non-loopback
+# peers would leak Authorization tokens passed to the mock during integration
+# tests. It is overridable via the PORTAL_HOST env var for harnesses that must
+# bind a routable test IP (e.g. the mac80211_hwsim AP gateway address, which is
+# reachable only over an isolated virtual-radio link). NEVER set PORTAL_HOST to
+# a LAN-routable address outside a throwaway test network: /log would then
+# expose verbatim request headers to anything that can reach that interface.
+PORTAL_HOST = os.environ.get("PORTAL_HOST", "127.0.0.1")
 PORTAL_PORT = int(os.environ.get("PORTAL_PORT", "18080"))
 PORTAL_COMPLETE_AFTER = int(os.environ.get("PORTAL_COMPLETE_AFTER", "3"))
 

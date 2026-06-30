@@ -32,8 +32,9 @@ Move the Wi-Fi PHY into a dedicated netns, run the WebView there, tear it down.
   WebKit bug that targets the kernel still lands on the host.
 - **Status:** the Wi-Fi PHY move (`iw phy … set netns`, not `ip link`) and
   in-netns association/DHCP re-establishment (`wpa_supplicant` + DHCP) are both
-  implemented (BLOCKER-DESK-001/002 resolved). Remaining: real-hardware
-  validation (BLOCKER-DESK-003) and secured-network support — see
+  implemented (BLOCKER-DESK-001/002 resolved) and **validated end-to-end on a
+  `mac80211_hwsim` virtual radio** (BLOCKER-DESK-003 resolved). Physical-card
+  confirmation and secured-network support remain — see
   [`BLOCKERS.md`](BLOCKERS.md).
 
 **Verdict:** the pragmatic, lightweight backend. Smallest TCB, works on any

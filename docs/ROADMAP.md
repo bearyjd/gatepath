@@ -29,37 +29,33 @@ exercised only through fakes. Closing that is the highest-value work.
 ## P0 — Evals that test the actual intent
 
 ### P0.1 — No-leak sentinel test (both platforms)
-**Status:** desktop sentinel + harness modernization landed; **full confinement
-gate blocked on P0.2**. Android: not started.
+**Status:** **desktop confinement gate is now proven** — see P0.2. Android: not
+started.
 
 Stand up a sentinel the confined client **must not** reach, and fail the test if
 it does:
-- **Desktop** (`tests/e2e-docker`): implemented — a `trusted-sentinel` on a
-  separate `trusted_net`; the scenario asserts it's reachable from the host netns
-  (`sentinel_baseline`) and the in-netns runner probes it (`netns_confinement`,
-  must FAIL). **But** tackling this surfaced that the docker e2e had **silently
-  rotted since DESK-001/002** (not in CI): the helper now does a PHY move +
-  in-netns `wpa_supplicant`/DHCP that a **veth has no PHY/radio for**. Fixed the
-  drift that *can* be faked (dbusmock NM AP-state, `wpa_supplicant`/DHCP stubs)
-  and made the scenario record an explicit `privileged_path: skipped` on a veth
-  so it goes **green** up to the PHY move; the confinement gate runs unchanged
-  once a real radio exists. Also **wired the harness into CI** (`desktop-e2e.yml`)
-  so it can't rot silently again.
+- **Desktop** (`tests/e2e-docker` + `tests/e2e-hwsim`): the no-leak invariant is
+  **proven end-to-end** — the `tests/e2e-hwsim/` harness drives the **real**
+  privileged helper against a `mac80211_hwsim` virtual radio (the real kernel
+  Wi-Fi stack: nl80211/cfg80211, `wpa_supplicant`, DHCP, `iw phy set netns`) and
+  asserts the trusted-net sentinel is **unreachable** from inside the netns while
+  the captive portal IS reachable. Green and reproducible (3/3) on real hardware
+  (Bazzite). The docker harness continues exercising the portal flow + off-domain
+  blocking (with faked PHY) and is wired into CI (`desktop-e2e.yml`).
 - **Android** (`tests/e2e-android`): not started — a VPN (or second network)
   active + a server reachable only off the captive `Network`; must not be hit.
   (The literal claim in `SECURITY_MODEL.md`.)
 
 ### P0.2 — Virtual-radio integration harness (`mac80211_hwsim` + `hostapd`)
-**Status:** not started. **Why it matters:** converts BLOCKER-DESK-003 from
-"pending physical hardware" into "validated in a software harness" — the single
-biggest lever on the desktop guarantee, and it's pure software. **Also unblocks
-P0.1's desktop confinement gate** (a veth can't run the PHY move / supplicant).
-
-Give `tests/e2e-docker` a real Wi-Fi PHY: `mac80211_hwsim` (+ `hostapd` for an
-open AP, optionally `wmediumd`) instead of the veth. The scenario already runs
-the full privileged path + the no-leak confinement gate the moment
-`/sys/class/net/wlan0/phy80211` exists — so this is mostly a substrate swap in
-the client container + verifying the runner can load `mac80211_hwsim`.
+**Status:** **done — validated end-to-end on a `mac80211_hwsim` virtual radio.**
+The `tests/e2e-hwsim/` harness proves the full privileged path and the no-leak
+invariant: PHY move into a throwaway `gatepath` netns → in-netns `wpa_supplicant`
+re-association → DHCP → portal WebView runner → teardown. The trusted-net
+sentinel is UNREACHABLE from inside the netns; the captive portal IS reachable.
+Green and reproducible (3/3) on real hardware (Bazzite). `mac80211_hwsim` is a
+real mac80211 driver exercising the real kernel Wi-Fi stack (nl80211/cfg80211) —
+not a fake. This resolves BLOCKER-DESK-003's software-validation gate and unblocks
+P0.1's desktop confinement gate.
 
 ---
 
@@ -143,8 +139,10 @@ operators deploying the desktop helper.
   PSK/credentials from NetworkManager's secret store — a separate,
   security-sensitive piece of work. Scaffolded (`WifiSecurity::Psk` +
   `ConnectivityError::Unsupported`) but not implemented.
-- **Desktop path is unvalidated on real Wi-Fi hardware** (BLOCKER-DESK-003 / #45).
-  P0.2 is the software path to closing this without a physical card.
+- **Desktop path validated on a `mac80211_hwsim` virtual radio** (real kernel
+  Wi-Fi stack); physical-card confirmation (real Wi-Fi firmware/RF quirks) is
+  pending but is no longer the core unproven risk — the privileged path and
+  no-leak invariant are proven. **Open captive networks only.**
 
 ---
 

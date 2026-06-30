@@ -246,7 +246,12 @@ impl<
             }
             // `is_captive` doesn't query the access point, so it never returns
             // NotAssociated; map it with DbusFailed for exhaustiveness.
-            Err(NMError::NotAssociated(_)) | Err(NMError::DbusFailed(_)) => {
+            Err(err @ (NMError::NotAssociated(_) | NMError::DbusFailed(_))) => {
+                tracing::error!(
+                    error = %err,
+                    interface = %request.interface_name,
+                    "is_captive NetworkManager query failed"
+                );
                 return SetupCaptiveResponse::Refused {
                     reason: RefusalReason::BackendUnavailable,
                 };
@@ -265,6 +270,12 @@ impl<
         // 4. PolicyKit — only after the request is plausibly valid AND
         //    the sender hasn't blown through the rate limit.
         if let Err(err) = self.auth.check(ACTION_SETUP_CAPTIVE, sender) {
+            tracing::error!(
+                error = %err,
+                action = ACTION_SETUP_CAPTIVE,
+                sender,
+                "PolicyKit auth check refused SetupCaptive"
+            );
             return SetupCaptiveResponse::Refused {
                 reason: refusal_for_auth_error(&err),
             };
@@ -311,7 +322,8 @@ impl<
         // 6. Kernel ops. On failure, the session does NOT become active.
         let netns_path = match self.ops.create_netns(NETNS_NAME) {
             Ok(p) => p,
-            Err(_) => {
+            Err(err) => {
+                tracing::error!(error = %err, netns = NETNS_NAME, "create_netns failed");
                 return SetupCaptiveResponse::Refused {
                     reason: RefusalReason::KernelError,
                 };
@@ -695,6 +707,19 @@ impl<
         };
         let entry = entry_now(AuditAction::AutoTeardown, "<backstop>", None, decision);
         self.audit.append(&entry);
+    }
+
+    /// Unconditional teardown for process shutdown (SIGTERM / systemd stop).
+    /// Tears down any still-active session — stop wpa_supplicant/DHCP, destroy
+    /// the netns, clear state — via the same auth-free path the backstop uses.
+    /// A no-op when idle. The daemon calls this on shutdown so it cleans up a
+    /// live session rather than leaking the netns, and so it can then exit the
+    /// process directly instead of unwinding `#[tokio::main]`'s runtime (which
+    /// would drop the blocking-zbus connections, whose `Drop` calls `block_on`
+    /// and panics on a tokio worker — "Cannot start a runtime from within a
+    /// runtime"). Audit entries flush on append, so a hard exit loses nothing.
+    pub fn shutdown_teardown(&self) {
+        self.fire_backstop_teardown();
     }
 
     fn audit_launch(&self, sender: &str, response: &LaunchPortalResponse) {
