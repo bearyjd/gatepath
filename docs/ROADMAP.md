@@ -105,12 +105,26 @@ validate against — and move the `LaunchPortal` arity pin and the
 CI today).
 
 ### P1.2 — Property/fuzz the privileged boundary validators
-**Status:** not started. **Why it matters:** these validators *are* the trust
+**Status:** **`proptest` done (2026-06-30)**; a `cargo-fuzz`/libFuzzer target is an
+optional heavier follow-up. **Why it matters:** these validators *are* the trust
 boundary; example-only tests can miss what an agent-introduced refactor breaks.
 
-Add `proptest` / `cargo-fuzz` targets for `validate_portal_url`,
-`validate_interface_name`, and the DESK-004 display validators
-(`validate_wayland_display` / `validate_display` / `validate_xauthority`).
+`proptest` properties now cover `validate_interface_name` (validation.rs) and
+`validate_portal_url` + the DESK-004 display validators
+(`validate_wayland_display` / `validate_display` / `validate_xauthority`,
+spawn.rs). Over arbitrary input, each validator is asserted to **never panic** and
+to **uphold its security invariant on every accepted value** — no forbidden
+(VPN/tunnel/bridge/loopback) interface ever accepted, http(s)-only URLs, no
+control bytes, and the per-value charset/shape (DISPLAY needs `:`; XAUTHORITY
+absolute + no `..` segment). Generators union wild bytes with structured forms so
+the accept paths actually fire (a pure-random generator would pass vacuously), and
+the suite is **mutation-tested** (default-allow iface, accept-all-schemes URL, and
+a dropped `..` check each make a property fail). Runs under the existing
+`cargo test` CI (`cargo fmt`/`clippy -D warnings`/`test` all green); no production
+code changed.
+
+**Optional follow-up:** a `cargo-fuzz` target for deeper coverage — needs nightly
+plus an out-of-CI run, so it's lower-priority than the in-CI proptest suite now landed.
 
 ---
 
