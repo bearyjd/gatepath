@@ -33,6 +33,7 @@ written in a finally block regardless of failure.
 from __future__ import annotations
 
 import argparse
+import base64
 import json
 import re
 import sys
@@ -76,6 +77,27 @@ def _testvpn(serial: str, action: str, label: str | None = None) -> None:
     if label:
         cmd += f" --es gatepath.testvpn.label {label}"
     adb_helper.shell(serial, cmd, timeout=20, check=False)
+
+
+def _mark(serial: str, label: str) -> None:
+    """Append a phase-marker line to the VPN sink DIRECTLY via run-as.
+
+    Marks were previously laid by `am start`-ing the debug control activity,
+    which Android drops under rapid successive launches (the NoDisplay activity
+    races its own finish()), so markers went missing in CI (begin/end=None).
+    Writing straight into the app-private sink with run-as is component-free and
+    race-proof; base64 sidesteps shell-quoting the JSON. The marker's `t` is the
+    host clock — irrelevant, since the assertion buckets by append ORDER, not
+    time. Concurrent O_APPEND writes (this + the service's TUN thread) are atomic
+    for a single short line, so packets and markers interleave cleanly."""
+    line = json.dumps({"marker": label, "t": time.time()}) + "\n"
+    b64 = base64.b64encode(line.encode()).decode()
+    adb_helper.shell(
+        serial,
+        f"run-as {APP_PACKAGE} sh -c 'echo {b64} | base64 -d >> {VPN_SINK_RELATIVE}'",
+        timeout=10,
+        check=False,
+    )
 
 
 def _pull_sink(serial: str) -> list[dict]:
@@ -228,7 +250,7 @@ def step_liveness_probe(state: dict) -> dict:
         ):
             captured = True
             break
-    _testvpn(serial, "mark", label="bound_begin")
+    _mark(serial, "bound_begin")
     return {
         "sentinel": f"{SENTINEL_DST}:{SENTINEL_PORT}",
         "captured": captured,
@@ -239,7 +261,7 @@ def step_liveness_probe(state: dict) -> dict:
 def step_mark_bound_end(state: dict) -> dict:
     """Close the bound window. The portal session is still bound at this point
     (right after validation), so the window spans the whole bound lifetime."""
-    _testvpn(state["serial"], "mark", label="bound_end")
+    _mark(state["serial"], "bound_end")
     return {"marked": "bound_end"}
 
 
@@ -440,7 +462,11 @@ def step_wait_validated(state: dict) -> dict:
 
 def step_pull_logcat(state: dict) -> dict:
     serial = state["serial"]
-    log = adb_helper.shell(serial, "logcat -d -t 2000", timeout=20)
+    # Full post-clear buffer (launch_debug_portal cleared it just before the
+    # portal load), not a -t window: the D2 positive control greps this for the
+    # WebView's sentinel attempt, and a bounded tail buried it under device spam
+    # in CI (run #3 had zero GatepathWebView lines in -t 2000).
+    log = adb_helper.shell(serial, "logcat -d", timeout=30)
     out = state["artifacts_dir"] / "logcat.txt"
     out.write_text(log)
     return {"path": str(out), "size": len(log)}
