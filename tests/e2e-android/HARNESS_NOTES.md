@@ -112,6 +112,18 @@ sink is a leak detector:
 release build excludes it. Negative control: comment out the bind at
 `GatepathWebView.kt` and `vpn.confinement` goes RED.
 
-**Status:** implemented and wired into CI; pending its first green emulator run for
-validation (the local dev-container emulator segfaults on boot, so CI is the gate).
-The negative control has not been executed yet.
+**Status:** proven — green and reproducible on the CI emulator (`android-e2e`):
+D1 liveness + D2 confinement pass non-vacuously (the positive control confirms the
+WebView attempted the sentinel). The VPN-as-default mechanism is also confirmed on
+a physical Pixel. Subtleties the emulator surfaced, baked into the harness:
+- Write phase markers from the harness via `run-as` append, NOT by `am start`-ing
+  the control activity — Android drops the activity launch under rapid succession
+  (the NoDisplay activity races its own `finish()`), so marks went missing.
+- Use a routable sentinel host with a dedicated port (`10.0.2.2:18081`) the captive
+  monitor never touches — an unroutable TEST-NET address never reached the TUN, and
+  the captive monitor's own `:18080` probes are otherwise indistinguishable from
+  WebView traffic in the sink.
+- Trigger the WebView's sentinel attempt via a `<head>` favicon + blocking script
+  (body sub-resources are cancelled when the session tears down post-validation).
+- Settle until the unbound probe's TCP SYN retransmits drain before opening the
+  bound window, else they bleed past `bound_begin` and read as a leak.

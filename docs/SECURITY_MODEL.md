@@ -42,11 +42,12 @@ session**.
   `ConnectivityManager.bindProcessToNetwork()`, scoping it to the WiFi/Ethernet interface
   that NetworkManager flagged as captive.
 
-> An eval for this is implemented (`tests/e2e-android` no-leak sentinel: a
-> debug-only `VpnService` runs as the system default network and the build fails
-> if any bound-session traffic escapes onto it — ROADMAP P0.1). It is **pending
-> its first green CI run**; until then this remains a structural/unit-level
-> claim, not an eval-validated one.
+> This is proven by an eval, not just asserted: the `tests/e2e-android` no-leak
+> sentinel runs a debug-only `VpnService` as the system default network and fails
+> the build if the bound portal session's traffic escapes onto it. It passes green
+> on the CI emulator (`android-e2e`) and is non-vacuous — a positive control
+> confirms the bound WebView actually attempted the sentinel, and the build
+> separately proves the apparatus is absent from release builds (ROADMAP P0.1).
 
 - VPN tunnel (Tailscale, TorGuard, WireGuard, OpenVPN) remains active and unmodified
   on all other connections — Gatepath never touches the VPN service.
