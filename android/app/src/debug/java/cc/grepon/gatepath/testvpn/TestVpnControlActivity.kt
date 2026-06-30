@@ -24,10 +24,19 @@ class TestVpnControlActivity : Activity() {
                 startService(svc(GatepathTestVpnService.ACTION_START))
             }
             "probe" -> sendUnboundProbe()
-            "mark" -> startService(
-                svc(GatepathTestVpnService.ACTION_MARK).putExtra(
-                    GatepathTestVpnService.EXTRA_LABEL,
-                    intent.getStringExtra(EXTRA_LABEL) ?: "?"))
+            "mark" -> {
+                // Write the marker line DIRECTLY (in-process) via the shared sink
+                // helper. Routing it through startService would throw
+                // BackgroundServiceStartNotAllowedException on Android 14 — this
+                // NoDisplay activity finishes instantly, so the startService call
+                // counts as a background start and the mark would be dropped.
+                val label = intent.getStringExtra(EXTRA_LABEL) ?: "?"
+                GatepathTestVpnService.appendLine(
+                    filesDir,
+                    org.json.JSONObject().put("marker", label)
+                        .put("t", System.currentTimeMillis() / 1000.0).toString(),
+                )
+            }
             "stop" -> startService(svc(GatepathTestVpnService.ACTION_STOP))
             else -> Log.w(TAG, "unknown action")
         }

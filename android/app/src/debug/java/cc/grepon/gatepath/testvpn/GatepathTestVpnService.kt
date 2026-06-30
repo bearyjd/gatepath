@@ -5,7 +5,6 @@ import android.net.VpnService
 import android.os.ParcelFileDescriptor
 import android.util.Log
 import org.json.JSONObject
-import java.io.File
 import java.io.FileInputStream
 
 /**
@@ -19,29 +18,19 @@ class GatepathTestVpnService : VpnService() {
 
     @Volatile private var running = false
     private var tun: ParcelFileDescriptor? = null
-    private val sinkLock = Any()
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_STOP -> { teardown(); stopSelf() }
-            ACTION_MARK -> {
-                val label = intent.getStringExtra(EXTRA_LABEL) ?: "?"
-                append(JSONObject().put("marker", label)
-                    .put("t", System.currentTimeMillis() / 1000.0).toString())
-            }
             ACTION_START -> startTun()
             else -> Log.w(TAG, "ignoring unknown/null action: ${intent?.action}")
         }
         return START_NOT_STICKY
     }
 
-    private fun append(line: String) {
-        synchronized(sinkLock) { File(filesDir, SINK_FILE).appendText(line + "\n") }
-    }
-
     private fun startTun() {
         if (running) return
-        File(filesDir, SINK_FILE).writeText("")  // fresh per run
+        resetSink(filesDir)  // fresh per run
         val pfd = Builder()
             .setSession("gatepath-test-sink")
             .addAddress(TUN_ADDR, 32)
@@ -60,7 +49,7 @@ class GatepathTestVpnService : VpnService() {
         while (running) {
             val n = try { input.read(buf) } catch (e: Exception) { break }
             if (n <= 0) continue
-            parseIpv4(buf, n)?.let { append(it) }
+            parseIpv4(buf, n)?.let { appendLine(filesDir, it) }
         }
     }
 
@@ -92,10 +81,25 @@ class GatepathTestVpnService : VpnService() {
         private const val TAG = "GatepathTestVpn"
         const val ACTION_START = "cc.grepon.gatepath.testvpn.START"
         const val ACTION_STOP = "cc.grepon.gatepath.testvpn.STOP"
-        const val ACTION_MARK = "cc.grepon.gatepath.testvpn.MARK"
         const val EXTRA_LABEL = "cc.grepon.gatepath.testvpn.label"
         const val SINK_FILE = "vpn-sink.jsonl"
         private const val TUN_ADDR = "10.111.0.2"
         private const val MTU = 1500
+
+        // Shared sink writer: BOTH the service (packets, on the always-alive TUN
+        // thread) and the control activity (phase markers, in-process) append to
+        // the same file under one lock. Markers must NOT route through a
+        // background startService — Android 14 throws
+        // BackgroundServiceStartNotAllowedException when the NoDisplay activity
+        // has already finished, silently dropping the mark.
+        private val SINK_LOCK = Any()
+
+        fun appendLine(dir: java.io.File, line: String) {
+            synchronized(SINK_LOCK) { java.io.File(dir, SINK_FILE).appendText(line + "\n") }
+        }
+
+        fun resetSink(dir: java.io.File) {
+            synchronized(SINK_LOCK) { java.io.File(dir, SINK_FILE).writeText("") }
+        }
     }
 }

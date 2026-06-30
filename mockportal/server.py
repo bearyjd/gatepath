@@ -34,12 +34,15 @@ from typing import Any
 PORTAL_HOST = os.environ.get("PORTAL_HOST", "127.0.0.1")
 PORTAL_PORT = int(os.environ.get("PORTAL_PORT", "18080"))
 PORTAL_COMPLETE_AFTER = int(os.environ.get("PORTAL_COMPLETE_AFTER", "3"))
-# Optional URL injected as a 1x1 <img> sub-resource into /portal so an embedding
-# WebView attempts to load it — the android no-leak sentinel (PR #55). Default
-# empty: when unset the portal HTML is served byte-for-byte unchanged, so the
-# desktop e2e path is unaffected. The android harness sets it to a dedicated
-# sentinel host:port (e.g. http://10.0.2.2:18081/leak.png) the captive monitor
-# never touches, making bound-phase WebView traffic unambiguous in the VPN sink.
+# Optional BASE url for the android no-leak sentinel (PR #55). When set, /portal
+# injects a <head> carrying BOTH a favicon <link> and a blocking <script>, each
+# pointing at this base — the favicon is the one sub-resource a captive-portal
+# WebView fetches reliably before the session tears down, and the head script is
+# a deterministic second trigger. Default empty: when unset the portal HTML is
+# served byte-for-byte unchanged, so the desktop e2e path is unaffected. The
+# android harness sets it to a dedicated sentinel host:port (e.g.
+# http://10.0.2.2:18081) the captive monitor never touches, making bound-phase
+# WebView traffic unambiguous in the VPN sink.
 PORTAL_LEAK_SENTINEL = os.environ.get("PORTAL_LEAK_SENTINEL", "")
 
 
@@ -144,12 +147,21 @@ def _make_handler(
                 # Build the response per-request so the module-level PORTAL_HTML
                 # constant is never mutated. With leak_sentinel empty the body is
                 # byte-identical to PORTAL_HTML (desktop e2e unaffected); when set,
-                # inject a 1x1 sentinel <img> into the body so the WebView fetches
-                # it (the android no-leak sentinel).
+                # inject a <head> carrying a favicon <link> and a blocking <script>,
+                # both pointing at the sentinel base. The favicon is the one
+                # sub-resource a captive-portal WebView fetches reliably before the
+                # session tears down; the head script is a deterministic second
+                # trigger (the android no-leak sentinel).
                 html = PORTAL_HTML
                 if leak_sentinel:
-                    img = f'<img src="{leak_sentinel}" width="1" height="1" alt="">'
-                    html = html.replace("</body>", f"{img}\n</body>", 1)
+                    base = leak_sentinel.rstrip("/")
+                    head = (
+                        f"<head>"
+                        f'<link rel="icon" href="{base}/favicon.ico">'
+                        f'<script src="{base}/leak.js"></script>'
+                        f"</head>"
+                    )
+                    html = html.replace("<body>", f"{head}\n<body>", 1)
                 self._send(
                     200,
                     html.encode("utf-8"),

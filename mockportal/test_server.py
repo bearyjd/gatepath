@@ -156,16 +156,18 @@ def test_portal_host_env_overrides_default(monkeypatch: pytest.MonkeyPatch) -> N
 
 
 def test_portal_injects_leak_sentinel_when_set() -> None:
-    # With PORTAL_LEAK_SENTINEL set (threaded through build_server), /portal
-    # injects a 1x1 <img> pointing at the sentinel URL so an embedding WebView
-    # attempts to load it (the android no-leak sentinel).
-    sentinel = "http://10.0.2.2:18081/leak.png"
+    # With PORTAL_LEAK_SENTINEL set to a BASE url (threaded through build_server),
+    # /portal injects a <head> carrying a favicon <link> and a blocking <script>,
+    # both pointing at the sentinel base, so an embedding WebView fetches them (the
+    # android no-leak sentinel).
+    sentinel = "http://10.0.2.2:18081"
     with _serve(leak_sentinel=sentinel) as base:
         resp = _open(f"{base}/portal")
         assert resp.status == 200
         body = resp.read().decode("utf-8")
-        assert sentinel in body
-        assert "<img" in body
+        assert "10.0.2.2:18081" in body
+        assert '<link rel="icon"' in body
+        assert "<script src=" in body
 
 
 def test_portal_unchanged_when_sentinel_unset() -> None:
