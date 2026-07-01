@@ -1,0 +1,7 @@
+Captive portals — the "agree and connect" sign-in pages on airport, hotel, and cafe Wi-Fi — normally open in a browser that shares your device's network. That means the portal, and the network operator behind it, can see requests that should have stayed on your VPN or your encrypted DNS.
+
+Gatepath confines captive-portal sign-in to the captive network itself. It binds the portal WebView to the captive Wi-Fi network with ConnectivityManager.bindProcessToNetwork(), so the sign-in page can reach the portal while your other apps keep using your VPN and private DNS. The portal session is closed when you are done.
+
+When a full-tunnel VPN, private DNS, or an HTTP proxy would block sign-in, Gatepath diagnoses the cause and tells you exactly what to change. Every session is recorded in a local, on-device audit log — never page contents, never credentials.
+
+Free and open source.

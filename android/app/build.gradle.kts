@@ -19,6 +19,30 @@ android {
         versionName = "1.0.0"
     }
 
+    // Release signing reads the keystore from the environment, so no secrets
+    // live in the repo. The release workflow sets these from GitHub secrets
+    // (see docs/RELEASING.md). When the keystore env is absent (local builds,
+    // PR CI), the release build is left UNSIGNED so `assembleRelease` still runs.
+    val keystoreFile = System.getenv("GATEPATH_KEYSTORE_FILE")?.takeIf { it.isNotBlank() }
+    signingConfigs {
+        create("release") {
+            if (keystoreFile != null) {
+                storeFile = file(keystoreFile)
+                // Fail fast with a readable message if a keystore is configured
+                // but a companion secret is missing (vs. a cryptic AGP error).
+                storePassword = requireNotNull(System.getenv("GATEPATH_KEYSTORE_PASSWORD")) {
+                    "GATEPATH_KEYSTORE_PASSWORD is required when a keystore is configured"
+                }
+                keyAlias = requireNotNull(System.getenv("GATEPATH_KEY_ALIAS")) {
+                    "GATEPATH_KEY_ALIAS is required when a keystore is configured"
+                }
+                keyPassword = requireNotNull(System.getenv("GATEPATH_KEY_PASSWORD")) {
+                    "GATEPATH_KEY_PASSWORD is required when a keystore is configured"
+                }
+            }
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = true
@@ -27,6 +51,9 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro",
             )
+            // Signed only when a keystore was provided; otherwise unsigned so
+            // CI/PR builds and local `assembleRelease` keep working.
+            signingConfig = keystoreFile?.let { signingConfigs.getByName("release") }
         }
         debug {
             isMinifyEnabled = false

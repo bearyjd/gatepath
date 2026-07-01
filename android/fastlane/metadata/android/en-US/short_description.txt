@@ -1,0 +1,1 @@
+Sign in to captive Wi-Fi without leaking onto your VPN or private DNS.
