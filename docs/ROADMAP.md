@@ -165,16 +165,31 @@ follow-up.
 ## P3 — Operability
 
 ### P3.1 — Field diagnostics / troubleshooting
-**Status:** **desktop done (2026-06-30)**; Android share-path still open.
+**Status:** **desktop done (2026-06-30); Android in-app share done (2026-07-01).**
 `docs/TROUBLESHOOTING.md` documents the desktop preconditions, the 14
 `RefusalReason` causes/fixes, the 9 Android `DiagnosticEngine` findings, how to
 read the audit logs, and common scenarios; and
 `desktop/gatepath-netns-helper/packaging/collect-diagnostics.sh` produces a
 redactable support bundle (unit status + journal, sysext/netns/NM state, tool
-versions, helper + user audit logs). **Still open:** an in-app Android "Share
-Diagnostics" path (`Intent.ACTION_SEND` of the audit log + latest
-`DiagnosticReport`) — needs a UI placement (no settings screen yet) and is its
-own Kotlin/Gradle change.
+versions, helper + user audit logs).
+
+**Android in-app "Share Diagnostics" — DONE (2026-07-01):** an always-reachable
+"Share diagnostics" button on `MainScreen` opens a redaction-choice dialog, then
+fires `Intent.ACTION_SEND` of a text bundle carrying an app/platform header, the
+latest `DiagnosisResult` (top finding + recommended action + all findings), and
+the `audit.jsonl` lines. The file is handed out through a **non-exported**
+`FileProvider` (only the `diagnostics/` cache subdir is exposed) with a per-share
+`FLAG_GRANT_READ_URI_PERMISSION`. Redaction mirrors the desktop
+`collect-diagnostics.sh --redact` — SSID, gateway IP, and portal domain — and is
+**on by default** (null identifiers stay null, matching the sed semantics). It
+scrubs in two passes so an identifier can't slip through a free-text field: audit
+entries object-level, plus the diagnosis render (known identifiers replaced + bare
+IP literals masked, so a probe error like `UnknownHostException: portal.example.com`
+can't leak). The bundle-assembly + redaction logic lives in the pure, Android-free
+`diag/DiagnosticsBundle.kt` and is covered by the no-Android-SDK JVM suite
+(`run-jvm-tests.sh`, 10 new tests incl. non-vacuity "SSID/portal-domain/IP must not
+leak" checks); the platform I/O + share sheet live in `share/DiagnosticsSharer.kt`
++ `MainActivity`, verified by the Android CI build.
 
 ---
 

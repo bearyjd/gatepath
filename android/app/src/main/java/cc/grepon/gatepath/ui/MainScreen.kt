@@ -5,20 +5,32 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import cc.grepon.gatepath.R
 import cc.grepon.gatepath.MainViewModel.NetworkStatus
 import cc.grepon.gatepath.diag.DiagnosisResult
 import cc.grepon.gatepath.network.NetworkDiagnostics
@@ -38,8 +50,11 @@ fun MainScreen(
     diagnostics: NetworkDiagnostics?,
     diagnosis: DiagnosisResult?,
     onDismiss: () -> Unit,
+    onShareDiagnostics: (redact: Boolean) -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    var showShareDialog by remember { mutableStateOf(false) }
+
     Column(
         modifier = modifier
             .fillMaxSize()
@@ -91,8 +106,71 @@ fun MainScreen(
                 Text("Dismiss")
             }
         }
+
+        // Always reachable — a user needs to be able to grab a support bundle
+        // regardless of the current session phase.
+        Spacer(modifier = Modifier.height(24.dp))
+        TextButton(onClick = { showShareDialog = true }) {
+            Text(stringResource(R.string.share_diagnostics))
+        }
+
         Spacer(modifier = Modifier.height(48.dp))
     }
+
+    if (showShareDialog) {
+        ShareDiagnosticsDialog(
+            onDismiss = { showShareDialog = false },
+            onConfirm = { redact ->
+                showShareDialog = false
+                onShareDiagnostics(redact)
+            },
+        )
+    }
+}
+
+/**
+ * Confirmation dialog for [MainScreen]'s "Share diagnostics" action. Lets the
+ * user opt into (default) or out of redacting the network-identifying fields
+ * before the bundle leaves the app.
+ */
+@Composable
+private fun ShareDiagnosticsDialog(
+    onDismiss: () -> Unit,
+    onConfirm: (redact: Boolean) -> Unit,
+) {
+    var redact by remember { mutableStateOf(true) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.share_diagnostics_dialog_title)) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text(stringResource(R.string.share_diagnostics_dialog_message))
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { redact = !redact },
+                ) {
+                    Checkbox(checked = redact, onCheckedChange = { redact = it })
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = stringResource(R.string.share_diagnostics_redact),
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = { onConfirm(redact) }) {
+                Text(stringResource(R.string.share_diagnostics_confirm))
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text(stringResource(R.string.share_diagnostics_cancel))
+            }
+        },
+    )
 }
 
 @Composable
