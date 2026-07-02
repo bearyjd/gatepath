@@ -53,6 +53,22 @@
             android:exported="false"
             android:foregroundServiceType="connectedDevice" />
 
+        <!--
+          Grants a one-shot, read-only content:// URI to the diagnostics bundle
+          the user chooses to share (Share Diagnostics). Not exported; access is
+          handed out per-share via FLAG_GRANT_READ_URI_PERMISSION. Only the
+          `diagnostics/` cache subdir is exposed (see @xml/file_paths).
+        -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
+
     </application>
 
 </manifest>

@@ -137,6 +137,7 @@ MAIN_SOURCES=(
     "$SRC_MAIN/cc/grepon/gatepath/diag/DiagnosticEngine.kt"
     "$SRC_MAIN/cc/grepon/gatepath/diag/PrivateDnsProbe.kt"
     "$SRC_MAIN/cc/grepon/gatepath/diag/HttpProbe.kt"
+    "$SRC_MAIN/cc/grepon/gatepath/diag/DiagnosticsBundle.kt"
     "$SRC_MAIN/cc/grepon/gatepath/BindWatchdog.kt"
 )
 
@@ -200,6 +201,7 @@ TEST_SOURCES=(
     "$SRC_TEST/cc/grepon/gatepath/diag/DiagnosticEngineTest.kt"
     "$SRC_TEST/cc/grepon/gatepath/diag/PrivateDnsProbeTest.kt"
     "$SRC_TEST/cc/grepon/gatepath/diag/HttpProbeTest.kt"
+    "$SRC_TEST/cc/grepon/gatepath/diag/DiagnosticsBundleTest.kt"
 )
 
 TEST_CP="$MAIN_CP:$CLASSES_MAIN:$ANDROID_STUB:$JUNIT_JAR:$HAMCREST_JAR:$COROUTINES_TEST"

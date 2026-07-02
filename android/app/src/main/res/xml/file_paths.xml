@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  FileProvider path map for the "Share Diagnostics" flow. Only the cache
+  subdirectory that DiagnosticsSharer writes to is exposed — nothing else in
+  the app's private storage is shareable.
+-->
+<paths xmlns:android="http://schemas.android.com/apk/res/android">
+    <cache-path name="diagnostics" path="diagnostics/" />
+</paths>
