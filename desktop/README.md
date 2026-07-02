@@ -2,7 +2,7 @@
 
 Captive portal handler for Linux desktop, distributed as a Flatpak.
 
-**Flatpak ID:** `cc.grepon.Gatepath`
+**Flatpak ID:** `com.ventouxlabs.Gatepath`
 
 ## What it does
 

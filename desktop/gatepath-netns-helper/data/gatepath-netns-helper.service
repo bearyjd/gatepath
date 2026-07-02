@@ -9,7 +9,7 @@ Requires=dbus.service
 
 [Service]
 Type=dbus
-BusName=cc.grepon.Gatepath.NetNsHelper
+BusName=com.ventouxlabs.Gatepath.NetNsHelper
 ExecStart=/usr/libexec/gatepath-netns-helper
 # Fixed PATH so the helper's `ip`/`iw`/`wpa_supplicant`/DHCP-client/`kill`/
 # `systemd-run` lookups can't be redirected by an inherited or attacker-

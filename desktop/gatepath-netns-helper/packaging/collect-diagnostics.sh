@@ -64,7 +64,7 @@ echo "==> network + netns + dbus"
 cap netns-list.txt  ip netns list
 cap nm-general.txt  nmcli general status
 cap nm-devices.txt  nmcli -f DEVICE,TYPE,STATE,CONNECTION device status
-cap dbus-name.txt   busctl status cc.grepon.Gatepath.NetNsHelper
+cap dbus-name.txt   busctl status com.ventouxlabs.Gatepath.NetNsHelper
 
 echo "==> tool versions"
 cap versions.txt sh -c '

@@ -1,5 +1,5 @@
 [D-BUS Service]
-Name=cc.grepon.Gatepath.NetNsHelper
+Name=com.ventouxlabs.Gatepath.NetNsHelper
 Exec=/usr/libexec/gatepath-netns-helper
 User=root
 SystemdService=gatepath-netns-helper.service

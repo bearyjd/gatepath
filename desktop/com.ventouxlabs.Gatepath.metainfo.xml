@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <component type="desktop-application">
-  <id>cc.grepon.Gatepath</id>
+  <id>com.ventouxlabs.Gatepath</id>
   <name>Gatepath</name>
   <summary>Captive-portal handler that protects your other apps</summary>
 
@@ -24,15 +24,15 @@
     </ul>
   </description>
 
-  <launchable type="desktop-id">cc.grepon.Gatepath.desktop</launchable>
+  <launchable type="desktop-id">com.ventouxlabs.Gatepath.desktop</launchable>
 
-  <icon type="stock">cc.grepon.Gatepath</icon>
+  <icon type="stock">com.ventouxlabs.Gatepath</icon>
 
   <url type="homepage">https://github.com/bearyjd/gatepath</url>
   <url type="bugtracker">https://github.com/bearyjd/gatepath/issues</url>
   <url type="vcs-browser">https://github.com/bearyjd/gatepath</url>
 
-  <developer id="cc.grepon">
+  <developer id="com.ventouxlabs">
     <name>Gatepath Contributors</name>
   </developer>
 

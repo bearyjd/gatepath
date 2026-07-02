@@ -5,15 +5,15 @@ imported lazily inside :py:meth:`NetnsClient.connect` so the test path
 (passing a fake proxy) doesn't need it.
 
 The wire protocol is exposed by the Rust helper crate at:
-- bus name:   ``cc.grepon.Gatepath.NetNsHelper``
-- object:     ``/cc/grepon/Gatepath/NetNsHelper``
-- interface:  ``cc.grepon.Gatepath.NetNsHelper1``
+- bus name:   ``com.ventouxlabs.Gatepath.NetNsHelper``
+- object:     ``/com/ventouxlabs/Gatepath/NetNsHelper``
+- interface:  ``com.ventouxlabs.Gatepath.NetNsHelper1``
 
 Methods (all D-Bus names are PascalCase per zbus's default mapping):
 - ``SetupCaptive(s) -> s`` — interface name in, netns path out, errors on refusal
 - ``TeardownCaptive() -> ()`` — errors on refusal
 
-Refusal errors land at ``cc.grepon.Gatepath.NetNsHelper.Error.<Variant>``;
+Refusal errors land at ``com.ventouxlabs.Gatepath.NetNsHelper.Error.<Variant>``;
 this module maps them to :py:class:`RefusalReason` so callers branch on a
 typed enum rather than a raw error string.
 """
@@ -27,10 +27,10 @@ from typing import Protocol, Union, runtime_checkable
 
 logger = logging.getLogger(__name__)
 
-BUS_NAME = "cc.grepon.Gatepath.NetNsHelper"
-OBJECT_PATH = "/cc/grepon/Gatepath/NetNsHelper"
-INTERFACE = "cc.grepon.Gatepath.NetNsHelper1"
-ERROR_PREFIX = "cc.grepon.Gatepath.NetNsHelper.Error."
+BUS_NAME = "com.ventouxlabs.Gatepath.NetNsHelper"
+OBJECT_PATH = "/com/ventouxlabs/Gatepath/NetNsHelper"
+INTERFACE = "com.ventouxlabs.Gatepath.NetNsHelper1"
+ERROR_PREFIX = "com.ventouxlabs.Gatepath.NetNsHelper.Error."
 
 
 class RefusalReason(Enum):

@@ -182,7 +182,7 @@ def _rust_refusal_reason_wire_names() -> set[str]:
 def _rust_helper_error_wire_suffixes() -> set[str]:
     """The PascalCase wire suffixes from the `HelperError` enum in dbus_service.rs.
 
-    These are the actual `cc.grepon.Gatepath.NetNsHelper.Error.<Suffix>` names
+    These are the actual `com.ventouxlabs.Gatepath.NetNsHelper.Error.<Suffix>` names
     the helper puts on the bus. Excludes the `#[zbus(error)]` transport
     passthrough (`ZBus`), which zbus serialises as the standard
     `org.freedesktop.DBus.Error.*` — not one of our typed names, and correctly

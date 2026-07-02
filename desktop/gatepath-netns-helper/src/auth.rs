@@ -17,8 +17,8 @@ use thiserror::Error;
 
 /// PolicyKit action IDs the helper checks. Stable strings — referenced in
 /// the .policy file shipped in 5b.3.
-pub const ACTION_SETUP_CAPTIVE: &str = "cc.grepon.Gatepath.NetNsHelper.SetupCaptive";
-pub const ACTION_TEARDOWN_CAPTIVE: &str = "cc.grepon.Gatepath.NetNsHelper.TeardownCaptive";
+pub const ACTION_SETUP_CAPTIVE: &str = "com.ventouxlabs.Gatepath.NetNsHelper.SetupCaptive";
+pub const ACTION_TEARDOWN_CAPTIVE: &str = "com.ventouxlabs.Gatepath.NetNsHelper.TeardownCaptive";
 
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum AuthError {

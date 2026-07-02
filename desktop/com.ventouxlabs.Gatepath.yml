@@ -1,4 +1,4 @@
-app-id: cc.grepon.Gatepath
+app-id: com.ventouxlabs.Gatepath
 runtime: org.gnome.Platform
 runtime-version: "49"
 sdk: org.gnome.Sdk
@@ -33,17 +33,17 @@ modules:
     buildsystem: simple
     build-commands:
       - pip3 install --no-index --no-build-isolation --prefix=${FLATPAK_DEST} .
-      - install -Dm644 cc.grepon.Gatepath.desktop ${FLATPAK_DEST}/share/applications/cc.grepon.Gatepath.desktop
-      - install -Dm644 cc.grepon.Gatepath.metainfo.xml ${FLATPAK_DEST}/share/metainfo/cc.grepon.Gatepath.metainfo.xml
+      - install -Dm644 com.ventouxlabs.Gatepath.desktop ${FLATPAK_DEST}/share/applications/com.ventouxlabs.Gatepath.desktop
+      - install -Dm644 com.ventouxlabs.Gatepath.metainfo.xml ${FLATPAK_DEST}/share/metainfo/com.ventouxlabs.Gatepath.metainfo.xml
       # Pre-rendered PNGs at canonical hicolor sizes. We skip installing the
       # SVG because appstreamcli compose's icon validator runs the SVG through
       # librsvg at compose time and reports icon-file-read-error on the file
       # (even when it parses as valid XML). Shipping rasters sidesteps that
       # validation step. The SVG is retained in the repo as the source-of-truth
       # artwork; PNGs are regenerated via `rsvg-convert` when the SVG changes.
-      - install -Dm644 cc.grepon.Gatepath-64.png ${FLATPAK_DEST}/share/icons/hicolor/64x64/apps/cc.grepon.Gatepath.png
-      - install -Dm644 cc.grepon.Gatepath-128.png ${FLATPAK_DEST}/share/icons/hicolor/128x128/apps/cc.grepon.Gatepath.png
-      - install -Dm644 cc.grepon.Gatepath-256.png ${FLATPAK_DEST}/share/icons/hicolor/256x256/apps/cc.grepon.Gatepath.png
+      - install -Dm644 com.ventouxlabs.Gatepath-64.png ${FLATPAK_DEST}/share/icons/hicolor/64x64/apps/com.ventouxlabs.Gatepath.png
+      - install -Dm644 com.ventouxlabs.Gatepath-128.png ${FLATPAK_DEST}/share/icons/hicolor/128x128/apps/com.ventouxlabs.Gatepath.png
+      - install -Dm644 com.ventouxlabs.Gatepath-256.png ${FLATPAK_DEST}/share/icons/hicolor/256x256/apps/com.ventouxlabs.Gatepath.png
     sources:
       - type: dir
         path: .

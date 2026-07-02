@@ -66,7 +66,7 @@ def run_app(*, probe_url: Optional[str] = None) -> None:
     except (ImportError, ValueError) as exc:
         raise ImportError(
             "PyGObject with GTK 4 and libadwaita is required to run the Gatepath GUI.\n"
-            "Install via: flatpak install cc.grepon.Gatepath\n"
+            "Install via: flatpak install com.ventouxlabs.Gatepath\n"
             f"Original error: {exc}"
         ) from exc
 
@@ -77,7 +77,7 @@ def run_app(*, probe_url: Optional[str] = None) -> None:
     class GatepathApp(Adw.Application):
         def __init__(self) -> None:
             super().__init__(
-                application_id="cc.grepon.Gatepath",
+                application_id="com.ventouxlabs.Gatepath",
                 flags=Gio.ApplicationFlags.DEFAULT_FLAGS,
             )
             self._probe_url = probe_url

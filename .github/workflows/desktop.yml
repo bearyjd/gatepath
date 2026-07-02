@@ -28,7 +28,7 @@ jobs:
           python -m pip install pytest pyyaml
       - name: Validate Flatpak manifest YAML
         run: |
-          python -c "import yaml; yaml.safe_load(open('desktop/cc.grepon.Gatepath.yml'))"
+          python -c "import yaml; yaml.safe_load(open('desktop/com.ventouxlabs.Gatepath.yml'))"
       - name: Run pytest
         run: python -m pytest desktop/ mockportal/ -v
       - name: Verify --help works without GTK
@@ -103,8 +103,8 @@ jobs:
       - uses: flatpak/flatpak-github-actions/flatpak-builder@v6
         with:
           bundle: gatepath.flatpak
-          manifest-path: desktop/cc.grepon.Gatepath.yml
-          cache-key: flatpak-builder-${{ hashFiles('desktop/cc.grepon.Gatepath.yml') }}
+          manifest-path: desktop/com.ventouxlabs.Gatepath.yml
+          cache-key: flatpak-builder-${{ hashFiles('desktop/com.ventouxlabs.Gatepath.yml') }}
 
   build-sysext:
     name: build sysext (gatepath-netns-helper)
