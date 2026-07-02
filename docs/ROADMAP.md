@@ -144,9 +144,17 @@ helper-start smoke test on a privileged host (the self-hosted runner is the natu
 place); sysext signing (→ P2.3); an optional RPM `.spec` for Fedora/RHEL.
 
 ### P2.2 — Android release pipeline
-**Status:** not started. Debug/unsigned only — no signing config, no AAB, no
-F-Droid metadata (the natural channel for a privacy tool), no release/tag
-automation.
+**Status:** **pipeline done (2026-06-30)**; needs your keystore to sign.
+`app/build.gradle.kts` has an env-based release `signingConfig` (unsigned
+fallback so PR CI stays green); `.github/workflows/release.yml` is tag-triggered
+(`v*`) and builds the AAB + APK + SBOM and publishes a GitHub Release (signed
+when the `ANDROID_*` secrets are set, else labelled unsigned);
+`android/fastlane/metadata/android/en-US/` carries the store listing
+(title/descriptions/changelog) for F-Droid + Play; `docs/RELEASING.md` documents
+keystore generation, the secrets, cutting a release, and F-Droid submission.
+**Your action:** generate a release keystore + set the four `ANDROID_*` GitHub
+secrets (RELEASING.md §1–2). F-Droid signs with its own key, so it needs the
+metadata + an fdroiddata recipe, not your keystore.
 
 ### P2.3 — Supply-chain hardening
 **Status:** **core done (2026-06-30)**; signed releases still open. `cargo-audit`
