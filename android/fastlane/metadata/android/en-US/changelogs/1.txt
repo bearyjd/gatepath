@@ -1,0 +1,5 @@
+Initial release.
+
+- Confines captive-portal sign-in to the captive Wi-Fi network so it can't leak onto your VPN or private DNS.
+- Diagnoses common sign-in blockers (full-tunnel VPN, private DNS, HTTP proxy) and suggests fixes.
+- On-device audit log of portal sessions (never page contents or credentials).
