@@ -72,7 +72,7 @@ must match it.**
 
 **Android-only:** none currently — Android VPN clients use `tun*` exclusively.
 
-If you add a vendor here, update `android/app/src/main/java/cc/grepon/gatepath/network/VpnDetector.kt`
+If you add a vendor here, update `android/app/src/main/java/com/ventouxlabs/gatepath/network/VpnDetector.kt`
 and `desktop/gatepath/vpn_detector.py` together.
 
 ### Caveat — `bindProcessToNetwork` is process-wide, not WebView-scoped

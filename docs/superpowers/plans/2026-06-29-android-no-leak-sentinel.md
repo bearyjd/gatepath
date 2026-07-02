@@ -10,11 +10,11 @@
 
 ## Global Constraints
 
-- **Package:** `cc.grepon.gatepath`. All Kotlin in package `cc.grepon.gatepath.testvpn`.
+- **Package:** `com.ventouxlabs.gatepath`. All Kotlin in package `com.ventouxlabs.gatepath.testvpn`.
 - **All test apparatus lives in `android/app/src/debug/` only.** Production source set (`src/main/`) gets ZERO changes. Release builds must contain no VpnService and no `BIND_VPN_SERVICE`.
 - **No new `<uses-permission>`** anywhere. The VpnService is declared with `android:permission="android.permission.BIND_VPN_SERVICE"` on the `<service>` (system-held), in the **debug** manifest only.
 - **Sentinel:** UDP to `203.0.113.7:9` (TEST-NET-3, RFC 5737 — never a real host). **Portal host:** `10.0.2.2:18080`.
-- **Sink file:** `files/vpn-sink.jsonl` in the app's `filesDir`, pulled host-side via `run-as cc.grepon.gatepath cat files/vpn-sink.jsonl` (debuggable debug build).
+- **Sink file:** `files/vpn-sink.jsonl` in the app's `filesDir`, pulled host-side via `run-as com.ventouxlabs.gatepath cat files/vpn-sink.jsonl` (debuggable debug build).
 - **Confinement proof order:** D1 liveness gate first (sentinel packet before `bound_begin`); only then D2 confinement (bound window silent). A missing/empty sink or missing markers is a hard FAIL, never a skip.
 - **Bound window** is delimited by `{"marker":"bound_begin"}` / `{"marker":"bound_end"}` lines in the sink (append-order, not timestamps).
 - **Open captive networks only** — unchanged project limitation.
@@ -27,17 +27,17 @@
 De-risk the one unproven assumption before building everything: that `appops set … ACTIVATE_VPN allow` suppresses the consent dialog and a minimal `VpnService` can `establish()` headless and capture an unbound packet on this exact emulator image. This task's code is the seed of Task 2, so it is not throwaway — but its **outcome gates the rest of the plan**.
 
 **Files:**
-- Create: `android/app/src/debug/java/cc/grepon/gatepath/testvpn/GatepathTestVpnService.kt` (minimal version; Task 2 completes it)
-- Create: `android/app/src/debug/java/cc/grepon/gatepath/testvpn/TestVpnControlActivity.kt` (minimal: start + probe)
+- Create: `android/app/src/debug/java/com/ventouxlabs/gatepath/testvpn/GatepathTestVpnService.kt` (minimal version; Task 2 completes it)
+- Create: `android/app/src/debug/java/com/ventouxlabs/gatepath/testvpn/TestVpnControlActivity.kt` (minimal: start + probe)
 - Create: `android/app/src/debug/AndroidManifest.xml`
 
 **Interfaces:**
-- Produces: `GatepathTestVpnService` with `companion` consts `ACTION_START`, `ACTION_STOP`, `SINK_FILE = "vpn-sink.jsonl"`; `TestVpnControlActivity` reachable via `am start -n cc.grepon.gatepath/.testvpn.TestVpnControlActivity --es gatepath.testvpn.action <start|probe|stop>`.
+- Produces: `GatepathTestVpnService` with `companion` consts `ACTION_START`, `ACTION_STOP`, `SINK_FILE = "vpn-sink.jsonl"`; `TestVpnControlActivity` reachable via `am start -n com.ventouxlabs.gatepath/.testvpn.TestVpnControlActivity --es gatepath.testvpn.action <start|probe|stop>`.
 
 - [ ] **Step 1: Minimal service** — create `GatepathTestVpnService.kt`:
 
 ```kotlin
-package cc.grepon.gatepath.testvpn
+package com.ventouxlabs.gatepath.testvpn
 
 import android.content.Intent
 import android.net.VpnService
@@ -123,8 +123,8 @@ class GatepathTestVpnService : VpnService() {
 
     companion object {
         private const val TAG = "GatepathTestVpn"
-        const val ACTION_START = "cc.grepon.gatepath.testvpn.START"
-        const val ACTION_STOP = "cc.grepon.gatepath.testvpn.STOP"
+        const val ACTION_START = "com.ventouxlabs.gatepath.testvpn.START"
+        const val ACTION_STOP = "com.ventouxlabs.gatepath.testvpn.STOP"
         const val SINK_FILE = "vpn-sink.jsonl"
         private const val TUN_ADDR = "10.111.0.2"
         private const val MTU = 1500
@@ -135,14 +135,14 @@ class GatepathTestVpnService : VpnService() {
 - [ ] **Step 2: Minimal control activity** — create `TestVpnControlActivity.kt`:
 
 ```kotlin
-package cc.grepon.gatepath.testvpn
+package com.ventouxlabs.gatepath.testvpn
 
 import android.app.Activity
 import android.content.Intent
 import android.net.VpnService
 import android.os.Bundle
 import android.util.Log
-import cc.grepon.gatepath.BuildConfig
+import com.ventouxlabs.gatepath.BuildConfig
 import java.net.DatagramPacket
 import java.net.DatagramSocket
 import java.net.InetAddress
@@ -228,13 +228,13 @@ Expected: `BUILD SUCCESSFUL`. (If `org.json` is unresolved it is part of the And
 
 ```bash
 # with an emulator booted and the debug APK installed:
-adb shell appops set cc.grepon.gatepath ACTIVATE_VPN allow
-adb shell am start -n cc.grepon.gatepath/.testvpn.TestVpnControlActivity --es gatepath.testvpn.action start
+adb shell appops set com.ventouxlabs.gatepath ACTIVATE_VPN allow
+adb shell am start -n com.ventouxlabs.gatepath/.testvpn.TestVpnControlActivity --es gatepath.testvpn.action start
 sleep 3
-adb shell am start -n cc.grepon.gatepath/.testvpn.TestVpnControlActivity --es gatepath.testvpn.action probe
+adb shell am start -n com.ventouxlabs.gatepath/.testvpn.TestVpnControlActivity --es gatepath.testvpn.action probe
 sleep 2
-adb shell run-as cc.grepon.gatepath cat files/vpn-sink.jsonl
-adb shell am start -n cc.grepon.gatepath/.testvpn.TestVpnControlActivity --es gatepath.testvpn.action stop
+adb shell run-as com.ventouxlabs.gatepath cat files/vpn-sink.jsonl
+adb shell am start -n com.ventouxlabs.gatepath/.testvpn.TestVpnControlActivity --es gatepath.testvpn.action stop
 ```
 
 Expected: the `cat` shows ≥1 line with `"dst":"203.0.113.7"`, `"proto":"UDP"`.
@@ -258,7 +258,7 @@ git commit -m "test(android-e2e): spike a debug VpnService leak-detector for the
 Add the phase markers the assertion buckets on. The service must accept an `ACTION_MARK` carrying a label and append a `{"marker":<label>}` line in the same append-ordered file.
 
 **Files:**
-- Modify: `android/app/src/debug/java/cc/grepon/gatepath/testvpn/GatepathTestVpnService.kt`
+- Modify: `android/app/src/debug/java/com/ventouxlabs/gatepath/testvpn/GatepathTestVpnService.kt`
 
 **Interfaces:**
 - Consumes: the Task 1 service.
@@ -269,8 +269,8 @@ Add the phase markers the assertion buckets on. The service must accept an `ACTI
 In the `companion object`, add below `ACTION_STOP`:
 
 ```kotlin
-        const val ACTION_MARK = "cc.grepon.gatepath.testvpn.MARK"
-        const val EXTRA_LABEL = "cc.grepon.gatepath.testvpn.label"
+        const val ACTION_MARK = "com.ventouxlabs.gatepath.testvpn.MARK"
+        const val EXTRA_LABEL = "com.ventouxlabs.gatepath.testvpn.label"
 ```
 
 In `onStartCommand`, change the `when` to handle MARK:
@@ -497,7 +497,7 @@ Wire the VPN lifecycle into the scenario, and guarantee teardown even on mid-sce
 - Consumes: `GatepathTestVpnService` actions and `TestVpnControlActivity` (Tasks 1–2); the existing `step()`, `STEPS`, `state`, `adb_helper` API.
 - Produces: scenario steps `grant_vpn`, `start_test_vpn`, `liveness_probe`, `mark_bound_end`, `pull_vpn_sink`; artifact `vpn-sink.jsonl`.
 
-- [ ] **Step 1: Add module constants** — after `APP_PACKAGE = "cc.grepon.gatepath"`:
+- [ ] **Step 1: Add module constants** — after `APP_PACKAGE = "com.ventouxlabs.gatepath"`:
 
 ```python
 TESTVPN_ACTIVITY = f"{APP_PACKAGE}/.testvpn.TestVpnControlActivity"
@@ -734,7 +734,7 @@ python3 tests/e2e-android/driver/assertions.py tests/e2e-android/artifacts
 ```
 Expected: `all assertions passed`, including `✓ vpn.liveness` and `✓ vpn.confinement`. Inspect `tests/e2e-android/artifacts/vpn-sink.jsonl`: a `203.0.113.7` line before `bound_begin`, and **no** packet lines between `bound_begin` and `bound_end`.
 
-- [ ] **Step 2: Negative control** — temporarily neuter the bind to force a leak. In `android/app/src/main/java/cc/grepon/gatepath/ui/GatepathWebView.kt:147`, comment out the bind:
+- [ ] **Step 2: Negative control** — temporarily neuter the bind to force a leak. In `android/app/src/main/java/com/ventouxlabs/gatepath/ui/GatepathWebView.kt:147`, comment out the bind:
 
 ```kotlin
         // connectivityManager.bindProcessToNetwork(network)  // NEGATIVE CONTROL — DO NOT COMMIT
@@ -745,7 +745,7 @@ Expected: assertions FAIL with `✗ vpn.confinement: LEAK: bound-phase Gatepath 
 
 - [ ] **Step 3: Revert the negative control**
 
-Run: `git checkout android/app/src/main/java/cc/grepon/gatepath/ui/GatepathWebView.kt`
+Run: `git checkout android/app/src/main/java/com/ventouxlabs/gatepath/ui/GatepathWebView.kt`
 Expected: file restored; `git status` clean for that file. Rebuild and re-run Step 1 → green again.
 
 - [ ] **Step 4: Burn-in** — re-run Step 1 three more times (or trigger the `android-e2e` workflow via `workflow_dispatch` 3×). Expected: green all runs (confirms non-flaky before the hard gate). If flaky, tune the `time.sleep` settles in Task 4 / the `wait_*` windows; do not merge a flaky gate.
@@ -781,7 +781,7 @@ the VPN, the sink is a leak detector:
 - The portal session runs bound to WiFi between the `bound_begin`/`bound_end`
   marker lines — the sink MUST be packet-silent there (proves confinement).
 
-`appops set cc.grepon.gatepath ACTIVATE_VPN allow` suppresses the consent dialog
+`appops set com.ventouxlabs.gatepath ACTIVATE_VPN allow` suppresses the consent dialog
 (no root). The apparatus is `src/debug/` only; `release-vpn-guard` CI asserts the
 release build excludes it. Negative control: comment out the bind at
 `GatepathWebView.kt` and `vpn.confinement` goes RED.

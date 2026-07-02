@@ -68,7 +68,7 @@ android/
     └── src/
         ├── main/
         │   ├── AndroidManifest.xml
-        │   └── java/cc/grepon/gatepath/
+        │   └── java/com/ventouxlabs/gatepath/
         │       ├── GatepathApplication.kt      @HiltAndroidApp, AuditLog.init()
         │       ├── MainActivity.kt             @AndroidEntryPoint, Compose root
         │       ├── MainViewModel.kt            Session orchestration, audit writes
@@ -92,7 +92,7 @@ android/
         │       └── service/
         │           └── PortalMonitorService.kt Foreground service (connectedDevice)
         └── test/
-            └── java/cc/grepon/gatepath/
+            └── java/com/ventouxlabs/gatepath/
                 ├── PortalProbeTest.kt      Integration test vs. real mockportal server
                 ├── SessionStateTest.kt     State machine transition tests
                 ├── AuditLogTest.kt         Schema round-trip + concurrent writes
