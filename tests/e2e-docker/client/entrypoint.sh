@@ -211,7 +211,7 @@ fi
 
 for _ in $(seq 1 100); do
     if dbus-send --system --print-reply --dest=org.freedesktop.DBus /org/freedesktop/DBus \
-            org.freedesktop.DBus.ListNames 2>/dev/null | grep -q "cc.grepon.Gatepath.NetNsHelper"; then
+            org.freedesktop.DBus.ListNames 2>/dev/null | grep -q "com.ventouxlabs.Gatepath.NetNsHelper"; then
         log "  helper bus name claimed"
         break
     fi

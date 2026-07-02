@@ -52,7 +52,7 @@ checks. If a `SetupCaptive` fails, walk this list first.
 
 Every helper decision is logged to `/var/lib/gatepath/helper-audit.jsonl` and, on
 refusal, returned as a typed D-Bus error
-(`cc.grepon.Gatepath.NetNsHelper.Error.<PascalCase>`). Find the audit
+(`com.ventouxlabs.Gatepath.NetNsHelper.Error.<PascalCase>`). Find the audit
 `decision.reason` (snake_case) or the error suffix and look it up:
 
 | `decision.reason` | What it means | What to do |

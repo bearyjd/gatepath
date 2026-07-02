@@ -92,12 +92,12 @@ RUN echo "cachebust=$HELPER_BUILD_CACHEBUST" \
 # Install the helper at the paths the service file + systemd unit hardcode.
 RUN install -Dm0755 /src/helper/target/release/gatepath-netns-helper \
         /usr/libexec/gatepath-netns-helper \
-    && install -Dm0644 /src/helper/data/cc.grepon.Gatepath.NetNsHelper.conf \
-        /etc/dbus-1/system.d/cc.grepon.Gatepath.NetNsHelper.conf \
-    && install -Dm0644 /src/helper/data/cc.grepon.Gatepath.NetNsHelper.service \
-        /usr/share/dbus-1/system-services/cc.grepon.Gatepath.NetNsHelper.service \
-    && install -Dm0644 /src/helper/data/cc.grepon.Gatepath.NetNsHelper.policy \
-        /usr/share/polkit-1/actions/cc.grepon.Gatepath.NetNsHelper.policy \
+    && install -Dm0644 /src/helper/data/com.ventouxlabs.Gatepath.NetNsHelper.conf \
+        /etc/dbus-1/system.d/com.ventouxlabs.Gatepath.NetNsHelper.conf \
+    && install -Dm0644 /src/helper/data/com.ventouxlabs.Gatepath.NetNsHelper.service \
+        /usr/share/dbus-1/system-services/com.ventouxlabs.Gatepath.NetNsHelper.service \
+    && install -Dm0644 /src/helper/data/com.ventouxlabs.Gatepath.NetNsHelper.policy \
+        /usr/share/polkit-1/actions/com.ventouxlabs.Gatepath.NetNsHelper.policy \
     # State dir for the helper's audit log (StateDirectory= equivalent —
     # systemd would mkdir this; we do it manually since we run the helper
     # via D-Bus activation, not systemd, inside the container).

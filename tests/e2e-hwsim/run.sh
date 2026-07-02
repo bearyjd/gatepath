@@ -644,7 +644,7 @@ cat > "$POLKIT_RULE_DST" <<'EOF'
 // hwsim harness only — auto-allow Gatepath helper actions (no auth agent on a
 // headless test box). Removed on teardown; never installed on real systems.
 polkit.addRule(function(action, subject) {
-    if (action.id.indexOf("cc.grepon.Gatepath.NetNsHelper.") === 0) {
+    if (action.id.indexOf("com.ventouxlabs.Gatepath.NetNsHelper.") === 0) {
         return polkit.Result.YES;
     }
 });

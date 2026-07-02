@@ -132,7 +132,7 @@ The harness is careful (`trap cleanup EXIT`, unconditional, idempotent) but it
   **never touches a real `phy0`** (it claims only freshly-created hwsim phys).
 - Creates the `gatepath` netns (the helper owns this).
 - Installs, then removes on teardown:
-  - `/etc/dbus-1/system.d/cc.grepon.Gatepath.NetNsHelper.conf` (+ `ReloadConfig`)
+  - `/etc/dbus-1/system.d/com.ventouxlabs.Gatepath.NetNsHelper.conf` (+ `ReloadConfig`)
   - `/etc/polkit-1/rules.d/49-gatepath-hwsim.rules` (auto-allows the helper
     actions — **test box only**, never ship this)
   - an nftables `forward` drop on `gpap0` (belt for the confinement proof)

@@ -1,6 +1,6 @@
 // E2E test override — auto-allow Gatepath helper actions without prompting.
 //
-// The shipped policy at /usr/share/polkit-1/actions/cc.grepon.Gatepath.NetNsHelper.policy
+// The shipped policy at /usr/share/polkit-1/actions/com.ventouxlabs.Gatepath.NetNsHelper.policy
 // defaults both actions to "auth_admin_keep", which requires a logind session
 // + a polkit authentication agent (gnome-shell, lxqt-policykit, etc.) we
 // don't have inside the container. This override sits at higher priority
@@ -8,7 +8,7 @@
 //
 // Test scope only — not installed on real systems.
 polkit.addRule(function(action, subject) {
-    if (action.id.indexOf("cc.grepon.Gatepath.NetNsHelper.") === 0) {
+    if (action.id.indexOf("com.ventouxlabs.Gatepath.NetNsHelper.") === 0) {
         return polkit.Result.YES;
     }
 });
