@@ -7,16 +7,16 @@ on:
       - 'docs/audit_log_schema.json'
       - 'desktop/gatepath/audit_log.py'
       - 'desktop/gatepath/portal_session.py'
-      - 'android/app/src/main/java/cc/grepon/gatepath/audit/**'
-      - 'android/app/src/main/java/cc/grepon/gatepath/session/PortalSession.kt'
+      - 'android/app/src/main/java/com/ventouxlabs/gatepath/audit/**'
+      - 'android/app/src/main/java/com/ventouxlabs/gatepath/session/PortalSession.kt'
       - '.github/workflows/schema-parity.yml'
   pull_request:
     paths:
       - 'docs/audit_log_schema.json'
       - 'desktop/gatepath/audit_log.py'
       - 'desktop/gatepath/portal_session.py'
-      - 'android/app/src/main/java/cc/grepon/gatepath/audit/**'
-      - 'android/app/src/main/java/cc/grepon/gatepath/session/PortalSession.kt'
+      - 'android/app/src/main/java/com/ventouxlabs/gatepath/audit/**'
+      - 'android/app/src/main/java/com/ventouxlabs/gatepath/session/PortalSession.kt'
       - '.github/workflows/schema-parity.yml'
 
 jobs:

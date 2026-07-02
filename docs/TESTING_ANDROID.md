@@ -43,7 +43,7 @@ captive-detection pipeline. Stripped from release builds.
 ```
 adb install -r app-debug.apk
 adb shell am start \
-    -n cc.grepon.gatepath/.MainActivity \
+    -n com.ventouxlabs.gatepath/.MainActivity \
     --es gatepath.debug.portal_url "http://<reachable-host>/portal"
 ```
 

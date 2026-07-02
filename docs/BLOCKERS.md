@@ -127,7 +127,7 @@ and on-hardware validation remain (see Open, above).
 ### KNOWN-AND-001 (RESOLVED 2026-05-17) — `BindWatchdog` lifecycle delivery is JVM-tested
 
 `BindWatchdog` was extracted from `GatepathApplication.kt` into its own
-file (`android/app/src/main/java/cc/grepon/gatepath/BindWatchdog.kt`) so
+file (`android/app/src/main/java/com/ventouxlabs/gatepath/BindWatchdog.kt`) so
 the JVM runner can compile it without the Android `Application` + Hilt
 deps. `run-jvm-tests.sh` now downloads
 `androidx.lifecycle:lifecycle-common-jvm:2.8.7`,

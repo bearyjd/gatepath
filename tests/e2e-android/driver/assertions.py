@@ -5,7 +5,7 @@ Runs AFTER the scenario completes. Reads three artefacts from the
 directory passed on argv:
 
     scenario-report.json   — written by run-scenario.py
-    audit_log.jsonl        — pulled from /data/data/cc.grepon.gatepath/files/
+    audit_log.jsonl        — pulled from /data/data/com.ventouxlabs.gatepath/files/
     gateway-log.json       — fetched from mockportal's /log endpoint
 
 Three buckets, all hard-fail:
