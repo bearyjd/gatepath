@@ -1,4 +1,15 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Gatepath</string>
+
+    <!-- Share Diagnostics -->
+    <string name="share_diagnostics">Share diagnostics</string>
+    <string name="share_diagnostics_dialog_title">Share diagnostics</string>
+    <string name="share_diagnostics_dialog_message">Bundles the session audit log and the latest network diagnosis so support can help. Redaction removes the Wi‑Fi name, IP addresses, and portal domain. Nothing is sent until you pick an app to share with.</string>
+    <string name="share_diagnostics_redact">Redact network identifiers (Wi‑Fi name, IP addresses, portal domain)</string>
+    <string name="share_diagnostics_confirm">Share</string>
+    <string name="share_diagnostics_cancel">Cancel</string>
+    <string name="share_diagnostics_subject">Gatepath diagnostics</string>
+    <string name="share_diagnostics_chooser">Share diagnostics via…</string>
+    <string name="share_diagnostics_error">Couldn’t prepare diagnostics</string>
 </resources>

@@ -4,17 +4,22 @@ import android.content.Intent
 import android.net.ConnectivityManager
 import android.os.Bundle
 import android.util.Log
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.lifecycle.lifecycleScope
 import cc.grepon.gatepath.session.PortalSession
+import cc.grepon.gatepath.share.DiagnosticsSharer
 import cc.grepon.gatepath.ui.MainScreen
 import cc.grepon.gatepath.ui.PortalScreen
 import cc.grepon.gatepath.ui.theme.GatepathTheme
 import dagger.hilt.android.AndroidEntryPoint
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.launch
 import javax.inject.Inject
 
 @AndroidEntryPoint
@@ -58,6 +63,7 @@ class MainActivity : ComponentActivity() {
                                 diagnostics = diagnostics,
                                 diagnosis = diagnosis,
                                 onDismiss = viewModel::onDismiss,
+                                onShareDiagnostics = ::shareDiagnostics,
                             )
                         }
                     }
@@ -67,6 +73,7 @@ class MainActivity : ComponentActivity() {
                         diagnostics = diagnostics,
                         diagnosis = diagnosis,
                         onDismiss = viewModel::onDismiss,
+                        onShareDiagnostics = ::shareDiagnostics,
                     )
                 }
             }
@@ -76,6 +83,37 @@ class MainActivity : ComponentActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         maybeApplyDebugIntent(intent)
+    }
+
+    /**
+     * Assemble the diagnostics bundle (audit log + latest diagnosis) and hand it
+     * to the system share sheet. [redact] scrubs the network-identifying fields;
+     * see [DiagnosticsSharer] / [cc.grepon.gatepath.diag.DiagnosticsBundle].
+     *
+     * File I/O runs off the main thread inside [DiagnosticsSharer.writeBundle];
+     * the chooser is launched on the resulting URI.
+     */
+    private fun shareDiagnostics(redact: Boolean) {
+        lifecycleScope.launch {
+            try {
+                val uri = DiagnosticsSharer.writeBundle(
+                    context = this@MainActivity,
+                    diagnosis = viewModel.diagnosis.value,
+                    redact = redact,
+                )
+                val sendIntent =
+                    DiagnosticsSharer.sendIntent(uri, getString(R.string.share_diagnostics_subject))
+                startActivity(
+                    Intent.createChooser(sendIntent, getString(R.string.share_diagnostics_chooser)),
+                )
+            } catch (e: CancellationException) {
+                throw e // cooperative cancellation is not a failure — never swallow it
+            } catch (e: Exception) {
+                Log.e(TAG, "Share diagnostics failed", e)
+                Toast.makeText(this@MainActivity, R.string.share_diagnostics_error, Toast.LENGTH_LONG)
+                    .show()
+            }
+        }
     }
 
     /**
