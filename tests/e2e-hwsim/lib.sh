@@ -78,9 +78,9 @@ HELPER_STATE_DIR="/var/lib/gatepath"
 HELPER_RUNTIME_DIR="/run/gatepath"
 
 # ── D-Bus integration contract (verified against the helper source) ──────
-DBUS_NAME="cc.grepon.Gatepath.NetNsHelper"
-DBUS_OBJ="/cc/grepon/Gatepath/NetNsHelper"
-DBUS_IFACE="cc.grepon.Gatepath.NetNsHelper1"
+DBUS_NAME="com.ventouxlabs.Gatepath.NetNsHelper"
+DBUS_OBJ="/com/ventouxlabs/Gatepath/NetNsHelper"
+DBUS_IFACE="com.ventouxlabs.Gatepath.NetNsHelper1"
 
 # Where the runner drops its no-leak verdict (host /tmp; the WebView transient
 # unit does NOT set PrivateTmp, so this is visible to run.sh as root).

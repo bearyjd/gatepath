@@ -121,7 +121,7 @@ def run_window(portal_url: str) -> int:
 
     class RunnerApp(Adw.Application):
         def __init__(self) -> None:
-            super().__init__(application_id="cc.grepon.Gatepath.PortalRunner")
+            super().__init__(application_id="com.ventouxlabs.Gatepath.PortalRunner")
 
         def do_activate(self) -> None:  # type: ignore[override]
             window = Adw.ApplicationWindow(application=self)

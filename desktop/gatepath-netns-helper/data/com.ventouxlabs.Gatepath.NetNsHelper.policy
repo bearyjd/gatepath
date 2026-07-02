@@ -17,7 +17,7 @@
   <vendor>Gatepath</vendor>
   <vendor_url>https://github.com/bearyjd/gatepath</vendor_url>
 
-  <action id="cc.grepon.Gatepath.NetNsHelper.SetupCaptive">
+  <action id="com.ventouxlabs.Gatepath.NetNsHelper.SetupCaptive">
     <description>Move a Wi-Fi interface into Gatepath's captive netns</description>
     <message>Authentication is required to set up the captive-portal isolation</message>
     <defaults>
@@ -27,7 +27,7 @@
     </defaults>
   </action>
 
-  <action id="cc.grepon.Gatepath.NetNsHelper.TeardownCaptive">
+  <action id="com.ventouxlabs.Gatepath.NetNsHelper.TeardownCaptive">
     <description>Tear down Gatepath's captive netns</description>
     <message>Authentication is required to tear down the captive-portal isolation</message>
     <defaults>

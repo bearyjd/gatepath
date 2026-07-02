@@ -34,9 +34,9 @@ AP_IFACE = "gpap0"
 GATEWAY = "192.168.77.1"
 RUNNER_LOG = "/tmp/gatepath-hwsim-runner.log"
 
-BUS_NAME = "cc.grepon.Gatepath.NetNsHelper"
-OBJ_PATH = "/cc/grepon/Gatepath/NetNsHelper"
-IFACE = "cc.grepon.Gatepath.NetNsHelper1"
+BUS_NAME = "com.ventouxlabs.Gatepath.NetNsHelper"
+OBJ_PATH = "/com/ventouxlabs/Gatepath/NetNsHelper"
+IFACE = "com.ventouxlabs.Gatepath.NetNsHelper1"
 
 # Generous per-call D-Bus timeouts: SetupCaptive does the PHY move + in-netns
 # wpa_supplicant association + DHCP, which is the slow part.

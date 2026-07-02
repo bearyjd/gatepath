@@ -99,9 +99,9 @@ fn launch_portal_wire_arity_is_four_strings() {
     let conn = Connection::system().expect("system bus");
     let proxy = zbus::blocking::Proxy::new(
         &conn,
-        "cc.grepon.Gatepath.NetNsHelper",
-        "/cc/grepon/Gatepath/NetNsHelper",
-        "cc.grepon.Gatepath.NetNsHelper1",
+        "com.ventouxlabs.Gatepath.NetNsHelper",
+        "/com/ventouxlabs/Gatepath/NetNsHelper",
+        "com.ventouxlabs.Gatepath.NetNsHelper1",
     )
     .expect("helper proxy");
 

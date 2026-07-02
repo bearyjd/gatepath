@@ -78,8 +78,8 @@ python -m pip install -e '.[gui]'      # install with GUI extras (PyGObject, das
 python -m gatepath                     # run
 
 # Flatpak build
-flatpak-builder --install --user --force-clean build cc.grepon.Gatepath.yml
-flatpak run cc.grepon.Gatepath
+flatpak-builder --install --user --force-clean build com.ventouxlabs.Gatepath.yml
+flatpak run com.ventouxlabs.Gatepath
 ```
 
 ### Mock portal (used by both test suites)
@@ -94,7 +94,7 @@ python -m mockportal.server            # run on 127.0.0.1:18080 by default
 | App      | Target store    | Notes |
 |----------|-----------------|-------|
 | Android  | F-Droid         | Reproducible builds, no proprietary deps. Play Store as a stretch goal. |
-| Desktop  | Flathub         | `cc.grepon.Gatepath.yml` is the manifest. |
+| Desktop  | Flathub         | `com.ventouxlabs.Gatepath.yml` is the manifest. |
 
 ## License
 

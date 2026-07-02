@@ -18,9 +18,9 @@
 #   usr/lib/systemd/system/gatepath-netns-helper.service
 #   usr/lib/tmpfiles.d/gatepath.conf
 #   usr/lib/extension-release.d/extension-release.gatepath-netns-helper
-#   usr/share/dbus-1/system.d/cc.grepon.Gatepath.NetNsHelper.conf
-#   usr/share/dbus-1/system-services/cc.grepon.Gatepath.NetNsHelper.service
-#   usr/share/polkit-1/actions/cc.grepon.Gatepath.NetNsHelper.policy
+#   usr/share/dbus-1/system.d/com.ventouxlabs.Gatepath.NetNsHelper.conf
+#   usr/share/dbus-1/system-services/com.ventouxlabs.Gatepath.NetNsHelper.service
+#   usr/share/polkit-1/actions/com.ventouxlabs.Gatepath.NetNsHelper.policy
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -56,12 +56,12 @@ install -Dm0755 "$DATA_DIR/portal-webview-runner" \
   "$STAGING/usr/lib/gatepath/portal-webview-runner"
 install -Dm0644 "$DATA_DIR/gatepath-netns-helper.service" \
   "$STAGING/usr/lib/systemd/system/gatepath-netns-helper.service"
-install -Dm0644 "$DATA_DIR/cc.grepon.Gatepath.NetNsHelper.conf" \
-  "$STAGING/usr/share/dbus-1/system.d/cc.grepon.Gatepath.NetNsHelper.conf"
-install -Dm0644 "$DATA_DIR/cc.grepon.Gatepath.NetNsHelper.service" \
-  "$STAGING/usr/share/dbus-1/system-services/cc.grepon.Gatepath.NetNsHelper.service"
-install -Dm0644 "$DATA_DIR/cc.grepon.Gatepath.NetNsHelper.policy" \
-  "$STAGING/usr/share/polkit-1/actions/cc.grepon.Gatepath.NetNsHelper.policy"
+install -Dm0644 "$DATA_DIR/com.ventouxlabs.Gatepath.NetNsHelper.conf" \
+  "$STAGING/usr/share/dbus-1/system.d/com.ventouxlabs.Gatepath.NetNsHelper.conf"
+install -Dm0644 "$DATA_DIR/com.ventouxlabs.Gatepath.NetNsHelper.service" \
+  "$STAGING/usr/share/dbus-1/system-services/com.ventouxlabs.Gatepath.NetNsHelper.service"
+install -Dm0644 "$DATA_DIR/com.ventouxlabs.Gatepath.NetNsHelper.policy" \
+  "$STAGING/usr/share/polkit-1/actions/com.ventouxlabs.Gatepath.NetNsHelper.policy"
 install -Dm0644 "$SCRIPT_DIR/tmpfiles.d/gatepath.conf" \
   "$STAGING/usr/lib/tmpfiles.d/gatepath.conf"
 # Audit-log rotation policy. A sysext overlays only /usr, never /etc — so this

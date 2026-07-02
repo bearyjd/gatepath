@@ -31,14 +31,14 @@ use crate::{
 /// Stable D-Bus interface name. Bumping the `1` is the protocol-version
 /// signal; clients pinned to v1 keep working until we ship a v2 that
 /// coexists.
-pub const INTERFACE: &str = "cc.grepon.Gatepath.NetNsHelper1";
-pub const OBJECT_PATH: &str = "/cc/grepon/Gatepath/NetNsHelper";
-pub const BUS_NAME: &str = "cc.grepon.Gatepath.NetNsHelper";
+pub const INTERFACE: &str = "com.ventouxlabs.Gatepath.NetNsHelper1";
+pub const OBJECT_PATH: &str = "/com/ventouxlabs/Gatepath/NetNsHelper";
+pub const BUS_NAME: &str = "com.ventouxlabs.Gatepath.NetNsHelper";
 
 /// D-Bus error type for the helper. Maps each [`RefusalReason`] to a
 /// distinct error name so clients can branch on it.
 #[derive(Debug, zbus::DBusError)]
-#[zbus(prefix = "cc.grepon.Gatepath.NetNsHelper.Error")]
+#[zbus(prefix = "com.ventouxlabs.Gatepath.NetNsHelper.Error")]
 pub enum HelperError {
     #[zbus(error)]
     ZBus(zbus::Error),
@@ -157,7 +157,7 @@ impl<
     }
 }
 
-#[zbus::interface(name = "cc.grepon.Gatepath.NetNsHelper1")]
+#[zbus::interface(name = "com.ventouxlabs.Gatepath.NetNsHelper1")]
 impl<
     N: NetnsOps + Send + Sync + 'static,
     A: Authorizer + Send + Sync + 'static,

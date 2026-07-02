@@ -28,9 +28,9 @@ declare -A EXPECT_MODE=(
   ["usr/lib/tmpfiles.d/gatepath.conf"]="-rw-r--r--"
   ["usr/lib/extension-release.d/extension-release.gatepath-netns-helper"]="-rw-r--r--"
   ["usr/share/factory/etc/logrotate.d/gatepath-netns-helper"]="-rw-r--r--"
-  ["usr/share/dbus-1/system.d/cc.grepon.Gatepath.NetNsHelper.conf"]="-rw-r--r--"
-  ["usr/share/dbus-1/system-services/cc.grepon.Gatepath.NetNsHelper.service"]="-rw-r--r--"
-  ["usr/share/polkit-1/actions/cc.grepon.Gatepath.NetNsHelper.policy"]="-rw-r--r--"
+  ["usr/share/dbus-1/system.d/com.ventouxlabs.Gatepath.NetNsHelper.conf"]="-rw-r--r--"
+  ["usr/share/dbus-1/system-services/com.ventouxlabs.Gatepath.NetNsHelper.service"]="-rw-r--r--"
+  ["usr/share/polkit-1/actions/com.ventouxlabs.Gatepath.NetNsHelper.policy"]="-rw-r--r--"
 )
 
 listing="$(unsquashfs -ll "$IMAGE")"
