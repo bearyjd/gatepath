@@ -60,7 +60,7 @@ CAPTIVE_KEYS = (
 # is the artifact name we write host-side. Pulled via `adb shell run-as` since
 # the app is debuggable and the file lives in app-private storage.
 AUDIT_LOG_RELATIVE = "files/audit.jsonl"
-APP_PACKAGE = "cc.grepon.gatepath"
+APP_PACKAGE = "com.ventouxlabs.gatepath"
 TESTVPN_ACTIVITY = f"{APP_PACKAGE}/.testvpn.TestVpnControlActivity"
 VPN_SINK_RELATIVE = "files/vpn-sink.jsonl"
 # The unbound liveness probe targets a dedicated sentinel host:port the captive

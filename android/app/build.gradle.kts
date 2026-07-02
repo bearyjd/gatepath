@@ -8,11 +8,11 @@ plugins {
 }
 
 android {
-    namespace = "cc.grepon.gatepath"
+    namespace = "com.ventouxlabs.gatepath"
     compileSdk = 35
 
     defaultConfig {
-        applicationId = "cc.grepon.gatepath"
+        applicationId = "com.ventouxlabs.gatepath"
         minSdk = 29
         targetSdk = 35
         versionCode = 1

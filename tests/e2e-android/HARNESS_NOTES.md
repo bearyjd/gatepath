@@ -26,7 +26,7 @@ The original goal was to drive the real system `CAPTIVE_PORTAL` notification →
 - Brute-forcing taps (multi-tap, swipe-to-expand) **ANRs SystemUI**.
 
 So the harness uses the `BuildConfig.DEBUG`-gated debug intent (PR #34):
-`am start -n cc.grepon.gatepath/.MainActivity --es gatepath.debug.portal_url <url>`,
+`am start -n com.ventouxlabs.gatepath/.MainActivity --es gatepath.debug.portal_url <url>`,
 which opens the same `PortalScreen` WebView. CI builds `assembleDebug`, so it's
 present. Trade-off: the real system-intent → `CaptivePortalActivity` plumbing is
 **not** exercised (it's untestable here); everything downstream of "PortalScreen
@@ -107,7 +107,7 @@ sink is a leak detector:
 - The portal session runs bound to WiFi between the `bound_begin`/`bound_end`
   marker lines — the sink MUST be packet-silent there (D2: proves confinement).
 
-`appops set cc.grepon.gatepath ACTIVATE_VPN allow` suppresses the consent dialog
+`appops set com.ventouxlabs.gatepath ACTIVATE_VPN allow` suppresses the consent dialog
 (no root). The apparatus is `src/debug/` only; `release-vpn-guard` CI asserts the
 release build excludes it. Negative control: comment out the bind at
 `GatepathWebView.kt` and `vpn.confinement` goes RED.

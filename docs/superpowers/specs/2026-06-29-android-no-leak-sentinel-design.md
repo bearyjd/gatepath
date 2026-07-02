@@ -239,8 +239,8 @@ A full-capture VpnService must never ship:
 
 | File | New/changed |
 |---|---|
-| `android/app/src/debug/java/cc/grepon/gatepath/testvpn/GatepathTestVpnService.kt` | new (debug-only) |
-| `android/app/src/debug/java/cc/grepon/gatepath/testvpn/TestVpnControl.kt` | new (debug-only) |
+| `android/app/src/debug/java/com/ventouxlabs/gatepath/testvpn/GatepathTestVpnService.kt` | new (debug-only) |
+| `android/app/src/debug/java/com/ventouxlabs/gatepath/testvpn/TestVpnControl.kt` | new (debug-only) |
 | `android/app/src/debug/AndroidManifest.xml` | new/extended (debug-only) |
 | `tests/e2e-android/scenario/run-scenario.py` | +5 steps + phase timestamps |
 | `tests/e2e-android/driver/assertions.py` | + `check_vpn_confinement()` |
