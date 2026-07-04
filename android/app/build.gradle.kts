@@ -11,9 +11,9 @@ plugins {
 android {
     namespace = "com.ventouxlabs.gatepath"
     // androidx from the 2026-06 Compose BOM (core-ktx 1.19, lifecycle 2.11)
-    // requires compileSdk 36. targetSdk stays 35 — bumping it changes runtime
+    // requires compileSdk 37. targetSdk stays 35 — bumping it changes runtime
     // behavior and needs its own validation pass.
-    compileSdk = 36
+    compileSdk = 37
 
     defaultConfig {
         applicationId = "com.ventouxlabs.gatepath"
