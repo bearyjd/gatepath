@@ -18,8 +18,8 @@
 #      until the host-helper story is documented/packaged.
 #   2. Cut a stable DESKTOP release tag and pin `tag` + `commit` below — Flathub
 #      forbids floating branches.
-#   3. Add a top-level LICENSE file (repo declares GPL-3.0-or-later, ships none).
-#   4. Bump the metainfo <releases> to match the released version (currently 0.1.0).
+#   3. Bump the metainfo <releases> to match the released version (currently 0.1.0).
+# Resolved: a top-level LICENSE (GPL-3.0-or-later) ships in the repo.
 
 app-id: com.ventouxlabs.Gatepath
 runtime: org.gnome.Platform

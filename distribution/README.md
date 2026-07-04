@@ -16,8 +16,8 @@ App ids (post-rebrand, see the `identity-rename` history): Android/F-Droid
 
 ## Prerequisites common to both
 
-1. **Add a `LICENSE` file.** The repo declares `GPL-3.0-or-later` (Android
-   `build.gradle`/metainfo) but ships no license text. Both stores require it.
+1. ~~**Add a `LICENSE` file.**~~ **Done** — the canonical GPL-3.0 text ships at
+   the repo root as `LICENSE` (the declared license is `GPL-3.0-or-later`).
 2. **Cut release tags.** F-Droid builds from tag `v1.0.0`; Flathub pins a tag +
    full commit sha. No release tag exists yet.
 
@@ -28,11 +28,10 @@ App ids (post-rebrand, see the `identity-rename` history): Android/F-Droid
 3. F-Droid **builds from source and signs with its own key** — it ignores the
    Play keystore. `build.gradle.kts` produces an unsigned release APK when the
    `ANDROID_*` env vars are absent (F-Droid's case), which F-Droid then signs.
-4. Store text (title/descriptions/changelogs) already lives at
-   `android/fastlane/metadata/android/en-US/`. **Caveat:** F-Droid scans
-   `<repo>/fastlane/...` or `<subdir>/src/<flavor>/fastlane/...`; our copy is at
-   `android/fastlane/...`, so it likely won't be auto-imported without moving it
-   or adjusting the layout. Confirm during `fdroid build`/`fdroid lint`.
+4. Store text (title/descriptions/changelogs) lives at the repo root,
+   `fastlane/metadata/android/en-US/` — one of the layouts F-Droid's importer
+   scans (`<repo>/fastlane/...`), so it is auto-imported. Confirm during
+   `fdroid build`/`fdroid lint`.
 5. `subdir: android/app` with `gradle: [yes]`. The gradle wrapper + settings live
    in `android/` (not repo root); confirm the buildserver locates the wrapper.
 
@@ -53,6 +52,6 @@ App ids (post-rebrand, see the `identity-rename` history): Android/F-Droid
 
 ## Status
 
-Both are **drafts with `TODO`s** (release tag, commit sha, LICENSE, fastlane
-path, helper talk-name). Treat them as a starting point to validate with
-`fdroid build` / `flatpak-builder`, not as submit-ready.
+Both are **drafts with `TODO`s** (release tag, commit sha, helper talk-name —
+LICENSE and the fastlane path are resolved). Treat them as a starting point to
+validate with `fdroid build` / `flatpak-builder`, not as submit-ready.

@@ -58,7 +58,7 @@ release notes.
    - `versionCode` — integer, **must increase** every release.
    - `versionName` — human string, e.g. `1.0.1`.
 2. Add a changelog for the new `versionCode` at
-   `android/fastlane/metadata/android/en-US/changelogs/<versionCode>.txt`
+   `fastlane/metadata/android/en-US/changelogs/<versionCode>.txt`
    (F-Droid and Play both read these).
 3. Commit, then tag and push:
    ```bash
@@ -75,8 +75,8 @@ Play: **F-Droid builds from source and signs with its own key**, so it does
 **not** use your keystore. To publish there:
 
 - The store listing text already lives in-repo at
-  `android/fastlane/metadata/android/en-US/` (title, descriptions, changelogs) —
-  F-Droid's fastlane importer picks it up.
+  `fastlane/metadata/android/en-US/` (title, descriptions, changelogs) — it sits
+  at the repo root because that is where F-Droid's fastlane importer scans.
 - Submit a build recipe (metadata YAML) to
   [`fdroiddata`](https://gitlab.com/fdroid/fdroiddata) referencing this repo,
   the `v*` tags, and `versionCode`/`versionName`. Keep the build free of

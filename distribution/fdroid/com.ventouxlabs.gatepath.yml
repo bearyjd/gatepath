@@ -8,14 +8,12 @@
 # Prerequisites before this builds/merges (see ../README.md):
 #   1. Cut a release tag `v1.0.0` on github.com/bearyjd/gatepath (the `commit:`
 #      below must resolve). versionCode/versionName must match build.gradle.kts.
-#   2. Add a top-level LICENSE/COPYING file — the repo declares
-#      GPL-3.0-or-later but ships no license text; F-Droid requires it.
-#   3. Make the fastlane store text discoverable. It currently lives at
-#      android/fastlane/metadata/android/en-US/ ; F-Droid's importer scans
-#      <repo>/fastlane/... or <subdir>/src/<flavor>/fastlane/... , so it likely
-#      needs to move (or a symlink) or the listing will have no description.
-#   4. Validate locally: `fdroid build -v com.ventouxlabs.gatepath:1` then
+#   2. Validate locally: `fdroid build -v com.ventouxlabs.gatepath:1` then
 #      `fdroid lint com.ventouxlabs.gatepath` (needs SDK 35 + the pinned AGP/Gradle).
+#
+# Resolved: a top-level LICENSE (GPL-3.0-or-later) ships in the repo, and the
+# fastlane store text lives at <repo>/fastlane/metadata/android/en-US/ — the
+# path F-Droid's importer scans.
 
 Categories:
   - Connectivity

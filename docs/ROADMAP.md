@@ -149,7 +149,8 @@ place); sysext signing (→ P2.3); an optional RPM `.spec` for Fedora/RHEL.
 fallback so PR CI stays green); `.github/workflows/release.yml` is tag-triggered
 (`v*`) and builds the AAB + APK + SBOM and publishes a GitHub Release (signed
 when the `ANDROID_*` secrets are set, else labelled unsigned);
-`android/fastlane/metadata/android/en-US/` carries the store listing
+`fastlane/metadata/android/en-US/` (repo root — where F-Droid's importer
+scans) carries the store listing
 (title/descriptions/changelog) for F-Droid + Play; `docs/RELEASING.md` documents
 keystore generation, the secrets, cutting a release, and F-Droid submission.
 **Your action:** generate a release keystore + set the four `ANDROID_*` GitHub
