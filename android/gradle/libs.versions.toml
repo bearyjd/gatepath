@@ -34,6 +34,10 @@ compose-ui-tooling = { group = "androidx.compose.ui", name = "ui-tooling" }
 hilt-android = { group = "com.google.dagger", name = "hilt-android", version.ref = "hilt" }
 hilt-android-compiler = { group = "com.google.dagger", name = "hilt-android-compiler", version.ref = "hilt" }
 hilt-navigation-compose = { group = "androidx.hilt", name = "hilt-navigation-compose", version.ref = "hilt-navigation-compose" }
+# Dagger 2.60 generates @CanIgnoreReturnValue references but no longer puts
+# error_prone_annotations on the compile classpath transitively; compile-only
+# (CLASS retention — never needed at runtime).
+errorprone-annotations = { group = "com.google.errorprone", name = "error_prone_annotations", version = "2.50.0" }
 
 # Kotlinx
 kotlinx-serialization-json = { group = "org.jetbrains.kotlinx", name = "kotlinx-serialization-json", version.ref = "kotlinx-serialization" }
