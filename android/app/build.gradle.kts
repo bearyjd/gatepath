@@ -1,6 +1,7 @@
 plugins {
     alias(libs.plugins.android.application)
-    alias(libs.plugins.kotlin.android)
+    // Kotlin support is built into AGP since 9.0 — kotlin("android") must NOT
+    // be applied (AGP 9 hard-fails on it). https://kotl.in/gradle/agp-built-in-kotlin
     alias(libs.plugins.kotlin.compose)
     alias(libs.plugins.kotlin.serialization)
     alias(libs.plugins.hilt)
@@ -9,7 +10,10 @@ plugins {
 
 android {
     namespace = "com.ventouxlabs.gatepath"
-    compileSdk = 35
+    // androidx from the 2026-06 Compose BOM (core-ktx 1.19, lifecycle 2.11)
+    // requires compileSdk 37. targetSdk stays 35 — bumping it changes runtime
+    // behavior and needs its own validation pass.
+    compileSdk = 37
 
     defaultConfig {
         applicationId = "com.ventouxlabs.gatepath"
@@ -64,10 +68,8 @@ android {
         sourceCompatibility = JavaVersion.VERSION_21
         targetCompatibility = JavaVersion.VERSION_21
     }
-
-    kotlinOptions {
-        jvmTarget = "21"
-    }
+    // No kotlinOptions block: AGP 9 built-in Kotlin defaults jvmTarget to
+    // compileOptions.targetCompatibility (21 above).
 
     buildFeatures {
         compose = true
@@ -93,6 +95,7 @@ dependencies {
     implementation(libs.hilt.android)
     ksp(libs.hilt.android.compiler)
     implementation(libs.hilt.navigation.compose)
+    compileOnly(libs.errorprone.annotations)
 
     implementation(libs.kotlinx.serialization.json)
     implementation(libs.kotlinx.coroutines.android)
