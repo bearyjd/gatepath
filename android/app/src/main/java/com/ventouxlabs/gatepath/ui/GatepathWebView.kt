@@ -47,10 +47,11 @@ private fun String.urlForLog(): String =
  * Security guarantees (per docs/SECURITY_MODEL.md):
  * - Traffic bound to [network] via [ConnectivityManager.bindProcessToNetwork].
  * - JavaScript enabled (required for most portal pages); all other risky settings disabled.
- * - Cookies disabled.
+ * - Cookies and DOM storage ENABLED for the session (portals require them for
+ *   sign-in), but session-scoped: wiped on dispose along with cache and history.
+ * - No persistent cache (LOAD_NO_CACHE); file/content access disabled.
  * - Off-domain navigations refused and counted via [onBlockedNavigation].
  * - Tracker/analytics sub-requests blocked via [BlockedDomains] and counted via [onBlockedResource].
- * - Cache and history wiped on dispose.
  */
 @Composable
 fun GatepathWebView(
