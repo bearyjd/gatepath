@@ -9,9 +9,6 @@ private const val TAILSCALE_STATUS_URL = "http://100.100.100.100/localapi/v0/sta
 private const val TAILSCALE_CONNECT_TIMEOUT_MS = 2_000
 private const val TAILSCALE_READ_TIMEOUT_MS = 2_000
 
-/** VPN-related interface name prefixes that indicate an active tunnel. */
-private val VPN_PREFIXES = listOf("tun", "tap", "wg", "ipsec", "ppp", "tailscale", "torguard")
-
 /**
  * Best-effort VPN detection. All operations are wrapped in try/catch —
  * any failure is logged and treated as "no VPN detected".
@@ -37,11 +34,8 @@ object VpnDetector {
             val ifaces = NetworkInterface.getNetworkInterfaces() ?: return@runCatching
             for (iface in ifaces.asSequence()) {
                 if (!iface.isUp) continue
-                val name = iface.name.lowercase()
-                val isVpn = VPN_PREFIXES.any { prefix -> name.startsWith(prefix) }
-                if (isVpn) {
-                    val mode = classifyMode(name)
-                    detected.add("${iface.name} ($mode)")
+                if (VpnHeuristics.isVpnInterfaceName(iface.name)) {
+                    detected.add(VpnHeuristics.describeVpnInterface(iface.name))
                 }
             }
         }.onFailure { ex ->
@@ -50,11 +44,6 @@ object VpnDetector {
 
         val isFullTunnel = checkTailscaleFullTunnel()
         return VpnInfo(interfaces = detected, isTailscaleFullTunnel = isFullTunnel)
-    }
-
-    private fun classifyMode(ifaceName: String): String = when {
-        ifaceName.startsWith("tailscale") -> "split_tunnel" // overridden below if exit node
-        else -> "unknown"
     }
 
     private fun checkTailscaleFullTunnel(): Boolean {
@@ -66,7 +55,7 @@ object VpnDetector {
             try {
                 conn.connect()
                 val body = conn.inputStream.bufferedReader().readText()
-                body.contains("\"ExitNodeID\"") && !body.contains("\"ExitNodeID\":\"\"")
+                VpnHeuristics.tailscaleBodyIndicatesFullTunnel(body)
             } finally {
                 conn.disconnect()
             }
