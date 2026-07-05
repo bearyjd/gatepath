@@ -1,0 +1,44 @@
+# F-Droid build recipe — DRAFT.
+#
+# Destination: https://gitlab.com/fdroid/fdroiddata as
+#   metadata/com.ventouxlabs.gatepath.yml
+# (open a merge request; or first file a Request-For-Packaging at
+#  https://gitlab.com/fdroid/rfp).
+#
+# Prerequisites before this builds/merges (see ../README.md):
+#   1. Cut a release tag `v1.0.0` on github.com/bearyjd/gatepath (the `commit:`
+#      below must resolve). versionCode/versionName must match build.gradle.kts.
+#   2. Validate locally: `fdroid build -v com.ventouxlabs.gatepath:1` then
+#      `fdroid lint com.ventouxlabs.gatepath` (needs SDK 35 + the pinned AGP/Gradle).
+#
+# Resolved: a top-level LICENSE (GPL-3.0-or-later) ships in the repo, and the
+# fastlane store text lives at <repo>/fastlane/metadata/android/en-US/ — the
+# path F-Droid's importer scans.
+
+Categories:
+  - Connectivity
+  - Security
+License: GPL-3.0-or-later
+AuthorName: Gatepath Contributors
+WebSite: https://github.com/bearyjd/gatepath
+SourceCode: https://github.com/bearyjd/gatepath
+IssueTracker: https://github.com/bearyjd/gatepath/issues
+
+RepoType: git
+Repo: https://github.com/bearyjd/gatepath.git
+
+Builds:
+  - versionName: 1.0.0
+    versionCode: 1
+    commit: v1.0.0
+    subdir: android/app
+    gradle:
+      - yes
+    # No keystore is supplied in F-Droid's build env, so build.gradle.kts falls
+    # back to an unsigned release APK (System.getenv("ANDROID_*") == null); F-Droid
+    # then signs it with its own key. No AAB — F-Droid ships APKs from source.
+
+AutoUpdateMode: Version v%v
+UpdateCheckMode: Tags ^v[0-9.]+$
+CurrentVersion: 1.0.0
+CurrentVersionCode: 1

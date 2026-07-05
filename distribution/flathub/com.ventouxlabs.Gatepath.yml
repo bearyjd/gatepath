@@ -1,0 +1,70 @@
+# Flathub submission manifest — DRAFT.
+#
+# Destination: open a PR to https://github.com/flathub/flathub adding this file
+# as com.ventouxlabs.Gatepath.yml at the repo root. Once merged, Flathub creates
+# github.com/flathub/com.ventouxlabs.Gatepath (the canonical per-app repo).
+#
+# This mirrors the in-repo dev manifest (desktop/com.ventouxlabs.Gatepath.yml,
+# which flatpak-builder CI already builds), with the ONE change Flathub requires:
+# the app source is a pinned git tag/commit instead of a local `dir` path.
+#
+# Blockers before submission (see ../README.md):
+#   1. PRIVILEGED HELPER IS NOT IN THE SANDBOX. The netns isolation is done by a
+#      root system D-Bus service (com.ventouxlabs.Gatepath.NetNsHelper) that
+#      cannot ship inside a Flatpak. From Flatpak the app can only work if the
+#      user separately installs the helper on the host (sysext/RPM) AND
+#      finish-args grants --system-talk-name for it (commented below). Expect a
+#      Flathub reviewer to question this; Flathub distribution may be GUI-only
+#      until the host-helper story is documented/packaged.
+#   2. Cut a stable DESKTOP release tag and pin `tag` + `commit` below — Flathub
+#      forbids floating branches.
+#   3. Bump the metainfo <releases> to match the released version (currently 0.1.0).
+# Resolved: a top-level LICENSE (GPL-3.0-or-later) ships in the repo.
+
+app-id: com.ventouxlabs.Gatepath
+runtime: org.gnome.Platform
+runtime-version: "49"
+sdk: org.gnome.Sdk
+command: gatepath
+
+# Wayland-only by design; spec forbids --socket=x11, --filesystem=home, --device=all.
+finish-args:
+  - --socket=wayland
+  - --share=ipc
+  - --share=network
+  - --system-talk-name=org.freedesktop.NetworkManager
+  - --filesystem=xdg-data/gatepath:create
+  - --filesystem=xdg-cache/gatepath:create
+  - --talk-name=org.freedesktop.portal.Desktop
+  # TODO(blocker #1): needed to drive the host isolation helper from the sandbox:
+  # - --system-talk-name=com.ventouxlabs.Gatepath.NetNsHelper
+
+modules:
+  - name: python3-dasbus
+    buildsystem: simple
+    build-commands:
+      # --no-build-isolation: the GNOME SDK ships setuptools; PEP 517 isolation
+      # would try to fetch it from PyPI, which fails under Flathub's offline build.
+      - pip3 install --no-index --no-build-isolation --find-links=. --prefix=${FLATPAK_DEST} dasbus
+    sources:
+      - type: file
+        url: https://files.pythonhosted.org/packages/37/79/9c5984d723ffbe2e839ee649690f3e1fa6544ab6a17a5150e5ac14a47072/dasbus-1.7.tar.gz
+        sha256: a8850d841adfe8ee5f7bb9f82cf449ab9b4950dc0633897071718e0d0036b6f6
+
+  - name: gatepath
+    buildsystem: simple
+    build-commands:
+      # Whole-repo git checkout, so the app + its data files live under desktop/.
+      - pip3 install --no-index --no-build-isolation --prefix=${FLATPAK_DEST} ./desktop
+      - install -Dm644 desktop/com.ventouxlabs.Gatepath.desktop ${FLATPAK_DEST}/share/applications/com.ventouxlabs.Gatepath.desktop
+      - install -Dm644 desktop/com.ventouxlabs.Gatepath.metainfo.xml ${FLATPAK_DEST}/share/metainfo/com.ventouxlabs.Gatepath.metainfo.xml
+      # Pre-rendered PNGs (appstreamcli's SVG icon validator is finicky; ship rasters).
+      - install -Dm644 desktop/com.ventouxlabs.Gatepath-64.png ${FLATPAK_DEST}/share/icons/hicolor/64x64/apps/com.ventouxlabs.Gatepath.png
+      - install -Dm644 desktop/com.ventouxlabs.Gatepath-128.png ${FLATPAK_DEST}/share/icons/hicolor/128x128/apps/com.ventouxlabs.Gatepath.png
+      - install -Dm644 desktop/com.ventouxlabs.Gatepath-256.png ${FLATPAK_DEST}/share/icons/hicolor/256x256/apps/com.ventouxlabs.Gatepath.png
+    sources:
+      - type: git
+        url: https://github.com/bearyjd/gatepath.git
+        tag: v1.0.0  # TODO: set to the actual desktop release tag
+        # TODO: pin to the tag's full 40-char commit sha (Flathub requires it):
+        commit: 0000000000000000000000000000000000000000
