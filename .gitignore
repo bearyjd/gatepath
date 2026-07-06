@@ -53,6 +53,9 @@ desktop/repo/
 .omc/
 .claude/
 
+# Local autonomous-agent prompt wrapper (not part of the project)
+run-gatepath-fable.sh
+
 # Cursor / similar tooling
 .cursor/
 proptest-regressions/
