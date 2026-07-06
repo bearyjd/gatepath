@@ -85,4 +85,44 @@ class VpnHeuristicsTest {
     fun `empty body means split tunnel`() {
         assertFalse(VpnHeuristics.tailscaleBodyIndicatesFullTunnel(""))
     }
+
+    @Test
+    fun `whitespace-formatted empty exit node id means split tunnel`() {
+        // A space after the colon (`"ExitNodeID": ""`) must not evade the
+        // empty-value check. The old substring match reported full-tunnel here.
+        val body = """{"BackendState":"Running", "ExitNodeID": ""}"""
+        assertFalse(VpnHeuristics.tailscaleBodyIndicatesFullTunnel(body))
+    }
+
+    @Test
+    fun `whitespace-formatted present exit node id means full tunnel`() {
+        val body = """{"BackendState":"Running", "ExitNodeID": "nodeABC123"}"""
+        assertTrue(VpnHeuristics.tailscaleBodyIndicatesFullTunnel(body))
+    }
+
+    @Test
+    fun `malformed body means split tunnel`() {
+        // Not JSON at all — must fail safe rather than throw.
+        assertFalse(VpnHeuristics.tailscaleBodyIndicatesFullTunnel("this is not json"))
+    }
+
+    @Test
+    fun `valid json that is not an object means split tunnel`() {
+        // A well-formed but non-object body exercises the jsonObject-throws path,
+        // distinct from the not-JSON-at-all case; must still fail safe.
+        assertFalse(VpnHeuristics.tailscaleBodyIndicatesFullTunnel("[1,2,3]"))
+    }
+
+    @Test
+    fun `null exit node id means split tunnel`() {
+        val body = """{"BackendState":"Running", "ExitNodeID": null}"""
+        assertFalse(VpnHeuristics.tailscaleBodyIndicatesFullTunnel(body))
+    }
+
+    @Test
+    fun `non-string exit node id means split tunnel`() {
+        // A structurally unexpected value must not be treated as a live exit node.
+        val body = """{"BackendState":"Running", "ExitNodeID": {"nested": true}}"""
+        assertFalse(VpnHeuristics.tailscaleBodyIndicatesFullTunnel(body))
+    }
 }
