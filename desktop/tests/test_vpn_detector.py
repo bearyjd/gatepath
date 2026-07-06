@@ -47,8 +47,10 @@ class TestDetectVpnInterfaces:
         assert "wg0" in result[0]
 
     def test_tailscale_full_tunnel_when_exit_node_active(self) -> None:
-        """If Tailscale API returns ExitNodeID, mode should be full_tunnel."""
-        status_payload = json.dumps({"ExitNodeID": "abc123"}).encode()
+        """A nested ExitNodeStatus.ID means the interface mode is full_tunnel."""
+        status_payload = json.dumps(
+            {"BackendState": "Running", "ExitNodeStatus": {"ID": "abc123", "Online": True}}
+        ).encode()
 
         mock_resp = MagicMock()
         mock_resp.read.return_value = status_payload
@@ -71,25 +73,41 @@ class TestDetectVpnInterfaces:
 
 
 class TestIsTailscaleFullTunnel:
-    def test_exit_node_id_present_returns_true(self) -> None:
-        payload = json.dumps({"ExitNodeID": "nodeid-xyz"}).encode()
+    @staticmethod
+    def _open_returning(payload: dict):
+        """An opener whose response yields *payload* as a JSON /v0/status body."""
         mock_resp = MagicMock()
-        mock_resp.read.return_value = payload
+        mock_resp.read.return_value = json.dumps(payload).encode()
         mock_resp.__enter__ = lambda s: s
         mock_resp.__exit__ = MagicMock(return_value=False)
+        return lambda *a, **kw: mock_resp
 
-        result = _is_tailscale_full_tunnel(_open=lambda *a, **kw: mock_resp)
-        assert result is True
+    def test_active_exit_node_returns_true(self) -> None:
+        opener = self._open_returning(
+            {"BackendState": "Running", "ExitNodeStatus": {"ID": "nodeid-xyz", "Online": True}}
+        )
+        assert _is_tailscale_full_tunnel(_open=opener) is True
 
-    def test_exit_node_id_empty_returns_false(self) -> None:
-        payload = json.dumps({"ExitNodeID": ""}).encode()
-        mock_resp = MagicMock()
-        mock_resp.read.return_value = payload
-        mock_resp.__enter__ = lambda s: s
-        mock_resp.__exit__ = MagicMock(return_value=False)
+    def test_selected_offline_exit_node_returns_true(self) -> None:
+        # Selected but unreachable: traffic is still routed through it — warn.
+        opener = self._open_returning({"ExitNodeStatus": {"ID": "nodeid-xyz", "Online": False}})
+        assert _is_tailscale_full_tunnel(_open=opener) is True
 
-        result = _is_tailscale_full_tunnel(_open=lambda *a, **kw: mock_resp)
-        assert result is False
+    def test_empty_exit_node_id_returns_false(self) -> None:
+        opener = self._open_returning({"ExitNodeStatus": {"ID": ""}})
+        assert _is_tailscale_full_tunnel(_open=opener) is False
+
+    def test_no_exit_node_status_returns_false(self) -> None:
+        opener = self._open_returning({"BackendState": "Running", "Self": {"ID": "abc"}})
+        assert _is_tailscale_full_tunnel(_open=opener) is False
+
+    def test_null_exit_node_status_returns_false(self) -> None:
+        opener = self._open_returning({"ExitNodeStatus": None})
+        assert _is_tailscale_full_tunnel(_open=opener) is False
+
+    def test_non_object_exit_node_status_returns_false(self) -> None:
+        opener = self._open_returning({"ExitNodeStatus": "unexpected"})
+        assert _is_tailscale_full_tunnel(_open=opener) is False
 
     def test_connection_refused_returns_false(self) -> None:
         result = _is_tailscale_full_tunnel(
