@@ -1,6 +1,7 @@
 package com.ventouxlabs.gatepath.network
 
-import java.io.Reader
+import java.io.ByteArrayOutputStream
+import java.io.InputStream
 
 /**
  * Pure, JVM-testable bounded reader used to cap how much of an
@@ -10,25 +11,26 @@ import java.io.Reader
 object BoundedReader {
 
     /**
-     * Reads from [reader] up to [maxChars] characters.
+     * Reads from [input] up to [maxBytes] bytes and decodes them as UTF-8.
      *
-     * Returns the full content when the source has at most [maxChars]
-     * characters; returns `null` when it has more (the caller should treat an
-     * over-limit body as undeterminable and fail safe). Memory use is bounded
-     * to roughly [maxChars] plus one read chunk, regardless of how large the
-     * source claims to be.
+     * Returns the decoded content when the source has at most [maxBytes] bytes;
+     * returns `null` when it has more (the caller should treat an over-limit
+     * body as undeterminable and fail safe). Buffered memory is bounded to
+     * roughly [maxBytes] plus one read chunk, regardless of the source's
+     * claimed length. Bounding by bytes (not decoded chars) keeps the limit at
+     * parity with the desktop detector's byte cap.
      */
-    fun readBounded(reader: Reader, maxChars: Int): String? {
-        require(maxChars >= 0) { "maxChars must be non-negative, was $maxChars" }
-        val chunk = CharArray(READ_CHUNK_CHARS)
-        val sb = StringBuilder()
-        while (sb.length <= maxChars) {
-            val n = reader.read(chunk)
+    fun readBounded(input: InputStream, maxBytes: Int): String? {
+        require(maxBytes >= 0) { "maxBytes must be non-negative, was $maxBytes" }
+        val chunk = ByteArray(READ_CHUNK_BYTES)
+        val buffer = ByteArrayOutputStream()
+        while (buffer.size() <= maxBytes) {
+            val n = input.read(chunk)
             if (n < 0) break
-            sb.append(chunk, 0, n)
+            buffer.write(chunk, 0, n)
         }
-        return if (sb.length > maxChars) null else sb.toString()
+        return if (buffer.size() > maxBytes) null else buffer.toString(Charsets.UTF_8.name())
     }
 
-    private const val READ_CHUNK_CHARS = 8192
+    private const val READ_CHUNK_BYTES = 8192
 }
