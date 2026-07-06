@@ -49,14 +49,31 @@ class VpnInterface:
 def _is_tailscale_full_tunnel(
     _open: Callable = urllib.request.urlopen,
 ) -> bool:
-    """Return True if Tailscale has an active exit node (full-tunnel mode)."""
+    """Return True if Tailscale has an active exit node (full-tunnel mode).
+
+    The localapi /v0/status response reports the selected exit node under a
+    nested ExitNodeStatus object with a non-empty ``ID``; that object is
+    omitted entirely when no exit node is set. There is no top-level
+    ``ExitNodeID`` field on the status response.
+    """
     try:
         req = urllib.request.Request(TAILSCALE_STATUS_URL)
         with _open(req, timeout=2) as resp:
             data = json.loads(resp.read())
-        exit_node_id = data.get("ExitNodeID", "") or ""
-        return bool(exit_node_id)
-    except (urllib.error.URLError, OSError, json.JSONDecodeError, KeyError) as exc:
+        exit_node_status = data.get("ExitNodeStatus")
+        if not isinstance(exit_node_status, dict):
+            return False
+        node_id = exit_node_status.get("ID")
+        # A StableNodeID is always a string; require a non-empty one so a
+        # non-string value can't be treated as a live exit node (parity with
+        # Android's primitive-string check).
+        return isinstance(node_id, str) and node_id != ""
+    except (
+        urllib.error.URLError,
+        OSError,
+        json.JSONDecodeError,
+        AttributeError,
+    ) as exc:
         logger.debug("Tailscale API unreachable or error: %s", exc)
         return False
 
