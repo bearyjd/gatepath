@@ -33,6 +33,13 @@ _TAILSCALE_NAMES = frozenset({"tailscale0", "ts0"})
 
 TAILSCALE_STATUS_URL = "http://localhost:41112/localapi/v0/status"
 
+# Cap how much of the localapi status body is read into memory before parsing.
+# Set well above any realistic /v0/status size (which scales with tailnet peer
+# count) so a legitimate large response is never truncated; this only bounds a
+# runaway or hostile local endpoint. Over-limit bodies fail safe to
+# split-tunnel, consistent with the rest of this best-effort detector.
+_MAX_STATUS_BYTES = 8 * 1024 * 1024
+
 
 @dataclasses.dataclass(frozen=True)
 class VpnInterface:
@@ -48,6 +55,7 @@ class VpnInterface:
 
 def _is_tailscale_full_tunnel(
     _open: Callable = urllib.request.urlopen,
+    _max_bytes: int = _MAX_STATUS_BYTES,
 ) -> bool:
     """Return True if Tailscale has an active exit node (full-tunnel mode).
 
@@ -55,11 +63,20 @@ def _is_tailscale_full_tunnel(
     nested ExitNodeStatus object with a non-empty ``ID``; that object is
     omitted entirely when no exit node is set. There is no top-level
     ``ExitNodeID`` field on the status response.
+
+    At most ``_max_bytes`` of the response body are read; a larger body fails
+    safe to False rather than being pulled into memory unbounded.
     """
     try:
         req = urllib.request.Request(TAILSCALE_STATUS_URL)
         with _open(req, timeout=2) as resp:
-            data = json.loads(resp.read())
+            raw = resp.read(_max_bytes + 1)
+        if len(raw) > _max_bytes:
+            logger.debug(
+                "Tailscale status body exceeded %d bytes; ignoring", _max_bytes
+            )
+            return False
+        data = json.loads(raw)
         exit_node_status = data.get("ExitNodeStatus")
         if not isinstance(exit_node_status, dict):
             return False
