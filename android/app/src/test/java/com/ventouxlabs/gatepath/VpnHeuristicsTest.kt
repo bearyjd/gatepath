@@ -107,6 +107,13 @@ class VpnHeuristicsTest {
     }
 
     @Test
+    fun `valid json that is not an object means split tunnel`() {
+        // A well-formed but non-object body exercises the jsonObject-throws path,
+        // distinct from the not-JSON-at-all case; must still fail safe.
+        assertFalse(VpnHeuristics.tailscaleBodyIndicatesFullTunnel("[1,2,3]"))
+    }
+
+    @Test
     fun `null exit node id means split tunnel`() {
         val body = """{"BackendState":"Running", "ExitNodeID": null}"""
         assertFalse(VpnHeuristics.tailscaleBodyIndicatesFullTunnel(body))
