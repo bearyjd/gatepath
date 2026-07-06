@@ -74,7 +74,7 @@ class TestDetectVpnInterfaces:
 
 class TestIsTailscaleFullTunnel:
     @staticmethod
-    def _open_returning(payload: dict):
+    def _open_returning(payload: object):
         """An opener whose response yields *payload* as a JSON /v0/status body."""
         mock_resp = MagicMock()
         mock_resp.read.return_value = json.dumps(payload).encode()
@@ -107,6 +107,26 @@ class TestIsTailscaleFullTunnel:
 
     def test_non_object_exit_node_status_returns_false(self) -> None:
         opener = self._open_returning({"ExitNodeStatus": "unexpected"})
+        assert _is_tailscale_full_tunnel(_open=opener) is False
+
+    def test_non_string_exit_node_id_returns_false(self) -> None:
+        # A StableNodeID is always a string; a non-string value must not be
+        # treated as a live exit node (matches Android's primitive-string check).
+        opener = self._open_returning({"ExitNodeStatus": {"ID": {"unexpected": "dict"}}})
+        assert _is_tailscale_full_tunnel(_open=opener) is False
+
+    def test_missing_exit_node_id_returns_false(self) -> None:
+        opener = self._open_returning({"ExitNodeStatus": {"Online": True}})
+        assert _is_tailscale_full_tunnel(_open=opener) is False
+
+    def test_null_exit_node_id_returns_false(self) -> None:
+        opener = self._open_returning({"ExitNodeStatus": {"ID": None}})
+        assert _is_tailscale_full_tunnel(_open=opener) is False
+
+    def test_non_object_toplevel_body_returns_false(self) -> None:
+        # A valid-JSON but non-object body (e.g. a bare array) must fail safe
+        # rather than crash the caller via AttributeError on data.get(...).
+        opener = self._open_returning([1, 2, 3])
         assert _is_tailscale_full_tunnel(_open=opener) is False
 
     def test_connection_refused_returns_false(self) -> None:

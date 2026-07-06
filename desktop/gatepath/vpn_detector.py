@@ -63,12 +63,15 @@ def _is_tailscale_full_tunnel(
         exit_node_status = data.get("ExitNodeStatus")
         if not isinstance(exit_node_status, dict):
             return False
-        return bool(exit_node_status.get("ID"))
+        node_id = exit_node_status.get("ID")
+        # A StableNodeID is always a string; require a non-empty one so a
+        # non-string value can't be treated as a live exit node (parity with
+        # Android's primitive-string check).
+        return isinstance(node_id, str) and node_id != ""
     except (
         urllib.error.URLError,
         OSError,
         json.JSONDecodeError,
-        KeyError,
         AttributeError,
     ) as exc:
         logger.debug("Tailscale API unreachable or error: %s", exc)
