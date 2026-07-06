@@ -95,6 +95,18 @@ class VpnHeuristicsTest {
     }
 
     @Test
+    fun `exit node status without id means split tunnel`() {
+        val body = """{"BackendState":"Running","ExitNodeStatus":{"Online":true}}"""
+        assertFalse(VpnHeuristics.tailscaleBodyIndicatesFullTunnel(body))
+    }
+
+    @Test
+    fun `exit node status with null id means split tunnel`() {
+        val body = """{"BackendState":"Running","ExitNodeStatus":{"ID":null}}"""
+        assertFalse(VpnHeuristics.tailscaleBodyIndicatesFullTunnel(body))
+    }
+
+    @Test
     fun `whitespace-formatted exit node status is parsed structurally`() {
         val body = """{"BackendState":"Running", "ExitNodeStatus": { "ID": "node-1" }}"""
         assertTrue(VpnHeuristics.tailscaleBodyIndicatesFullTunnel(body))
