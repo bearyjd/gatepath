@@ -38,18 +38,23 @@ object VpnHeuristics {
 
     /**
      * True if a Tailscale localapi /v0/status response body indicates an
-     * active full-tunnel exit node (a non-empty `ExitNodeID`).
+     * active full-tunnel exit node.
      *
-     * Parses the body as JSON rather than substring-matching so that
-     * insignificant whitespace (`"ExitNodeID": ""`) cannot evade the
-     * empty-value check. Any malformed or non-object body fails safe to
-     * `false` (treated as no full-tunnel exit node).
+     * The real status schema reports the selected exit node under a nested
+     * `ExitNodeStatus` object with a non-empty `ID` (a StableNodeID); that
+     * object is omitted entirely when no exit node is set. There is no
+     * top-level `ExitNodeID` field on the status response — reading one always
+     * failed to detect a live exit node.
+     *
+     * The body is parsed as JSON so formatting cannot affect the result; any
+     * malformed or structurally unexpected body fails safe to `false` (treated
+     * as no full-tunnel exit node).
      */
     fun tailscaleBodyIndicatesFullTunnel(body: String): Boolean = runCatching {
         val exitNodeId = Json.parseToJsonElement(body)
-            .jsonObject["ExitNodeID"]
-            ?.jsonPrimitive
-            ?.contentOrNull
+            .jsonObject["ExitNodeStatus"]
+            ?.jsonObject?.get("ID")
+            ?.jsonPrimitive?.contentOrNull
         !exitNodeId.isNullOrEmpty()
     }.getOrDefault(false)
 }

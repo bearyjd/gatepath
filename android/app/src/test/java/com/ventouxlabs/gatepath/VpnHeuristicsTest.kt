@@ -62,42 +62,47 @@ class VpnHeuristicsTest {
     }
 
     // ── tailscaleBodyIndicatesFullTunnel ──────────────────────────────────
+    // The real Tailscale localapi /v0/status reports the selected exit node
+    // under a nested ExitNodeStatus object (ExitNodeStatus.ID); the field is
+    // omitted entirely when no exit node is set. There is NO top-level
+    // ExitNodeID field on the status response.
 
     @Test
-    fun `exit node id present means full tunnel`() {
-        val body = """{"BackendState":"Running","ExitNodeID":"nodeABC123"}"""
+    fun `active exit node means full tunnel`() {
+        val body = """{"BackendState":"Running","ExitNodeStatus":{"ID":"nWxYz1234CNTRL","Online":true,"TailscaleIPs":["100.64.0.5/32"]}}"""
         assertTrue(VpnHeuristics.tailscaleBodyIndicatesFullTunnel(body))
     }
 
     @Test
-    fun `empty exit node id means split tunnel`() {
-        val body = """{"BackendState":"Running","ExitNodeID":""}"""
+    fun `selected exit node that is offline still means full tunnel`() {
+        // A selected-but-unreachable exit node still routes traffic through it,
+        // so the user must still be warned before a captive portal.
+        val body = """{"BackendState":"Running","ExitNodeStatus":{"ID":"nWxYz1234CNTRL","Online":false}}"""
+        assertTrue(VpnHeuristics.tailscaleBodyIndicatesFullTunnel(body))
+    }
+
+    @Test
+    fun `no exit node status means split tunnel`() {
+        // ExitNodeStatus is omitted (omitempty) when no exit node is selected.
+        val body = """{"BackendState":"Running","Self":{"ID":"abc"}}"""
         assertFalse(VpnHeuristics.tailscaleBodyIndicatesFullTunnel(body))
     }
 
     @Test
-    fun `missing exit node field means split tunnel`() {
-        val body = """{"BackendState":"Running"}"""
+    fun `exit node status with empty id means split tunnel`() {
+        val body = """{"BackendState":"Running","ExitNodeStatus":{"ID":"","Online":false}}"""
         assertFalse(VpnHeuristics.tailscaleBodyIndicatesFullTunnel(body))
+    }
+
+    @Test
+    fun `whitespace-formatted exit node status is parsed structurally`() {
+        val body = """{"BackendState":"Running", "ExitNodeStatus": { "ID": "node-1" }}"""
+        assertTrue(VpnHeuristics.tailscaleBodyIndicatesFullTunnel(body))
     }
 
     @Test
     fun `empty body means split tunnel`() {
         assertFalse(VpnHeuristics.tailscaleBodyIndicatesFullTunnel(""))
-    }
-
-    @Test
-    fun `whitespace-formatted empty exit node id means split tunnel`() {
-        // A space after the colon (`"ExitNodeID": ""`) must not evade the
-        // empty-value check. The old substring match reported full-tunnel here.
-        val body = """{"BackendState":"Running", "ExitNodeID": ""}"""
-        assertFalse(VpnHeuristics.tailscaleBodyIndicatesFullTunnel(body))
-    }
-
-    @Test
-    fun `whitespace-formatted present exit node id means full tunnel`() {
-        val body = """{"BackendState":"Running", "ExitNodeID": "nodeABC123"}"""
-        assertTrue(VpnHeuristics.tailscaleBodyIndicatesFullTunnel(body))
     }
 
     @Test
@@ -114,15 +119,15 @@ class VpnHeuristicsTest {
     }
 
     @Test
-    fun `null exit node id means split tunnel`() {
-        val body = """{"BackendState":"Running", "ExitNodeID": null}"""
+    fun `null exit node status means split tunnel`() {
+        val body = """{"BackendState":"Running","ExitNodeStatus":null}"""
         assertFalse(VpnHeuristics.tailscaleBodyIndicatesFullTunnel(body))
     }
 
     @Test
-    fun `non-string exit node id means split tunnel`() {
-        // A structurally unexpected value must not be treated as a live exit node.
-        val body = """{"BackendState":"Running", "ExitNodeID": {"nested": true}}"""
+    fun `non-object exit node status means split tunnel`() {
+        // A structurally unexpected ExitNodeStatus must not be treated as active.
+        val body = """{"BackendState":"Running","ExitNodeStatus":"unexpected"}"""
         assertFalse(VpnHeuristics.tailscaleBodyIndicatesFullTunnel(body))
     }
 }
