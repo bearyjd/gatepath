@@ -75,6 +75,21 @@ must match it.**
 If you add a vendor here, update `android/app/src/main/java/com/ventouxlabs/gatepath/network/VpnDetector.kt`
 and `desktop/gatepath/vpn_detector.py` together.
 
+### Tailscale full-tunnel (exit-node) detection
+
+Beyond interface-name matching, Gatepath queries the Tailscale localapi
+`/localapi/v0/status` to distinguish a **full-tunnel** exit node from a plain
+split-tunnel Tailscale session. An exit node is active when the status response
+carries a nested `ExitNodeStatus` object with a non-empty `ID` (a
+`StableNodeID`); that object is omitted when no exit node is selected.
+
+There is **no** top-level `ExitNodeID` field on the `/status` response — that
+name belongs to `/localapi/v0/prefs` (the *configured* preference), not the
+live status. Reading a top-level `ExitNodeID` from `/status` silently never
+matches. Both platforms — `VpnHeuristics.tailscaleBodyIndicatesFullTunnel`
+(Android) and `vpn_detector._is_tailscale_full_tunnel` (desktop) — must read
+`ExitNodeStatus.ID`, and must fail safe to split-tunnel on any parse error.
+
 ### Caveat — `bindProcessToNetwork` is process-wide, not WebView-scoped
 
 The Android API only allows process-wide rebinding. For the duration of an active
