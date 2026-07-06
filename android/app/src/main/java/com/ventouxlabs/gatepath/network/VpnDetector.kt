@@ -9,6 +9,14 @@ private const val TAILSCALE_STATUS_URL = "http://100.100.100.100/localapi/v0/sta
 private const val TAILSCALE_CONNECT_TIMEOUT_MS = 2_000
 private const val TAILSCALE_READ_TIMEOUT_MS = 2_000
 
+// Cap how much of the localapi status body is read into memory before parsing.
+// Bounded by BYTES (matching the desktop detector's byte cap) and set well
+// above any realistic /v0/status size — which scales with tailnet peer count —
+// so a legitimate large response is never truncated; this only bounds a runaway
+// or hostile local endpoint. Over-limit bodies fail safe to "no full tunnel",
+// consistent with the rest of this best-effort detector.
+private const val TAILSCALE_MAX_STATUS_BYTES = 8 * 1024 * 1024
+
 /**
  * Best-effort VPN detection. All operations are wrapped in try/catch —
  * any failure is logged and treated as "no VPN detected".
@@ -54,8 +62,10 @@ object VpnDetector {
             conn.requestMethod = "GET"
             try {
                 conn.connect()
-                val body = conn.inputStream.bufferedReader().readText()
-                VpnHeuristics.tailscaleBodyIndicatesFullTunnel(body)
+                val body = conn.inputStream.use {
+                    BoundedReader.readBounded(it, TAILSCALE_MAX_STATUS_BYTES)
+                }
+                body != null && VpnHeuristics.tailscaleBodyIndicatesFullTunnel(body)
             } finally {
                 conn.disconnect()
             }

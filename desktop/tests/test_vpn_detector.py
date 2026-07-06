@@ -75,9 +75,14 @@ class TestDetectVpnInterfaces:
 class TestIsTailscaleFullTunnel:
     @staticmethod
     def _open_returning(payload: object):
-        """An opener whose response yields *payload* as a JSON /v0/status body."""
+        """An opener whose response yields *payload* as a JSON /v0/status body.
+
+        ``read(n)`` honours the requested size (like a real socket), so the
+        byte cap can be exercised with a small injected limit.
+        """
+        body = json.dumps(payload).encode()
         mock_resp = MagicMock()
-        mock_resp.read.return_value = json.dumps(payload).encode()
+        mock_resp.read.side_effect = lambda n=-1: body if n < 0 else body[:n]
         mock_resp.__enter__ = lambda s: s
         mock_resp.__exit__ = MagicMock(return_value=False)
         return lambda *a, **kw: mock_resp
@@ -128,6 +133,12 @@ class TestIsTailscaleFullTunnel:
         # rather than crash the caller via AttributeError on data.get(...).
         opener = self._open_returning([1, 2, 3])
         assert _is_tailscale_full_tunnel(_open=opener) is False
+
+    def test_oversized_status_body_returns_false(self) -> None:
+        # A body larger than the cap is not read/parsed in full; it fails safe
+        # to split-tunnel rather than being pulled into memory unbounded.
+        opener = self._open_returning({"ExitNodeStatus": {"ID": "x" * 100}})
+        assert _is_tailscale_full_tunnel(_open=opener, _max_bytes=16) is False
 
     def test_connection_refused_returns_false(self) -> None:
         result = _is_tailscale_full_tunnel(
