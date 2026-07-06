@@ -200,6 +200,7 @@ TEST_SOURCES=(
     "$SRC_TEST/com/ventouxlabs/gatepath/WebViewHostMatchingTest.kt"
     "$SRC_TEST/com/ventouxlabs/gatepath/BindWatchdogTest.kt"
     "$SRC_TEST/com/ventouxlabs/gatepath/VpnHeuristicsTest.kt"
+    "$SRC_TEST/com/ventouxlabs/gatepath/VpnPrefixParityTest.kt"
     "$SRC_TEST/com/ventouxlabs/gatepath/diag/DiagnosticEngineTest.kt"
     "$SRC_TEST/com/ventouxlabs/gatepath/diag/PrivateDnsProbeTest.kt"
     "$SRC_TEST/com/ventouxlabs/gatepath/diag/HttpProbeTest.kt"
