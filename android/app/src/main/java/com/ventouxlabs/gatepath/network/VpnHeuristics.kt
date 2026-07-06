@@ -1,5 +1,10 @@
 package com.ventouxlabs.gatepath.network
 
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
+
 /**
  * Pure, JVM-testable heuristics behind [VpnDetector].
  *
@@ -33,8 +38,18 @@ object VpnHeuristics {
 
     /**
      * True if a Tailscale localapi /v0/status response body indicates an
-     * active full-tunnel exit node (non-empty ExitNodeID).
+     * active full-tunnel exit node (a non-empty `ExitNodeID`).
+     *
+     * Parses the body as JSON rather than substring-matching so that
+     * insignificant whitespace (`"ExitNodeID": ""`) cannot evade the
+     * empty-value check. Any malformed or non-object body fails safe to
+     * `false` (treated as no full-tunnel exit node).
      */
-    fun tailscaleBodyIndicatesFullTunnel(body: String): Boolean =
-        body.contains("\"ExitNodeID\"") && !body.contains("\"ExitNodeID\":\"\"")
+    fun tailscaleBodyIndicatesFullTunnel(body: String): Boolean = runCatching {
+        val exitNodeId = Json.parseToJsonElement(body)
+            .jsonObject["ExitNodeID"]
+            ?.jsonPrimitive
+            ?.contentOrNull
+        !exitNodeId.isNullOrEmpty()
+    }.getOrDefault(false)
 }
