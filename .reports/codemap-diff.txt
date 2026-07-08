@@ -1,0 +1,28 @@
+Codemap generation report — 2026-07-05
+
+No prior docs/CODEMAPS/ existed (first run). Created fresh:
+  - architecture.md
+  - backend.md
+  - frontend.md
+  - data.md
+  - dependencies.md
+
+Scope scanned: android/ (Kotlin/Compose), desktop/gatepath (Python GTK app),
+desktop/gatepath-netns-helper (Rust privileged D-Bus helper), mockportal/,
+tests/e2e-* (docker/android/hwsim), distribution/ (F-Droid+Flathub).
+
+Notable structure captured:
+- Cross-language audit-log schema contract (docs/audit_log_schema.json) shared
+  by desktop Python + Rust helper + Android Kotlin, each with its own writer.
+- D-Bus RefusalReason enum drift guard between netns_client.py and dbus_service.rs.
+- Recent refactor (05b6eb1, top of engineering/phase1-stabilization branch):
+  VpnHeuristics.kt extracted from VpnDetector.kt as a pure, unit-tested object.
+- AGP 9 / compileSdk 37 migration landed 2026-07-04 (dependabot #63 follow-up).
+
+Staleness note: existing docs/ARCHITECTURE.md, docs/SECURITY_MODEL.md,
+docs/ISOLATION_BACKENDS.md were not modified — codemaps here are a token-lean
+supplement for AI context loading, not a replacement for the prose docs.
+
+No architecture changes detected requiring flags beyond the above; no new
+external dependencies since last known state (memory: dependency bumps in
+#61/#62/#63 are dependency-version only, not new packages).
