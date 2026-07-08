@@ -17,8 +17,12 @@ from typing import Callable, Optional, Protocol, runtime_checkable
 logger = logging.getLogger(__name__)
 
 # NM_CONNECTIVITY_PORTAL — matches the helper's `NM_CONNECTIVITY_PORTAL = 2`.
-# A device whose `Connectivity` property returns this value is currently
-# behind a captive portal, per NetworkManager's own classification.
+# A device whose `Ip4Connectivity` property returns this value is currently
+# behind a captive portal, per NetworkManager's own classification. NB: the
+# Device interface has no bare `Connectivity` property — it was split into
+# `Ip4Connectivity` / `Ip6Connectivity` in NetworkManager 1.16 (see
+# gatepath-netns-helper's network_manager.rs module docs for the same note
+# on the Rust side; this Python client must stay in lockstep with it).
 NM_CONNECTIVITY_PORTAL = 2
 
 # DEVICE_TYPE_WIFI — matches the helper's interface validator (which
@@ -106,9 +110,9 @@ class CaptiveInterfaceLookup(Protocol):
     by NetworkManager, or ``None`` if there isn't one.
 
     Real impl is :py:class:`NMCaptiveInterfaceLookup` (lazy dasbus); tests
-    inject a fake. Helper uses the same NM `Connectivity` property server-
-    side, so what this returns matches what `helper.SetupCaptive` will
-    accept (modulo race windows that the helper re-checks).
+    inject a fake. Helper reads the same NM `Ip4Connectivity` property
+    server-side, so what this returns matches what `helper.SetupCaptive`
+    will accept (modulo race windows that the helper re-checks).
     """
 
     def get_captive_interface(self) -> Optional[str]:
@@ -169,7 +173,11 @@ def _check_device_for_captive(device_path: str) -> Optional[str]:
         )
         if device.DeviceType != NM_DEVICE_TYPE_WIFI:
             return None
-        if device.Connectivity != NM_CONNECTIVITY_PORTAL:
+        # NB: bare `Connectivity` does not exist on this interface (see the
+        # module-level constant comment) — reading it raises InvalidArgs on
+        # real NetworkManager >=1.16, which is swallowed by the except below
+        # and silently returns None. Must read `Ip4Connectivity`.
+        if device.Ip4Connectivity != NM_CONNECTIVITY_PORTAL:
             return None
         iface = device.Interface
         if isinstance(iface, str) and iface:

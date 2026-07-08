@@ -30,25 +30,47 @@ security-sensitive piece of work. `WifiSecurity::Psk` is modelled but
 `bring_up` returns `ConnectivityError::Unsupported` rather than silently
 producing a session that can never associate.
 
-### Testing gap — NM connectivity wire-contract is not covered in CI
-
-`network_manager.rs` reads the NetworkManager Device property `Ip4Connectivity`
-(the bare `Connectivity` property does not exist — reading it raises
-`org.freedesktop.DBus.Error.InvalidArgs`). This wire-contract is exercised
-**only** by the privileged `tests/e2e-hwsim/` harness, which needs netns +
-kernel-module privilege and so cannot run in CI. The unit tests fake
-`CaptiveStateChecker`, so a future rename to another non-existent property name
-would pass every CI check and ship broken.
-
-**Fix (pending):** a `python-dbusmock`-backed integration test that stands up a
-fake NetworkManager on a private session bus and asserts the helper reads
-`Ip4Connectivity` (and not `Connectivity`). `preflight.sh` already probes for
-`python-dbusmock`; this is net-new test infra, tracked here so the gap is
-visible rather than folklore.
-
 ---
 
 ## Resolved
+
+### BLOCKER-DESK-004 (RESOLVED 2026-07-07) — NM `Ip4Connectivity` wire-contract now covered outside the privileged harness
+
+**Files:** `desktop/gatepath/portal_monitor.py`,
+`desktop/tests/test_nm_property_contract.py` (new),
+`desktop/tests/test_nm_dbusmock_connectivity.py` (new),
+`.github/workflows/desktop.yml`.
+
+**What this closed:** `network_manager.rs` (the Rust helper) has always read
+the correct `Ip4Connectivity` property, but `portal_monitor.py` (the Python
+desktop client) was reading the bare `Connectivity` property, which does not
+exist on NetworkManager >=1.16 (`org.freedesktop.DBus.Error.InvalidArgs` on a
+real bus). This is exactly the class of regression this entry used to warn
+about — it shipped because the only two things that read this property were
+the privileged `tests/e2e-hwsim/` harness (can't run in CI) and
+`test_captive_interface_lookup.py`, which only pinned a hand-rolled fake and
+never touched the real property name. Fixed: `portal_monitor.py` now reads
+`Ip4Connectivity`, matching the Rust side.
+
+**Resolution:** two new test layers, neither needing netns/kernel-module
+privilege:
+- `test_nm_property_contract.py` — dependency-free (`sys.modules`-injected
+  fake `dasbus.connection`), runs everywhere pytest does; verified to fail
+  (RED) against the pre-fix `device.Connectivity` read and pass (GREEN)
+  against `device.Ip4Connectivity`.
+- `test_nm_dbusmock_connectivity.py` — `python-dbusmock`-backed integration
+  test per the original fix plan: stands up a fake NetworkManager on a
+  private system bus (`DBusTestCase.start_system_bus()`, no root) and
+  exercises `NMCaptiveInterfaceLookup` against it directly. Skips (not
+  fails) when `python-dbusmock`/`dasbus`/`dbus-daemon` aren't present;
+  `.github/workflows/desktop.yml`'s `pytest` job now installs all three so
+  it runs for real in CI.
+
+**Not yet closed:** the Rust-side `network_manager.rs` read still has no
+non-privileged automated coverage of its own (it was already correct, so
+nothing forced a companion Rust-side dbusmock test this round) — the
+`tests/e2e-hwsim/` harness remains the only thing exercising it. Worth a
+follow-up if the Rust proxy definitions ever change.
 
 ### BLOCKER-DESK-003 (RESOLVED 2026-06-06) — Privileged exec paths validated on `mac80211_hwsim`
 
