@@ -69,7 +69,7 @@ jobs:
           exit 1
 
       - name: Run emulator scenario
-        uses: reactivecircus/android-emulator-runner@v2.37.0
+        uses: reactivecircus/android-emulator-runner@v2.38.0
         with:
           api-level: 34
           target: google_apis
