@@ -79,6 +79,13 @@ sealed interface DiagnosticReport {
     ) : DiagnosticReport
 
     /**
+     * DHCP handed the network zero DNS servers — a half-broken connect. No DNS
+     * means the captive redirect can never resolve; reconnecting usually
+     * completes DHCP properly.
+     */
+    data object NoDnsServers : DiagnosticReport
+
+    /**
      * No probe could conclude. Carries the raw probe errors so the user (or
      * a developer reading logs) can see what actually went wrong.
      */

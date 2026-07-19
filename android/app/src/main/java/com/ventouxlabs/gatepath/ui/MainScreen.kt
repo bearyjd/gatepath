@@ -50,6 +50,7 @@ fun MainScreen(
     diagnostics: NetworkDiagnostics?,
     diagnosis: DiagnosisResult?,
     onDismiss: () -> Unit,
+    onRunDiagnostics: () -> Unit,
     onShareDiagnostics: (redact: Boolean) -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -98,6 +99,12 @@ fun MainScreen(
         if (networkStatus == NetworkStatus.CaptivePending && diagnostics != null) {
             Spacer(modifier = Modifier.height(16.dp))
             TroubleshootingPanel(diagnostics)
+        }
+        if (networkStatus == NetworkStatus.CaptivePending) {
+            Spacer(modifier = Modifier.height(16.dp))
+            Button(onClick = onRunDiagnostics) {
+                Text("Run diagnostics again")
+            }
         }
 
         if (session is PortalSession.Monitoring || session is PortalSession.Detected) {
@@ -224,6 +231,9 @@ private fun TroubleshootingPanel(diagnostics: NetworkDiagnostics) {
             )
             DiagnosticRow("HTTP proxy", diagnostics.httpProxyDescription ?: "none")
             DiagnosticRow("DNS servers", diagnostics.dnsServerCount.toString())
+            if (diagnostics.hasValidatedCellular) {
+                DiagnosticRow("Cellular", "validated (may mask captive WiFi)")
+            }
             if (diagnostics.bindProbeError != null) {
                 DiagnosticRow("Bind probe error", diagnostics.bindProbeError)
             }

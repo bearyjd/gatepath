@@ -8,10 +8,16 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withTimeoutOrNull
 
-/** Result of one engine run — top finding + everything that was collected. */
+/** One probe's named outcome from an engine run. */
+data class ProbeCheck(
+    val probeName: String,
+    val report: DiagnosticReport,
+)
+
+/** Result of one engine run — top finding + every probe's named outcome. */
 data class DiagnosisResult(
     val top: DiagnosticReport,
-    val all: List<DiagnosticReport>,
+    val checks: List<ProbeCheck>,
     val recommended: RecommendedAction,
 )
 
@@ -59,13 +65,14 @@ class DiagnosticEngine(
                 }
             }
 
+        val checks = probes.mapIndexed { i, probe -> ProbeCheck(probe.name, reports[i]) }
         val nonHealthy = reports.filterNot { it is DiagnosticReport.Healthy }
         val ranked = nonHealthy.sortedByDescending(::rankOf)
         val top = ranked.firstOrNull() ?: DiagnosticReport.Healthy
 
         DiagnosisResult(
             top = top,
-            all = reports,
+            checks = checks,
             recommended = recommendedActionFor(top),
         )
     }
@@ -73,6 +80,7 @@ class DiagnosticEngine(
     private fun rankOf(report: DiagnosticReport): Int = when (report) {
         is DiagnosticReport.VpnBlocking -> 100
         is DiagnosticReport.DnsHijack -> 90
+        is DiagnosticReport.NoDnsServers -> 85
         is DiagnosticReport.PrivateDnsBlocking -> 80
         is DiagnosticReport.HttpProxyBlocking -> 70
         is DiagnosticReport.SandboxedWebView -> 60
@@ -106,6 +114,10 @@ class DiagnosticEngine(
         is DiagnosticReport.SandboxedWebView -> RecommendedAction.UserAction(
             id = RecommendedAction.Ids.APPLY_WEBVIEW_BRIDGE,
             instruction = "WebView routing didn't reach the captive interface. The bridge fix is queued for Phase 3.5.",
+        )
+        is DiagnosticReport.NoDnsServers -> RecommendedAction.UserAction(
+            id = RecommendedAction.Ids.RECONNECT_NETWORK,
+            instruction = "This network gave no DNS servers — the connection is half-broken. Forget or reconnect to the network in Wi-Fi settings.",
         )
         is DiagnosticReport.DnsHijack,
         is DiagnosticReport.HttpsOnlyCaptive,

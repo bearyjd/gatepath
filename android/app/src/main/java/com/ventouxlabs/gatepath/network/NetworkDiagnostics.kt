@@ -68,4 +68,11 @@ data class NetworkDiagnostics(
      * us no DNS at all — usually only happens during a half-broken connect.
      */
     val dnsServerCount: Int,
+
+    /**
+     * `true` if a different network was cellular AND validated when this
+     * snapshot was taken — mobile data silently carrying traffic can mask
+     * the captive WiFi state entirely.
+     */
+    val hasValidatedCellular: Boolean,
 )
