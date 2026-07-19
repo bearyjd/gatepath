@@ -24,17 +24,19 @@ jobs:
           python-version: '3.12'
       - name: Install system deps for PyGObject + dbus-daemon
         # gir1.2-glib-2.0 + libgirepository*-dev + libcairo2-dev + pkg-config
-        # are what dasbus (via PyGObject/Gio) needs to build; dbus + dbus-x11
-        # give the python-dbusmock NM wire-contract test a real dbus-daemon
+        # are what dasbus (via PyGObject/Gio) needs to build; libdbus-1-dev is
+        # what pip needs to build dbus-python (pulled in by python-dbusmock —
+        # the runner image stopped preinstalling the header, 2026-07); dbus +
+        # dbus-x11 give the python-dbusmock NM wire-contract test a real dbus-daemon
         # to spawn a private bus against (no root/system-bus access needed —
         # DBusTestCase.start_system_bus() only touches its own private bus).
         run: |
           sudo apt-get update
           sudo apt-get install -y \
             libgirepository1.0-dev libgirepository-2.0-dev libcairo2-dev \
-            pkg-config python3-dev gir1.2-glib-2.0 dbus dbus-x11 || \
+            libdbus-1-dev pkg-config python3-dev gir1.2-glib-2.0 dbus dbus-x11 || \
           sudo apt-get install -y \
-            libgirepository1.0-dev libcairo2-dev pkg-config python3-dev \
+            libgirepository1.0-dev libcairo2-dev libdbus-1-dev pkg-config python3-dev \
             gir1.2-glib-2.0 dbus dbus-x11
       - name: Install test deps
         run: |
