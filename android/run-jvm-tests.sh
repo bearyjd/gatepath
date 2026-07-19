@@ -141,6 +141,7 @@ MAIN_SOURCES=(
     "$SRC_MAIN/com/ventouxlabs/gatepath/diag/HttpProbe.kt"
     "$SRC_MAIN/com/ventouxlabs/gatepath/diag/VpnProbe.kt"
     "$SRC_MAIN/com/ventouxlabs/gatepath/diag/HttpProxyProbe.kt"
+    "$SRC_MAIN/com/ventouxlabs/gatepath/diag/NoDnsProbe.kt"
     "$SRC_MAIN/com/ventouxlabs/gatepath/diag/DiagnosticsBundle.kt"
     "$SRC_MAIN/com/ventouxlabs/gatepath/BindWatchdog.kt"
 )
@@ -210,6 +211,7 @@ TEST_SOURCES=(
     "$SRC_TEST/com/ventouxlabs/gatepath/diag/HttpProbeTest.kt"
     "$SRC_TEST/com/ventouxlabs/gatepath/diag/VpnProbeTest.kt"
     "$SRC_TEST/com/ventouxlabs/gatepath/diag/HttpProxyProbeTest.kt"
+    "$SRC_TEST/com/ventouxlabs/gatepath/diag/NoDnsProbeTest.kt"
     "$SRC_TEST/com/ventouxlabs/gatepath/diag/DiagnosticsBundleTest.kt"
 )
 
