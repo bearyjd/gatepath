@@ -14,7 +14,12 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
@@ -76,6 +81,24 @@ fun DiagnosisPanel(diagnosis: DiagnosisResult, modifier: Modifier = Modifier) {
                     }
                 }
             }
+            var showAllChecks by remember { mutableStateOf(false) }
+            TextButton(onClick = { showAllChecks = !showAllChecks }) {
+                Text(
+                    if (showAllChecks) "Hide all checks"
+                    else "Show all checks (${diagnosis.checks.size})",
+                )
+            }
+            if (showAllChecks) {
+                // Render in engine order — rankOf already decided `top`; this
+                // list is informational, not a second ranking.
+                diagnosis.checks.forEach { check ->
+                    Text(
+                        text = "${statusGlyph(check.report)} ${check.probeName}: ${checkSummary(check.report)}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onTertiaryContainer,
+                    )
+                }
+            }
         }
     }
 }
@@ -133,4 +156,17 @@ private fun buttonLabel(actionId: String): String = when (actionId) {
 
 private fun Context.safeStart(intent: Intent) {
     runCatching { startActivity(intent) }
+}
+
+private fun statusGlyph(report: DiagnosticReport): String = when (report) {
+    is DiagnosticReport.Healthy -> "✓"
+    is DiagnosticReport.Inconclusive -> "?"
+    else -> "✗"
+}
+
+private fun checkSummary(report: DiagnosticReport): String = when (report) {
+    is DiagnosticReport.Healthy -> "no problem found"
+    is DiagnosticReport.Inconclusive ->
+        report.probeErrors.joinToString("; ").ifEmpty { "inconclusive" }
+    else -> headline(report)
 }
