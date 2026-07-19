@@ -65,7 +65,7 @@ class DiagnosticEngineTest {
             RecommendedAction.Ids.PAUSE_VPN,
             (result.recommended as RecommendedAction.UserAction).id,
         )
-        assertEquals(4, result.all.size)
+        assertEquals(4, result.checks.size)
     }
 
     @Test
@@ -102,8 +102,8 @@ class DiagnosticEngineTest {
             result.top is DiagnosticReport.PrivateDnsBlocking ||
                 result.top is DiagnosticReport.Inconclusive)
         // Whatever else came back, the result list must contain a marker for the straggler.
-        val joined = result.all.joinToString { it::class.simpleName ?: "?" }
-        assertTrue("expected straggler in results: $joined", result.all.size == 2)
+        val joined = result.checks.joinToString { it.report::class.simpleName ?: "?" }
+        assertTrue("expected straggler in results: $joined", result.checks.size == 2)
     }
 
     @Test
@@ -118,6 +118,20 @@ class DiagnosticEngineTest {
             "instruction should mention dns.cloudflare.com: ${action.instruction}",
             action.instruction.contains("dns.cloudflare.com"),
         )
+    }
+
+    @Test
+    fun `checks carry the emitting probe's name in probe-list order`() = runBlocking {
+        val engine = DiagnosticEngine(
+            probes = listOf(
+                probe("vpn", DiagnosticReport.VpnBlocking("tun0", isFullTunnel = true)),
+                probe("ok", DiagnosticReport.Healthy),
+            ),
+        )
+        val result = engine.run(noopCtx)
+        assertEquals(listOf("vpn", "ok"), result.checks.map { it.probeName })
+        assertTrue(result.checks[0].report is DiagnosticReport.VpnBlocking)
+        assertEquals(DiagnosticReport.Healthy, result.checks[1].report)
     }
 
     @Test

@@ -112,8 +112,8 @@ object DiagnosticsBundle {
             appendLine("top_finding: ${renderReport(diagnosis.top)}")
             appendLine("recommended_action: ${renderAction(diagnosis.recommended)}")
             append("all_findings:")
-            for (report in diagnosis.all) {
-                append("\n  - ${renderReport(report)}")
+            for (check in diagnosis.checks) {
+                append("\n  - ${check.probeName}: ${renderReport(check.report)}")
             }
         }
     }
