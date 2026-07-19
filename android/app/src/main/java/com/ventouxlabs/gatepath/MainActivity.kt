@@ -63,6 +63,7 @@ class MainActivity : ComponentActivity() {
                                 diagnostics = diagnostics,
                                 diagnosis = diagnosis,
                                 onDismiss = viewModel::onDismiss,
+                                onRunDiagnostics = viewModel::rerunDiagnostics,
                                 onShareDiagnostics = ::shareDiagnostics,
                             )
                         }
@@ -73,6 +74,7 @@ class MainActivity : ComponentActivity() {
                         diagnostics = diagnostics,
                         diagnosis = diagnosis,
                         onDismiss = viewModel::onDismiss,
+                        onRunDiagnostics = viewModel::rerunDiagnostics,
                         onShareDiagnostics = ::shareDiagnostics,
                     )
                 }

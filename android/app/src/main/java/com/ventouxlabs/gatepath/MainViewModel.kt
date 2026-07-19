@@ -104,6 +104,9 @@ class MainViewModel @Inject constructor(
     private val _diagnosis = MutableStateFlow<DiagnosisResult?>(null)
     val diagnosis: StateFlow<DiagnosisResult?> = _diagnosis.asStateFlow()
 
+    /** Network from the most recent CaptivePortalSuspected — target for manual re-runs. */
+    private var suspectedNetwork: Network? = null
+
     /**
      * Handle to the in-flight session-timeout coroutine. Cancelled when the
      * user dismisses, the network drops, or a new session begins. Without this
@@ -126,6 +129,7 @@ class MainViewModel @Inject constructor(
                         _networkStatus.value = NetworkStatus.CaptiveDetected
                         _latestDiagnostics.value = null
                         _diagnosis.value = null
+                        suspectedNetwork = null
                         _session.value = sessionManager.portalDetected(_session.value, event.portalUrl)
                         openPortal()
                     }
@@ -135,6 +139,7 @@ class MainViewModel @Inject constructor(
                         _networkStatus.value = NetworkStatus.SignInComplete
                         _latestDiagnostics.value = null
                         _diagnosis.value = null
+                        suspectedNetwork = null
                         if (_activeNetwork.value == event.network) {
                             handleSignInSuccess()
                         }
@@ -146,6 +151,7 @@ class MainViewModel @Inject constructor(
                         _networkStatus.value = NetworkStatus.NoPortal
                         _latestDiagnostics.value = null
                         _diagnosis.value = null
+                        suspectedNetwork = null
                     }
                     is NetworkEvent.CaptivePortalSuspected -> {
                         // Both probe paths failed. Diagnostics carries VPN
@@ -155,12 +161,14 @@ class MainViewModel @Inject constructor(
                         Log.w(TAG, "Captive suspected on ${event.network}: ${event.diagnostics}")
                         _latestDiagnostics.value = event.diagnostics
                         _networkStatus.value = NetworkStatus.CaptivePending
+                        suspectedNetwork = event.network
                         runDiagnosticEngine(event.network, event.diagnostics)
                     }
                     is NetworkEvent.CaptiveNetworkLost -> {
                         _networkStatus.value = NetworkStatus.Lost
                         _latestDiagnostics.value = null
                         _diagnosis.value = null
+                        suspectedNetwork = null
                         if (_activeNetwork.value == event.network) {
                             _activeNetwork.value = null
                             // The manager picks ABORTED_PRE_ACTIVE for pre-Active
@@ -203,6 +211,32 @@ class MainViewModel @Inject constructor(
             Log.i(TAG, "Diagnosis on ${network}: top=${result.top::class.simpleName} action=${result.recommended}")
             _diagnosis.value = result
         }
+    }
+
+    /**
+     * Manual re-run from the UI ("Run diagnostics again"). Re-snapshots the
+     * environment for the suspected network — so a just-paused VPN or a fixed
+     * proxy shows up — and re-runs the engine. The original probe errors are
+     * carried over; the engine's HttpProbe independently re-tests the network
+     * path. No-op if nothing is suspected or the snapshot fails (network torn
+     * down mid-tap): the previous diagnosis stays on screen rather than
+     * flashing to empty.
+     */
+    fun rerunDiagnostics() {
+        val network = suspectedNetwork ?: return
+        val previous = _latestDiagnostics.value
+        val fresh = runCatching {
+            monitor.snapshotDiagnostics(
+                network = network,
+                bindError = previous?.bindProbeError,
+                fallbackError = previous?.fallbackProbeError,
+            )
+        }.getOrElse { ex ->
+            Log.w(TAG, "Diagnostics re-run snapshot failed: ${ex.message}")
+            return
+        }
+        _latestDiagnostics.value = fresh
+        runDiagnosticEngine(network, fresh)
     }
 
     private fun openPortal() {
