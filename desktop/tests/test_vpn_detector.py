@@ -8,6 +8,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from gatepath import vpn_detector
 from gatepath.vpn_detector import detect_vpn_interfaces, _is_tailscale_full_tunnel
 
 
@@ -145,3 +146,19 @@ class TestIsTailscaleFullTunnel:
             _open=lambda *a, **kw: (_ for _ in ()).throw(OSError("refused"))
         )
         assert result is False
+
+
+def test_detect_vpn_details_returns_structured_interfaces() -> None:
+    with patch("socket.if_nameindex", return_value=[(1, "lo"), (2, "tun0")]):
+        details = vpn_detector.detect_vpn_details()
+    assert [d.name for d in details] == ["tun0"]
+    assert details[0].mode == "unknown"
+
+
+def test_detect_vpn_interfaces_still_returns_the_same_labels() -> None:
+    # The label format is the audit-log contract — refactoring the internals
+    # must not change it.
+    with patch("socket.if_nameindex", return_value=[(1, "lo"), (2, "tun0")]):
+        labels = vpn_detector.detect_vpn_interfaces()
+        details = vpn_detector.detect_vpn_details()
+    assert labels == [d.label() for d in details] == ["tun0 (unknown)"]
