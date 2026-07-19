@@ -80,6 +80,7 @@ class DiagnosticEngine(
     private fun rankOf(report: DiagnosticReport): Int = when (report) {
         is DiagnosticReport.VpnBlocking -> 100
         is DiagnosticReport.DnsHijack -> 90
+        is DiagnosticReport.NoDnsServers -> 85
         is DiagnosticReport.PrivateDnsBlocking -> 80
         is DiagnosticReport.HttpProxyBlocking -> 70
         is DiagnosticReport.SandboxedWebView -> 60
@@ -113,6 +114,10 @@ class DiagnosticEngine(
         is DiagnosticReport.SandboxedWebView -> RecommendedAction.UserAction(
             id = RecommendedAction.Ids.APPLY_WEBVIEW_BRIDGE,
             instruction = "WebView routing didn't reach the captive interface. The bridge fix is queued for Phase 3.5.",
+        )
+        is DiagnosticReport.NoDnsServers -> RecommendedAction.UserAction(
+            id = RecommendedAction.Ids.RECONNECT_NETWORK,
+            instruction = "This network gave no DNS servers — the connection is half-broken. Forget or reconnect to the network in Wi-Fi settings.",
         )
         is DiagnosticReport.DnsHijack,
         is DiagnosticReport.HttpsOnlyCaptive,

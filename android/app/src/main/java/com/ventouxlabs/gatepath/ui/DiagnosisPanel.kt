@@ -95,6 +95,8 @@ private fun headline(report: DiagnosticReport): String = when (report) {
         "Captive portal is blocking HTTPS"
     is DiagnosticReport.CellularFallback ->
         "Cellular is masking the captive WiFi state"
+    is DiagnosticReport.NoDnsServers ->
+        "The network gave no DNS servers"
     is DiagnosticReport.Inconclusive ->
         "Couldn't pinpoint the issue automatically"
     is DiagnosticReport.Healthy ->
@@ -115,6 +117,8 @@ private fun intentFor(actionId: String): Intent? = when (actionId) {
         Intent(Settings.ACTION_WIFI_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
     RecommendedAction.Ids.DISABLE_CELLULAR ->
         Intent(Settings.ACTION_DATA_ROAMING_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    RecommendedAction.Ids.RECONNECT_NETWORK ->
+        Intent(Settings.ACTION_WIFI_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
     else -> null
 }
 
@@ -123,6 +127,7 @@ private fun buttonLabel(actionId: String): String = when (actionId) {
     RecommendedAction.Ids.PAUSE_VPN -> "Open VPN settings"
     RecommendedAction.Ids.DISABLE_HTTP_PROXY -> "Open Wi-Fi settings"
     RecommendedAction.Ids.DISABLE_CELLULAR -> "Open Cellular settings"
+    RecommendedAction.Ids.RECONNECT_NETWORK -> "Open Wi-Fi settings"
     else -> "Open Settings"
 }
 

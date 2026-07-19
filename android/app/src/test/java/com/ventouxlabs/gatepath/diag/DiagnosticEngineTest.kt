@@ -145,4 +145,20 @@ class DiagnosticEngineTest {
         val result = engine.run(noopCtx)
         assertTrue("expected PrivateDnsBlocking to win over Inconclusive", result.top is DiagnosticReport.PrivateDnsBlocking)
     }
+
+    @Test
+    fun `NoDnsServers outranks PrivateDnsBlocking and recommends reconnect`() = runBlocking {
+        val engine = DiagnosticEngine(
+            probes = listOf(
+                probe("dns", DiagnosticReport.PrivateDnsBlocking("dns.example")),
+                probe("nodns", DiagnosticReport.NoDnsServers),
+            ),
+        )
+        val result = engine.run(noopCtx)
+        assertEquals(DiagnosticReport.NoDnsServers, result.top)
+        assertEquals(
+            RecommendedAction.Ids.RECONNECT_NETWORK,
+            (result.recommended as RecommendedAction.UserAction).id,
+        )
+    }
 }

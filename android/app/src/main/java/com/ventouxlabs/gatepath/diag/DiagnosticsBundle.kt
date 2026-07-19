@@ -135,6 +135,8 @@ object DiagnosticsBundle {
             "HttpsOnlyCaptive(${r.httpsErrorMessage})"
         is DiagnosticReport.CellularFallback ->
             "CellularFallback(validated=${r.cellularValidated})"
+        is DiagnosticReport.NoDnsServers ->
+            "NoDnsServers"
         is DiagnosticReport.Inconclusive ->
             "Inconclusive(errors=${r.probeErrors.joinToString("; ")})"
     }
