@@ -120,6 +120,10 @@ private fun headline(report: DiagnosticReport): String = when (report) {
         "Cellular is masking the captive WiFi state"
     is DiagnosticReport.NoDnsServers ->
         "The network gave no DNS servers"
+    is DiagnosticReport.PortalRedirectLoop ->
+        "The sign-in page is stuck in a redirect loop"
+    is DiagnosticReport.ClockSkew ->
+        "Your device clock is wrong"
     is DiagnosticReport.Inconclusive ->
         "Couldn't pinpoint the issue automatically"
     is DiagnosticReport.Healthy ->
@@ -142,6 +146,8 @@ private fun intentFor(actionId: String): Intent? = when (actionId) {
         Intent(Settings.ACTION_DATA_ROAMING_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
     RecommendedAction.Ids.RECONNECT_NETWORK ->
         Intent(Settings.ACTION_WIFI_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    RecommendedAction.Ids.OPEN_DATE_TIME_SETTINGS ->
+        Intent(Settings.ACTION_DATE_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
     else -> null
 }
 
@@ -151,6 +157,7 @@ private fun buttonLabel(actionId: String): String = when (actionId) {
     RecommendedAction.Ids.DISABLE_HTTP_PROXY -> "Open Wi-Fi settings"
     RecommendedAction.Ids.DISABLE_CELLULAR -> "Open Cellular settings"
     RecommendedAction.Ids.RECONNECT_NETWORK -> "Open Wi-Fi settings"
+    RecommendedAction.Ids.OPEN_DATE_TIME_SETTINGS -> "Open Date & time settings"
     else -> "Open Settings"
 }
 

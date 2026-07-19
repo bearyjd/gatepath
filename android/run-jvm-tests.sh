@@ -132,6 +132,7 @@ MAIN_SOURCES=(
     "$SRC_MAIN/com/ventouxlabs/gatepath/ui/WebViewHostMatching.kt"
     "$SRC_MAIN/com/ventouxlabs/gatepath/network/VpnHeuristics.kt"
     "$SRC_MAIN/com/ventouxlabs/gatepath/network/BoundedReader.kt"
+    "$SRC_MAIN/com/ventouxlabs/gatepath/network/HttpFetcher.kt"
     "$SRC_MAIN/com/ventouxlabs/gatepath/diag/DiagnosticReport.kt"
     "$SRC_MAIN/com/ventouxlabs/gatepath/diag/RecommendedAction.kt"
     "$SRC_MAIN/com/ventouxlabs/gatepath/diag/ProbeContext.kt"
@@ -143,6 +144,10 @@ MAIN_SOURCES=(
     "$SRC_MAIN/com/ventouxlabs/gatepath/diag/HttpProxyProbe.kt"
     "$SRC_MAIN/com/ventouxlabs/gatepath/diag/NoDnsProbe.kt"
     "$SRC_MAIN/com/ventouxlabs/gatepath/diag/CellularFallbackProbe.kt"
+    "$SRC_MAIN/com/ventouxlabs/gatepath/diag/RedirectLoopProbe.kt"
+    "$SRC_MAIN/com/ventouxlabs/gatepath/diag/ClockSkewProbe.kt"
+    "$SRC_MAIN/com/ventouxlabs/gatepath/diag/HttpsOnlyProbe.kt"
+    "$SRC_MAIN/com/ventouxlabs/gatepath/diag/DnsHijackProbe.kt"
     "$SRC_MAIN/com/ventouxlabs/gatepath/diag/DiagnosticsBundle.kt"
     "$SRC_MAIN/com/ventouxlabs/gatepath/BindWatchdog.kt"
 )
@@ -202,6 +207,7 @@ TEST_SOURCES=(
     "$SRC_TEST/com/ventouxlabs/gatepath/AuditLogTest.kt"
     "$SRC_TEST/com/ventouxlabs/gatepath/AuditSchemaParityTest.kt"
     "$SRC_TEST/com/ventouxlabs/gatepath/PortalProbeTest.kt"
+    "$SRC_TEST/com/ventouxlabs/gatepath/HttpFetcherTest.kt"
     "$SRC_TEST/com/ventouxlabs/gatepath/WebViewHostMatchingTest.kt"
     "$SRC_TEST/com/ventouxlabs/gatepath/BindWatchdogTest.kt"
     "$SRC_TEST/com/ventouxlabs/gatepath/VpnHeuristicsTest.kt"
@@ -214,6 +220,10 @@ TEST_SOURCES=(
     "$SRC_TEST/com/ventouxlabs/gatepath/diag/HttpProxyProbeTest.kt"
     "$SRC_TEST/com/ventouxlabs/gatepath/diag/NoDnsProbeTest.kt"
     "$SRC_TEST/com/ventouxlabs/gatepath/diag/CellularFallbackProbeTest.kt"
+    "$SRC_TEST/com/ventouxlabs/gatepath/diag/RedirectLoopProbeTest.kt"
+    "$SRC_TEST/com/ventouxlabs/gatepath/diag/ClockSkewProbeTest.kt"
+    "$SRC_TEST/com/ventouxlabs/gatepath/diag/HttpsOnlyProbeTest.kt"
+    "$SRC_TEST/com/ventouxlabs/gatepath/diag/DnsHijackProbeTest.kt"
     "$SRC_TEST/com/ventouxlabs/gatepath/diag/DiagnosticsBundleTest.kt"
 )
 

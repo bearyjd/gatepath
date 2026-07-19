@@ -161,4 +161,32 @@ class DiagnosticEngineTest {
             (result.recommended as RecommendedAction.UserAction).id,
         )
     }
+
+    @Test
+    fun `redirect loop outranks clock skew and both recommend actions`() = runBlocking {
+        val engine = DiagnosticEngine(
+            probes = listOf(
+                probe("skew", DiagnosticReport.ClockSkew(skewSeconds = 900)),
+                probe("loop", DiagnosticReport.PortalRedirectLoop(chain = listOf("http://p/a", "http://p/b", "http://p/a"))),
+            ),
+        )
+        val result = engine.run(noopCtx)
+        assertTrue(result.top is DiagnosticReport.PortalRedirectLoop)
+        assertEquals(
+            RecommendedAction.Ids.RECONNECT_NETWORK,
+            (result.recommended as RecommendedAction.UserAction).id,
+        )
+    }
+
+    @Test
+    fun `clock skew recommends opening date-time settings`() = runBlocking {
+        val engine = DiagnosticEngine(
+            probes = listOf(probe("skew", DiagnosticReport.ClockSkew(skewSeconds = 900))),
+        )
+        val result = engine.run(noopCtx)
+        assertEquals(
+            RecommendedAction.Ids.OPEN_DATE_TIME_SETTINGS,
+            (result.recommended as RecommendedAction.UserAction).id,
+        )
+    }
 }

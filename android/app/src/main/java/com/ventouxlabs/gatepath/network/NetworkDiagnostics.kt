@@ -75,4 +75,13 @@ data class NetworkDiagnostics(
      * the captive WiFi state entirely.
      */
     val hasValidatedCellular: Boolean,
+
+    /**
+     * `true` when the userspace fallback probe returned 204 — i.e. the
+     * device's default route reaches the internet without passing through
+     * the captive gateway (VPN tunnel or cellular). Diagnostic probes that
+     * need to interrogate the captive network itself cannot do so in this
+     * state, and say so rather than reporting a result for the wrong path.
+     */
+    val defaultRouteBypassesCaptive: Boolean,
 )

@@ -36,11 +36,68 @@ session**.
 - Every session is written to an append-only audit log
   (see [AUDIT_LOG_SCHEMA.md](AUDIT_LOG_SCHEMA.md)).
 
+## What Gatepath itself sends
+
+Everything above describes traffic Gatepath *prevents*. This section is the converse:
+requests Gatepath originates on your behalf. Neither kind is the portal page.
+
+**1. The connectivity probe.** One HTTP GET to a connectivity-check endpoint
+(`connectivitycheck.gstatic.com` on Android, `connectivity-check.ubuntu.com` on desktop)
+to decide whether a network is captive. Debug builds may retarget it so the e2e harness
+can aim at a mock (`AppModule.resolveProbeUrl`); release builds never do.
+
+**2. The diagnostic battery** (Android only today; the desktop mirror is planned and must
+land under this same section). Runs only when a network is flagged captive-suspected and
+sign-in is stuck — never on a healthy network. Of the ten probes, five read cached state
+and send nothing at all. The other five issue, at most:
+
+- one GET re-running the connectivity check (`HttpProbe`)
+- up to 5 GETs following the portal's own redirect chain (`RedirectLoopProbe`)
+- one GET re-running the connectivity check, and — only if that one validates — a second
+  GET to the HTTPS variant of the probe URL (`HttpsOnlyProbe`)
+- one GET whose `Date` response header is compared against the device clock
+  (`ClockSkewProbe`)
+- one system-resolver lookup of the connectivity-check host, plus **one DNS-over-HTTPS
+  query to `1.1.1.1`** naming that same host (`DnsHijackProbe`); the two answers are
+  compared to detect a gateway hijacking DNS beyond the probe endpoints
+
+> **The DoH query is the one disclosure to a party that captive-portal detection does not
+> already require.** Cloudflare learns your current IP and that you resolved the
+> connectivity-check hostname: in practice, that a device at that address is behind a
+> captive portal right now. No device, user, SSID, or portal identifier is attached.
+>
+> It is not Gatepath's only third-party contact — the connectivity probe in §1 above
+> reaches Google's `connectivitycheck.gstatic.com`, as the operating system's own captive
+> check does. The difference is that the probe is inherent to detecting a portal at all,
+> while the DoH query is an additional party contacted for one specific diagnosis. It is
+> the price of detecting DNS hijack: the comparison is only meaningful against a resolver
+> the captive gateway does not control.
+>
+> The IP literal (`1.1.1.1`, not `cloudflare-dns.com`) is deliberate: a hostname would be
+> resolved by the very resolver under suspicion, and a fully-hijacking gateway would
+> answer it with itself, silently blinding the check.
+
+**Routing — diagnostic requests are not bound to the captive network.** Unlike the portal
+WebView and the connectivity probe, the diagnostic battery issues its requests on the
+device's **default route**. This is causal, not incidental: the battery only runs after the
+bound path has already failed, and part of its job is to test whether the *unbound* path
+works now (for example, because you just paused your VPN). The consequence is that when
+your default route is a VPN tunnel or cellular, these requests — including the DoH query —
+travel that path rather than the captive Wi-Fi.
+
+Where that would make a probe's answer meaningless, the probe declines rather than
+guessing: if the fallback probe proves the default route reaches the internet without
+passing through the captive gateway, `RedirectLoopProbe`, `HttpsOnlyProbe`, and
+`DnsHijackProbe` report *inconclusive* and send nothing at all, instead of reporting a
+clean result for a network they never touched.
+
 ## Android-specific guarantees
 
-- All probe and WebView traffic is bound to the captive portal `Network` object via
-  `ConnectivityManager.bindProcessToNetwork()`, scoping it to the WiFi/Ethernet interface
-  that NetworkManager flagged as captive.
+- All **portal-session** traffic — the WebView and the connectivity probe — is bound to the
+  captive portal `Network` object via `ConnectivityManager.bindProcessToNetwork()`, scoping
+  it to the WiFi/Ethernet interface flagged as captive. Gatepath's *diagnostic* requests are
+  deliberately unbound and are not portal-session traffic; see
+  [What Gatepath itself sends](#what-gatepath-itself-sends) for what they are and why.
 
 > This is proven by an eval, not just asserted: the `tests/e2e-android` no-leak
 > sentinel runs a debug-only `VpnService` as the system default network and fails
@@ -186,3 +243,7 @@ portal-window banner.
 | Portal page navigating to off-domain phishing pages | **Partial** — allowed (captive vendors POST sign-in forms cross-host); observed + counted; 10-minute session window caps the exposure |
 | Operator-network attacker exploiting WebView vulns | Out (mitigated by platform updates) |
 | Bug in Gatepath's own state machine leaving session open | In — auto-timeout caps exposure at 10 min |
+| Connectivity-check host (Google/Canonical) learning a device is probing | Out (inherent — the OS's own captive check contacts the same endpoint) |
+| Third party (Cloudflare) learning a device is behind a captive portal | **Out — accepted cost**: one DoH query per diagnostic run, no identifiers attached; see [What Gatepath itself sends](#what-gatepath-itself-sends) |
+| Portal operator observing Gatepath's own diagnostic requests | Out (unavoidable — diagnosing a portal means talking to it) |
+| Diagnostic requests travelling the VPN/cellular default route | **In scope — accepted and bounded**: documented above; probes whose answer would be meaningless on that route decline and send nothing. Not covered by the no-leak sentinel, which proves confinement of the *portal session*, not the diagnostic battery |

@@ -5,6 +5,7 @@ These must pass before either platform is allowed to depend on the server.
 
 from __future__ import annotations
 
+import email.utils
 import json
 import threading
 import time
@@ -27,14 +28,19 @@ def _free_port() -> int:
 
 
 @contextmanager
-def _serve(*, leak_sentinel: str = "") -> Iterator[str]:
+def _serve(*, leak_sentinel: str = "", date_skew_seconds: int = 0) -> Iterator[str]:
     """Run a mock portal on a free loopback port; yield its base URL.
 
     leak_sentinel is threaded through build_server so a test can drive the
-    /portal sentinel injection without reloading the module."""
+    /portal sentinel injection without reloading the module. date_skew_seconds
+    is threaded through the same way for the Date-header skew tests."""
     port = _free_port()
     server, _ = build_server(
-        host="127.0.0.1", port=port, complete_after=3, leak_sentinel=leak_sentinel
+        host="127.0.0.1",
+        port=port,
+        complete_after=3,
+        leak_sentinel=leak_sentinel,
+        date_skew_seconds=date_skew_seconds,
     )
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -179,3 +185,27 @@ def test_portal_unchanged_when_sentinel_unset() -> None:
         body = resp.read().decode("utf-8")
         assert "18081" not in body
         assert body == PORTAL_HTML
+
+
+def test_loop_endpoints_redirect_to_each_other(portal: str) -> None:
+    resp_a = _open(f"{portal}/loop-a")
+    assert resp_a.status == 302
+    assert resp_a.headers["Location"] == f"{portal}/loop-b"
+    resp_b = _open(f"{portal}/loop-b")
+    assert resp_b.status == 302
+    assert resp_b.headers["Location"] == f"{portal}/loop-a"
+
+
+def test_date_skew_env_offsets_date_header() -> None:
+    # A 15-minute (900s) skew should push the automatic Date header ~900s
+    # into the future relative to wall-clock time.
+    with _serve(date_skew_seconds=900) as base:
+        resp = _open(f"{base}/generate_204")
+        server_date = email.utils.parsedate_to_datetime(resp.headers["Date"]).timestamp()
+        assert abs(server_date - (time.time() + 900)) < 60
+
+
+def test_no_skew_by_default(portal: str) -> None:
+    resp = _open(f"{portal}/generate_204")
+    server_date = email.utils.parsedate_to_datetime(resp.headers["Date"]).timestamp()
+    assert abs(server_date - time.time()) < 60
