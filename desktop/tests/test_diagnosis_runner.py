@@ -139,6 +139,67 @@ def test_context_builder_exception_becomes_inconclusive() -> None:
     assert any("context boom" in err for err in arg.top.probe_errors)
 
 
+def test_interface_resolver_runs_on_the_worker_and_feeds_the_context() -> None:
+    """When an ``interface_resolver`` is given it is called on the worker
+    thread (not the caller's) and its return value is what the context builder
+    receives — this is how the blocking D-Bus lookup is kept off the main loop.
+    """
+    engine = _FakeEngine(_healthy_result())
+    seen_interface: List[str] = []
+    resolver_thread: List[str] = []
+
+    def resolver() -> str:
+        resolver_thread.append(threading.current_thread().name)
+        return "resolved-wlan1"
+
+    def context_builder(interface_name: str) -> object:
+        seen_interface.append(interface_name)
+        return object()
+
+    dispatch = _RecordingDispatch()
+
+    diagnosis_runner.run_diagnostics_async(
+        None,
+        lambda _r: None,
+        interface_resolver=resolver,
+        engine_factory=lambda: engine,
+        context_builder=context_builder,
+        dispatch=dispatch,
+    )
+
+    assert dispatch.called.wait(timeout=5.0), "worker never dispatched a result"
+    # The resolver's value reached the context builder...
+    assert seen_interface == ["resolved-wlan1"]
+    # ...and it ran on the runner's own daemon worker, not the test thread.
+    assert resolver_thread == [diagnosis_runner._THREAD_NAME]
+
+
+def test_interface_resolver_failure_becomes_inconclusive() -> None:
+    """A resolver that raises (e.g. NM unreachable) degrades like any other
+    worker failure rather than killing the thread or dropping the result.
+    """
+
+    def failing_resolver() -> str:
+        raise OSError("dbus down")
+
+    dispatch = _RecordingDispatch()
+
+    diagnosis_runner.run_diagnostics_async(
+        None,
+        lambda _r: None,
+        interface_resolver=failing_resolver,
+        engine_factory=lambda: _FakeEngine(_healthy_result()),
+        context_builder=lambda name: object(),
+        dispatch=dispatch,
+    )
+
+    assert dispatch.called.wait(timeout=5.0), "worker never dispatched a result"
+    _callback, arg = dispatch.calls[0]
+    assert isinstance(arg, DiagnosisResult)
+    assert arg.top.cause is Cause.INCONCLUSIVE
+    assert any("dbus down" in err for err in arg.top.probe_errors)
+
+
 def test_dispatch_receives_the_on_result_continuation() -> None:
     result = _healthy_result()
     dispatch = _RecordingDispatch()

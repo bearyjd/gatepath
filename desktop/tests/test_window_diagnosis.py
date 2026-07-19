@@ -23,7 +23,11 @@ from gatepath.diag.report import (
     VpnBlocking,
 )
 from gatepath.portal_monitor import CaptiveInterfaceLookup
-from gatepath.window import resolve_interface_name, vpn_labels_from_result
+from gatepath.window import (
+    _begin_diagnostics_run,
+    resolve_interface_name,
+    vpn_labels_from_result,
+)
 
 
 class _StubLookup(CaptiveInterfaceLookup):
@@ -84,6 +88,54 @@ def test_vpn_labels_empty_for_inconclusive_top() -> None:
     assert vpn_labels_from_result(_result(top)) == []
 
 
+# ── _begin_diagnostics_run (click control flow, gi-free) ───────────────
+
+
+class _FakeButton:
+    """Minimal stand-in for the run Gtk.Button."""
+
+    def __init__(self) -> None:
+        self.sensitive = True
+
+    def set_sensitive(self, value: bool) -> None:
+        self.sensitive = value
+
+
+def test_begin_run_disables_button_before_dispatch() -> None:
+    """The button is disabled synchronously so a second click can't launch a
+    concurrent run — the double-fire guard, tested without a live display.
+    """
+    button = _FakeButton()
+    calls: list = []
+
+    def fake_runner(interface_name, on_result, *, interface_resolver):
+        # The button must already be disabled by the time the runner is called.
+        assert button.sensitive is False
+        calls.append((interface_name, on_result, interface_resolver))
+
+    _begin_diagnostics_run(button, None, lambda _r: None, runner=fake_runner)
+
+    assert button.sensitive is False
+    assert len(calls) == 1
+    interface_name, _on_result, resolver = calls[0]
+    # Interface is resolved lazily (None passed directly) via a resolver...
+    assert interface_name is None
+    # ...and that resolver, when the worker calls it, uses resolve_interface_name.
+    assert resolver() == "(default route)"
+
+
+def test_begin_run_resolver_uses_the_lookup() -> None:
+    button = _FakeButton()
+    captured: list = []
+
+    def fake_runner(interface_name, on_result, *, interface_resolver):
+        captured.append(interface_resolver)
+
+    _begin_diagnostics_run(button, _StubLookup("wlan3"), lambda _r: None, runner=fake_runner)
+
+    assert captured[0]() == "wlan3"
+
+
 # ── live-window path (GTK-capable hosts only) ──────────────────────────
 
 
@@ -119,3 +171,11 @@ def test_on_diagnosis_result_drives_banner_and_panel() -> None:
     window._on_diagnosis_result(_result(Healthy()))
     assert window._vpn_banner.get_revealed() is False
     assert window._diagnosis_panel is first_panel
+
+    # Once the window is marked closed, a late in-flight continuation no-ops
+    # instead of touching (possibly disposed) widgets: a VPN result now must
+    # NOT reveal the banner.
+    window._on_close_request(window)
+    assert window._alive is False
+    window._on_diagnosis_result(_result(vpn))
+    assert window._vpn_banner.get_revealed() is False

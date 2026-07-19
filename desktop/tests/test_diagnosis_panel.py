@@ -35,6 +35,7 @@ from gatepath.diag.report import (
     VpnBlocking,
 )
 from gatepath.ui.diagnosis_panel import (
+    _safe_markup,
     cause_label,
     check_status,
     report_detail,
@@ -132,6 +133,28 @@ def test_report_detail_preserves_raw_markup_chars() -> None:
     """
     detail = report_detail(HttpsOnlyCaptive(https_error_message="<urlopen error boom>"))
     assert "<urlopen error boom>" in detail
+
+
+# ── _safe_markup (the escaping the panel applies at the subtitle boundary) ──
+
+
+def test_safe_markup_escapes_angle_brackets() -> None:
+    # The exact failure the fix targets: a urllib error string as a subtitle.
+    assert _safe_markup("<urlopen error [Errno -2]>") == "&lt;urlopen error [Errno -2]&gt;"
+
+
+def test_safe_markup_escapes_ampersand() -> None:
+    assert _safe_markup("a & b") == "a &amp; b"
+
+
+def test_safe_markup_leaves_quotes_untouched() -> None:
+    # Subtitles are Pango *element* text, not attribute values, so quotes need
+    # no escaping — and over-escaping them would render literal &#x27; to users.
+    assert _safe_markup("it's \"fine\"") == "it's \"fine\""
+
+
+def test_safe_markup_is_a_noop_for_plain_text() -> None:
+    assert _safe_markup("Interface tun0 (full-tunnel)") == "Interface tun0 (full-tunnel)"
 
 
 def test_clock_skew_detail_reports_minutes() -> None:

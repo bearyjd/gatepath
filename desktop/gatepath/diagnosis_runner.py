@@ -17,7 +17,7 @@ tested with no GTK and no network.
 from __future__ import annotations
 
 import threading
-from typing import Callable
+from typing import Callable, Optional
 
 from gatepath.diag.engine import DiagnosisResult
 from gatepath.diag.report import Inconclusive, NO_ACTION
@@ -46,22 +46,32 @@ def _inconclusive_result(exc: BaseException) -> DiagnosisResult:
 
 
 def run_diagnostics_async(
-    interface_name: str,
+    interface_name: Optional[str],
     on_result: Callable[[DiagnosisResult], None],
     *,
+    interface_resolver: Optional[Callable[[], str]] = None,
     engine_factory: Callable[[], object] = default_engine,
     context_builder: Callable[[str], object] = build_probe_context,
     dispatch: Dispatch | None = None,
 ) -> None:
-    """Run the diagnostic battery for *interface_name* on a daemon thread and
-    deliver its ``DiagnosisResult`` to *on_result* on the GTK main loop.
+    """Run the diagnostic battery on a daemon thread and deliver its
+    ``DiagnosisResult`` to *on_result* on the GTK main loop.
+
+    The interface label is either passed directly (*interface_name*) or
+    produced lazily by *interface_resolver* **on the worker thread**. The
+    resolver exists because resolving the captive interface can mean blocking
+    D-Bus round-trips (``NMCaptiveInterfaceLookup``); running it here keeps
+    that I/O off the GTK main loop, which is the whole point of this seam.
+    When *interface_resolver* is given it wins; otherwise *interface_name* is
+    used as-is.
 
     The worker builds a probe context (``context_builder``), runs the engine
     (``engine_factory().run(ctx)``), and hands the result back via *dispatch*
     — which defaults to ``GLib.idle_add`` (imported lazily so this module
-    stays importable without PyGObject). Any exception raised while building
-    the context or running the engine is converted to an ``Inconclusive``
-    result and delivered through the same path; the worker never raises.
+    stays importable without PyGObject). Any exception raised while resolving
+    the interface, building the context, or running the engine is converted to
+    an ``Inconclusive`` result and delivered through the same path; the worker
+    never raises.
     """
     if dispatch is None:
         from gi.repository import GLib  # Lazy: keeps the module gi-free to import.
@@ -75,7 +85,8 @@ def run_diagnostics_async(
 
     def _worker() -> None:
         try:
-            ctx = context_builder(interface_name)
+            name = interface_resolver() if interface_resolver is not None else interface_name
+            ctx = context_builder(name)
             result = engine_factory().run(ctx)
         except Exception as exc:  # noqa: BLE001 — any failure becomes Inconclusive.
             # Deliberately Exception, not BaseException: KeyboardInterrupt /

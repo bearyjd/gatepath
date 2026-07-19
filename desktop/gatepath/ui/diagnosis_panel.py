@@ -22,6 +22,7 @@ crashes on a report shape — every branch has a benign fallback.
 
 from __future__ import annotations
 
+import html
 from typing import TYPE_CHECKING
 
 from gatepath.diag.report import (
@@ -106,6 +107,24 @@ def report_detail(report: DiagnosticReport) -> str:
     return ""
 
 
+def _safe_markup(text: str) -> str:
+    """Escape *text* for use as Adw row title/subtitle (Pango markup).
+
+    Adw rows render titles/subtitles as Pango markup, so network-derived text
+    (urllib error strings like ``<urlopen error ...>``, DoH answers) must be
+    escaped or its literal ``<``/``>``/``&`` are malformed markup — a
+    GLib-CRITICAL and a blank row on an *ordinary* HTTPS failure.
+
+    ``html.escape(quote=False)`` escapes exactly ``&``, ``<``, ``>`` — the
+    complete set for Pango *element* text (subtitles are element text, not
+    attribute values, so ``'``/``"`` need no escaping). Kept as a pure,
+    gi-free function so the escaping the panel depends on is unit-testable
+    headless, without a GTK host — rather than calling ``GLib.markup_escape_text``
+    only inside the widget, where CI (no GTK) never exercises it.
+    """
+    return html.escape(text, quote=False)
+
+
 def check_status(cause: Cause) -> str:
     """Pass/fail/inconclusive verdict for a single check's cause.
 
@@ -139,7 +158,7 @@ try:
 
     gi.require_version("Gtk", "4.0")
     gi.require_version("Adw", "1")
-    from gi.repository import Adw, GLib, Gtk  # type: ignore[import-untyped]
+    from gi.repository import Adw, Gtk  # type: ignore[import-untyped]
 
     class DiagnosisPanel(Adw.Bin):
         """Renders a `DiagnosisResult` into a widget tree.
@@ -186,11 +205,10 @@ try:
             # subtitle stays empty even if a stray instruction were present.
             instruction = None if is_healthy else result.recommended.instruction
             if instruction:
-                # Adw rows render subtitles as Pango markup. The instruction is
-                # engine-authored constant text today, but escape it anyway so
-                # this stays safe if a future instruction interpolates
-                # network-derived text (matching the check-row escaping below).
-                row.set_subtitle(GLib.markup_escape_text(instruction))
+                # Escape defensively (see _safe_markup): the instruction is
+                # engine-authored constant text today, but a future one may
+                # interpolate network-derived text, matching the check rows.
+                row.set_subtitle(_safe_markup(instruction))
                 row.set_subtitle_lines(0)
 
             group.add(row)
@@ -221,12 +239,9 @@ try:
             row.set_title(check.probe_name)
             detail = report_detail(check.report)
             if detail:
-                # Adw rows render subtitles as Pango markup. Probe details carry
-                # network-derived text (urllib error strings like
-                # "<urlopen error ...>", DoH answers) whose literal '<'/'>' are
-                # malformed markup — escape so an ordinary HTTPS failure renders
-                # as text instead of triggering a GLib-CRITICAL and a blank row.
-                row.set_subtitle(GLib.markup_escape_text(detail))
+                # Escape network-derived probe text before it hits the Pango
+                # markup renderer (see _safe_markup).
+                row.set_subtitle(_safe_markup(detail))
                 row.set_subtitle_lines(0)
 
             badge = Gtk.Label(label=_STATUS_LABELS.get(status, status.title()))
