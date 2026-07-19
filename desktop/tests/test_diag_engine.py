@@ -79,8 +79,15 @@ def test_no_dns_outranks_http_proxy() -> None:
 
 
 def test_checks_carry_probe_names_in_probe_list_order() -> None:
+    # The first probe in the list is deliberately the slower one, so
+    # completion order (ok finishes first) provably diverges from list
+    # order (vpn, ok). An implementation that built `checks` from
+    # completion order rather than list order would fail this.
     engine = DiagnosticEngine(
-        [StubProbe("vpn", VpnBlocking(interface_name="tun0", is_full_tunnel=True)), StubProbe("ok", Healthy())]
+        [
+            StubProbe("vpn", VpnBlocking(interface_name="tun0", is_full_tunnel=True), delay=0.3),
+            StubProbe("ok", Healthy()),
+        ]
     )
     result = engine.run(NOOP_CTX)
     assert [c.probe_name for c in result.checks] == ["vpn", "ok"]
@@ -111,3 +118,23 @@ def test_inconclusive_ranks_below_every_real_finding() -> None:
     engine = DiagnosticEngine([ExplodingProbe(), StubProbe("proxy", HttpProxyBlocking(description="p:3128"))])
     result = engine.run(NOOP_CTX)
     assert result.top.cause is Cause.HTTP_PROXY_BLOCKING
+
+
+def test_run_returns_well_before_a_hung_probe_finishes() -> None:
+    # Proves the budget is a real wall-clock ceiling on run(), not just on
+    # the reported result: a probe sleeping far past the total budget must
+    # not make run() block for anywhere near the sleep duration. Against the
+    # old `with ThreadPoolExecutor(...) as pool:` form, shutdown(wait=True)
+    # in __exit__ would block until the sleep finished, so this test fails
+    # (times out around 3s) on the pre-fix code.
+    engine = DiagnosticEngine(
+        [StubProbe("hung", Healthy(), delay=3.0)],
+        total_budget_seconds=0.3,
+        per_probe_budget_seconds=0.3,
+    )
+    start = time.monotonic()
+    result = engine.run(NOOP_CTX)
+    elapsed = time.monotonic() - start
+    assert elapsed < 1.5, f"run() took {elapsed:.2f}s; budget should have bounded it"
+    hung = next(c for c in result.checks if c.probe_name == "hung")
+    assert hung.report.cause is Cause.INCONCLUSIVE

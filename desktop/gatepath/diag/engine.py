@@ -1,8 +1,15 @@
 """Orchestrator for the desktop diagnostic battery.
 
-Mirror of Android `DiagnosticEngine.kt`, including its budgets (D3: 5s total,
-2s per probe) and its severity table. [_RANK] is the single source of truth
-for ordering — the UI renders, it must never re-rank.
+Shares its budgets (D3: 5s total, 2s per probe) and severity table with
+Android `DiagnosticEngine.kt`, but the budget *mechanism* does not mirror it.
+Kotlin applies `withTimeout(perProbeBudgetMs)` to each probe individually via
+coroutine cancellation, so its worst case is ~2s regardless of probe count.
+This engine instead computes a single aggregate deadline — the smaller of
+the total budget and (per-probe budget * probe count) — that scales with
+probe count, because Python threads cannot be cancelled the way coroutines
+can; see the class docstring for what that means for hung probes. [_RANK]
+is the single source of truth for ordering — the UI renders, it must never
+re-rank.
 
 Concurrency is a stdlib thread pool rather than asyncio: the repo's desktop
 code is threading-based throughout (`portal_monitor.Monitor`,
@@ -107,7 +114,16 @@ def _recommended_action_for(report: DiagnosticReport) -> RecommendedAction:
 
 
 class DiagnosticEngine:
-    """Runs probes concurrently under a wall-clock budget, then ranks them."""
+    """Runs probes concurrently under a wall-clock budget, then ranks them.
+
+    The wall-clock budget bounds how long `run()` *waits*, not how long a
+    probe thread actually runs. Python cannot kill a thread: probes that
+    overrun the deadline are abandoned, not cancelled. They keep running in
+    the background and their eventual results are discarded. This is why
+    every I/O capability injected through `ProbeContext` must carry its own
+    timeout — the engine bounds the caller's wait, not the probe's
+    lifetime.
+    """
 
     def __init__(
         self,
@@ -125,10 +141,19 @@ class DiagnosticEngine:
 
         reports: list[DiagnosticReport] = [Healthy()] * len(self._probes)
 
-        with concurrent.futures.ThreadPoolExecutor(
+        # Not a `with` block: ThreadPoolExecutor.__exit__ calls
+        # shutdown(wait=True), which blocks until every submitted thread
+        # finishes — including ones already reported as timed out below.
+        # future.cancel() only works on futures that never started running,
+        # so a genuinely hung probe would make run() block indefinitely
+        # despite the deadline. shutdown(wait=False, cancel_futures=True) in
+        # the finally lets run() return as soon as the deadline passes;
+        # overrun threads are abandoned (see class docstring), not killed.
+        pool = concurrent.futures.ThreadPoolExecutor(
             max_workers=len(self._probes),
             thread_name_prefix="gatepath-diag",
-        ) as pool:
+        )
+        try:
             futures = {
                 pool.submit(probe.run, ctx): index
                 for index, probe in enumerate(self._probes)
@@ -146,7 +171,11 @@ class DiagnosticEngine:
                 name = self._probes[index].name
                 try:
                     reports[index] = future.result(timeout=0)
-                except Exception as exc:  # noqa: BLE001 — one probe must not kill the run
+                except Exception as exc:  # noqa: BLE001 — one probe must not kill the run.
+                    # Deliberately Exception, not BaseException: a
+                    # KeyboardInterrupt (or SystemExit) raised inside a probe
+                    # should propagate and tear down the process, not be
+                    # swallowed into an Inconclusive finding.
                     logger.warning("Probe %s failed: %s", name, exc)
                     reports[index] = Inconclusive(probe_errors=(f"{name}: {exc}",))
             for future in not_done:
@@ -154,6 +183,8 @@ class DiagnosticEngine:
                 name = self._probes[index].name
                 future.cancel()
                 reports[index] = Inconclusive(probe_errors=(f"{name}: exceeded the diagnostic budget",))
+        finally:
+            pool.shutdown(wait=False, cancel_futures=True)
 
         checks = tuple(
             ProbeCheck(probe_name=probe.name, report=reports[index])
