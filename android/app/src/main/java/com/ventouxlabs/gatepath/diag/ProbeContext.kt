@@ -1,5 +1,7 @@
 package com.ventouxlabs.gatepath.diag
 
+import com.ventouxlabs.gatepath.network.CONNECTIVITY_CHECK_URL
+import com.ventouxlabs.gatepath.network.HttpFetchResult
 import com.ventouxlabs.gatepath.network.ProbeResult
 
 /**
@@ -30,5 +32,23 @@ data class ProbeContext(
      * they're on the captive WiFi.
      */
     val hasValidatedCellular: Boolean = false,
+
+    /** URL the monitor's own connectivity probe uses (debug builds may override — see AppModule). */
+    val probeUrl: String = CONNECTIVITY_CHECK_URL,
+
+    /**
+     * Single no-follow GET over the captive network. Defaults to a stub so
+     * context-only test fixtures need not wire it; network probes treat the
+     * stub's error as Inconclusive-grade evidence, not a finding.
+     */
+    val httpFetch: suspend (url: String, accept: String?) -> HttpFetchResult =
+        { _, _ -> HttpFetchResult(null, null, null, null, "httpFetch not wired") },
+
+    /** System-resolver lookup (A/AAAA string forms); empty = resolution failed. */
+    val resolveHost: suspend (host: String) -> List<String> = { emptyList() },
+
+    /** Injectable clock for skew math in tests. */
+    val nowEpochMillis: () -> Long = System::currentTimeMillis,
+
     val activeProbe: suspend () -> ProbeResult,
 )
