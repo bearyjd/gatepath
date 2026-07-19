@@ -116,6 +116,15 @@ surface as an inconclusive row, never a crash or silent omission.
   explicit Android-only allowlist (and vice versa for desktop-only causes, if
   any).
 
+## Future work (recorded so it isn't forgotten)
+
+- **Desktop DoT/DoH detection (`PrivateDnsBlocking` on desktop):** detect
+  systemd-resolved DNS-over-TLS (`resolvectl status` → `DNSOverTLS=yes`) or a
+  DoH-configured resolver blocking portal DNS, and emit `PrivateDnsBlocking`
+  from a desktop `private_dns_probe`. When implemented, remove
+  `PrivateDnsBlocking` from the parity guard's Android-only allowlist. Out of
+  scope for this effort; gets its own plan.
+
 ## PR sequencing
 
 1. **Android context-only probes** (`VpnProbe`, `HttpProxyProbe`, `NoDnsProbe`,
