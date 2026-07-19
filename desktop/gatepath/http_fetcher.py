@@ -25,6 +25,7 @@ import urllib.request
 from typing import Optional
 
 from gatepath.diag.probe import HttpFetchResult
+from gatepath.no_follow_redirect import NoFollowRedirectHandler
 
 logger = logging.getLogger(__name__)
 
@@ -33,30 +34,6 @@ logger = logging.getLogger(__name__)
 _MAX_BODY_BYTES = 64 * 1024
 
 _DEFAULT_TIMEOUT_SECONDS = 2.0
-
-
-class _NoFollowRedirectHandler(urllib.request.HTTPRedirectHandler):
-    """Capture redirect Location without following it.
-
-    Same approach as portal_probe._NoFollowRedirectHandler: returning None
-    from redirect_request aborts the follow while still letting us see the
-    target URL.
-    """
-
-    def __init__(self) -> None:
-        self.redirect_location: Optional[str] = None
-
-    def redirect_request(  # type: ignore[override]
-        self,
-        req: urllib.request.Request,
-        fp: object,
-        code: int,
-        msg: str,
-        headers: object,
-        newurl: str,
-    ) -> None:
-        self.redirect_location = newurl
-        return None  # type: ignore[return-value]
 
 
 def _parse_date_header(value: Optional[str]) -> Optional[float]:
@@ -89,7 +66,7 @@ def fetch(
     carries a status code, headers, and (capped) body — it is reported as a
     normal result, not as an error.
     """
-    redirect_handler = _NoFollowRedirectHandler()
+    redirect_handler = NoFollowRedirectHandler()
     opener = urllib.request.build_opener(redirect_handler)
 
     headers = {"Accept": accept} if accept is not None else {}
@@ -99,7 +76,10 @@ def fetch(
         response = opener.open(request, timeout=timeout)
         try:
             status_code = response.getcode()
-            location = redirect_handler.redirect_location or response.headers.get("Location")
+            # A 3xx never reaches this branch — it goes through the
+            # HTTPError branch below — so redirect_handler.redirect_location
+            # is always None here; just read the header directly.
+            location = response.headers.get("Location")
             date_epoch_seconds = _parse_date_header(response.headers.get("Date"))
             body = _read_capped_body(response)
         finally:
