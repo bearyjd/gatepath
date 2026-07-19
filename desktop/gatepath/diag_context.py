@@ -21,6 +21,7 @@ from gatepath import http_fetcher, portal_probe, vpn_detector
 from gatepath.diag.clock_skew_probe import ClockSkewProbe
 from gatepath.diag.dns_hijack_probe import DnsHijackProbe
 from gatepath.diag.engine import DiagnosticEngine
+from gatepath.diag.http_probe import HttpProbe
 from gatepath.diag.http_proxy_probe import HttpProxyProbe
 from gatepath.diag.https_only_probe import HttpsOnlyProbe
 from gatepath.diag.no_dns_probe import NoDnsProbe
@@ -145,11 +146,12 @@ def build_probe_context(
 
 
 def default_engine() -> DiagnosticEngine:
-    """The seven-probe battery run against every diagnosed interface.
+    """The eight-probe battery run against every diagnosed interface.
 
     This is the single place probe membership is declared for desktop —
     mirrors Android's `DiagnosticModule`. Order here has no runtime meaning;
     `gatepath.diag.engine._RANK` is the sole source of truth for ranking.
+    `HttpProbe()` is last, matching Android's `DiagnosticModule` ordering.
     """
     return DiagnosticEngine(
         probes=(
@@ -160,5 +162,6 @@ def default_engine() -> DiagnosticEngine:
             RedirectLoopProbe(),
             ClockSkewProbe(),
             HttpsOnlyProbe(),
+            HttpProbe(),
         )
     )

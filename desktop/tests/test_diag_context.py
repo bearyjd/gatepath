@@ -268,5 +268,6 @@ def test_default_engine_declares_exactly_the_expected_probes() -> None:
         "redirect_loop",
         "clock_skew",
         "https_only",
+        "http",
     }
-    assert len(engine._probes) == 7  # type: ignore[attr-defined]
+    assert len(engine._probes) == 8  # type: ignore[attr-defined]
