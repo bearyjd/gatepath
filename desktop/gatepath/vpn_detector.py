@@ -113,10 +113,10 @@ def _classify_interface(
     return None
 
 
-def detect_vpn_interfaces(
+def detect_vpn_details(
     _open: Callable = urllib.request.urlopen,
-) -> list[str]:
-    """Return list of VPN interface labels in audit-log format.
+) -> list[VpnInterface]:
+    """Return structured VpnInterface entries for detected VPN interfaces.
 
     Uses socket.if_nameindex() to enumerate interfaces; injectable
     _open callable for Tailscale API queries.
@@ -127,11 +127,22 @@ def detect_vpn_interfaces(
         logger.warning("Could not enumerate network interfaces: %s", exc)
         return []
 
-    results: list[str] = []
+    results: list[VpnInterface] = []
     for _idx, name in interfaces:
         vpn = _classify_interface(name, _open)
         if vpn is not None:
             logger.info("VPN interface detected: %s", vpn.label())
-            results.append(vpn.label())
+            results.append(vpn)
 
     return results
+
+
+def detect_vpn_interfaces(
+    _open: Callable = urllib.request.urlopen,
+) -> list[str]:
+    """Return VPN interface labels in audit-log format.
+
+    Thin wrapper over [detect_vpn_details] — the label format is the
+    audit-log contract, so it stays defined in exactly one place.
+    """
+    return [vpn.label() for vpn in detect_vpn_details(_open)]
