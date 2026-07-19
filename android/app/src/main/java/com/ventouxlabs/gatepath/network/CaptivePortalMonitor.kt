@@ -179,6 +179,12 @@ class CaptivePortalMonitor(
                                 "default route returned 204 (probe went via a different network — likely VPN tunnel or cellular)"
                             else -> null
                         }
+                        // Validated here means the default route reached the
+                        // internet without meeting the captive gateway — so it
+                        // is not the captive network. A `Portal` result cannot
+                        // reach this branch (it returns above), so the two
+                        // remaining cases are Validated and Error, and only
+                        // Validated proves the bypass.
                         val defaultRouteBypassesCaptive =
                             fallbackResult is ProbeResult.Validated
                         val diagnostics = buildDiagnostics(
