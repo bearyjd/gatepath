@@ -11,8 +11,13 @@ Behavior:
   POST /login       -> marks the session authenticated, 302 to /generate_204.
   POST /reset       -> resets the counter, auth flag, and request log.
   GET /log          -> JSON array of all requests received (test assertions).
+  GET /loop-a       -> always 302 to /loop-b (stateless; models a redirect loop).
+  GET /loop-b       -> always 302 to /loop-a (stateless; models a redirect loop).
+  All responses     -> automatic Date header is offset by PORTAL_DATE_SKEW_SECONDS
+                        (default 0, i.e. inert — normal, unskewed header).
 
-Configurable via env: PORTAL_HOST, PORTAL_PORT, PORTAL_COMPLETE_AFTER (default 3).
+Configurable via env: PORTAL_HOST, PORTAL_PORT, PORTAL_COMPLETE_AFTER (default 3),
+PORTAL_DATE_SKEW_SECONDS (default 0).
 """
 
 from __future__ import annotations
@@ -20,6 +25,7 @@ from __future__ import annotations
 import json
 import os
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 
@@ -44,6 +50,10 @@ PORTAL_COMPLETE_AFTER = int(os.environ.get("PORTAL_COMPLETE_AFTER", "3"))
 # http://10.0.2.2:18081) the captive monitor never touches, making bound-phase
 # WebView traffic unambiguous in the VPN sink.
 PORTAL_LEAK_SENTINEL = os.environ.get("PORTAL_LEAK_SENTINEL", "")
+# Offsets the automatic Date header on every response by this many seconds, for
+# clock-skew diagnostics tests. Default 0 is inert: the header is byte-identical
+# to the stdlib's normal, unskewed Date header.
+PORTAL_DATE_SKEW_SECONDS = int(os.environ.get("PORTAL_DATE_SKEW_SECONDS", "0"))
 
 
 PORTAL_HTML = """<!doctype html>
@@ -106,15 +116,24 @@ class _State:
 
 
 def _make_handler(
-    state: _State, host: str, port: int, leak_sentinel: str
+    state: _State, host: str, port: int, leak_sentinel: str, date_skew_seconds: int
 ) -> type[BaseHTTPRequestHandler]:
     portal_url = f"http://{host}:{port}/portal"
     probe_url = f"http://{host}:{port}/generate_204"
+    loop_a_url = f"http://{host}:{port}/loop-a"
+    loop_b_url = f"http://{host}:{port}/loop-b"
 
     class Handler(BaseHTTPRequestHandler):
         # Silence default per-request stderr logging during tests.
         def log_message(self, format: str, *args: Any) -> None:  # noqa: A002
             return
+
+        def date_time_string(self, timestamp: float | None = None) -> str:
+            # Skew the automatic Date header for clock-skew diagnostics tests.
+            # With date_skew_seconds == 0 (the default) this is byte-identical
+            # to the stdlib's own date_time_string.
+            base = timestamp if timestamp is not None else time.time()
+            return super().date_time_string(base + date_skew_seconds)
 
         def _record(self, body: bytes | None = None) -> None:
             state.record(
@@ -172,6 +191,12 @@ def _make_handler(
                 payload = json.dumps(state.snapshot()).encode("utf-8")
                 self._send(200, payload, {"Content-Type": "application/json"})
                 return
+            if self.path.startswith("/loop-a"):
+                self._send(302, headers={"Location": loop_b_url})
+                return
+            if self.path.startswith("/loop-b"):
+                self._send(302, headers={"Location": loop_a_url})
+                return
             self._send(404, b"not found", {"Content-Type": "text/plain"})
 
         def do_POST(self) -> None:  # noqa: N802
@@ -196,11 +221,14 @@ def build_server(
     port: int = PORTAL_PORT,
     complete_after: int = PORTAL_COMPLETE_AFTER,
     leak_sentinel: str = PORTAL_LEAK_SENTINEL,
+    date_skew_seconds: int = PORTAL_DATE_SKEW_SECONDS,
 ) -> tuple[ThreadingHTTPServer, _State]:
     state = _State(complete_after)
     server = ThreadingHTTPServer((host, port), lambda *a, **kw: None)
     actual_host, actual_port = server.server_address[:2]
-    server.RequestHandlerClass = _make_handler(state, actual_host, actual_port, leak_sentinel)
+    server.RequestHandlerClass = _make_handler(
+        state, actual_host, actual_port, leak_sentinel, date_skew_seconds
+    )
     return server, state
 
 
