@@ -7,6 +7,7 @@ import pytest
 
 from gatepath.diag.probe import HttpFetchResult, ProbeContext, VpnDetail
 from gatepath.diag.report import Healthy
+from gatepath.portal_probe import ProbeResult
 
 
 def make_context(**overrides: object) -> ProbeContext:
@@ -19,7 +20,7 @@ def make_context(**overrides: object) -> ProbeContext:
         "http_fetch": lambda url, accept: HttpFetchResult(None, None, None, None, "not wired"),
         "resolve_host": lambda host: (),
         "now_epoch_seconds": lambda: 0.0,
-        "active_probe": lambda: None,
+        "active_probe": lambda: ProbeResult(status="validated"),
     }
     defaults.update(overrides)
     return ProbeContext(**defaults)  # type: ignore[arg-type]

@@ -16,9 +16,15 @@ per-request binding to bypass).
 from __future__ import annotations
 
 import dataclasses
-from typing import Any, Callable, Optional, Protocol
+from typing import TYPE_CHECKING, Callable, Optional, Protocol
 
 from gatepath.diag.report import DiagnosticReport
+
+if TYPE_CHECKING:
+    # Type-only import: erased at runtime, so `diag/` keeps its
+    # no-platform-import guarantee while `active_probe` stays a properly
+    # typed seam rather than `Any`.
+    from gatepath.portal_probe import ProbeResult
 
 
 @dataclasses.dataclass(frozen=True)
@@ -56,7 +62,7 @@ class ProbeContext:
     http_fetch: Callable[[str, Optional[str]], HttpFetchResult]
     resolve_host: Callable[[str], tuple[str, ...]]
     now_epoch_seconds: Callable[[], float]
-    active_probe: Callable[[], Any]
+    active_probe: Callable[[], "ProbeResult"]
 
 
 class Probe(Protocol):
