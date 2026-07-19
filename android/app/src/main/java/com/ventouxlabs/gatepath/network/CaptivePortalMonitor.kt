@@ -293,6 +293,21 @@ class CaptivePortalMonitor(
             privateDnsServer = linkProps?.privateDnsServerName,
             httpProxyDescription = httpProxyDescription,
             dnsServerCount = linkProps?.dnsServers?.size ?: 0,
+            hasValidatedCellular = hasValidatedCellular(),
         )
     }
+
+    /**
+     * `true` if any currently-known network is cellular AND validated.
+     * `allNetworks` is deprecated in favor of callback tracking, but for a
+     * one-shot diagnostic snapshot the simple enumeration is the right tool.
+     */
+    private fun hasValidatedCellular(): Boolean = runCatching {
+        @Suppress("DEPRECATION")
+        connectivityManager.allNetworks.any { net ->
+            val caps = connectivityManager.getNetworkCapabilities(net) ?: return@any false
+            caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) &&
+                caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
+        }
+    }.getOrDefault(false)
 }

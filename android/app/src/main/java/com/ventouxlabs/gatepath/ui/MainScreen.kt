@@ -224,6 +224,9 @@ private fun TroubleshootingPanel(diagnostics: NetworkDiagnostics) {
             )
             DiagnosticRow("HTTP proxy", diagnostics.httpProxyDescription ?: "none")
             DiagnosticRow("DNS servers", diagnostics.dnsServerCount.toString())
+            if (diagnostics.hasValidatedCellular) {
+                DiagnosticRow("Cellular", "validated (may mask captive WiFi)")
+            }
             if (diagnostics.bindProbeError != null) {
                 DiagnosticRow("Bind probe error", diagnostics.bindProbeError)
             }

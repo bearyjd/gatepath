@@ -196,6 +196,7 @@ class MainViewModel @Inject constructor(
                 vpnInterfaces = diagnostics.vpnInterfaces,
                 isTailscaleFullTunnel = diagnostics.isTailscaleFullTunnel,
                 dnsServerCount = diagnostics.dnsServerCount,
+                hasValidatedCellular = diagnostics.hasValidatedCellular,
                 activeProbe = { portalProbe.probe(network = null) },
             )
             val result = diagnosticEngine.run(ctx)
