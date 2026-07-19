@@ -144,6 +144,7 @@ MAIN_SOURCES=(
     "$SRC_MAIN/com/ventouxlabs/gatepath/diag/HttpProxyProbe.kt"
     "$SRC_MAIN/com/ventouxlabs/gatepath/diag/NoDnsProbe.kt"
     "$SRC_MAIN/com/ventouxlabs/gatepath/diag/CellularFallbackProbe.kt"
+    "$SRC_MAIN/com/ventouxlabs/gatepath/diag/RedirectLoopProbe.kt"
     "$SRC_MAIN/com/ventouxlabs/gatepath/diag/DiagnosticsBundle.kt"
     "$SRC_MAIN/com/ventouxlabs/gatepath/BindWatchdog.kt"
 )
@@ -216,6 +217,7 @@ TEST_SOURCES=(
     "$SRC_TEST/com/ventouxlabs/gatepath/diag/HttpProxyProbeTest.kt"
     "$SRC_TEST/com/ventouxlabs/gatepath/diag/NoDnsProbeTest.kt"
     "$SRC_TEST/com/ventouxlabs/gatepath/diag/CellularFallbackProbeTest.kt"
+    "$SRC_TEST/com/ventouxlabs/gatepath/diag/RedirectLoopProbeTest.kt"
     "$SRC_TEST/com/ventouxlabs/gatepath/diag/DiagnosticsBundleTest.kt"
 )
 
