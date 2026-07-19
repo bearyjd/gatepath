@@ -56,12 +56,23 @@ def _count_dns_servers(path: str) -> int:
     transient race with the file being rewritten, etc.) — an absent/broken
     resolv.conf is itself diagnostic signal (see `NoDnsProbe`), not an error
     to raise.
+
+    Reads raw bytes and decodes with `errors="replace"` rather than opening
+    in text mode: a hostile/corrupted resolv.conf can contain invalid UTF-8
+    (this module exists specifically to survive hostile system state), and a
+    strict decode would raise `UnicodeDecodeError` — a `ValueError`, not an
+    `OSError` — straight through the `except` below. A lenient decode still
+    counts any genuinely valid `nameserver` lines that happen to share the
+    file with garbage bytes elsewhere, instead of discarding real signal
+    because of unrelated corruption.
     """
     try:
-        with open(path, encoding="utf-8") as handle:
-            lines = handle.readlines()
+        with open(path, "rb") as handle:
+            raw = handle.read()
     except OSError:
         return 0
+
+    lines = raw.decode("utf-8", errors="replace").splitlines()
 
     count = 0
     for line in lines:

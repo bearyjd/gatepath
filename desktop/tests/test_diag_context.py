@@ -5,7 +5,10 @@ no test touches the real system (real DNS, real proxy env, real sockets).
 """
 from __future__ import annotations
 
+import os
 from unittest import mock
+
+import pytest
 
 from gatepath import diag_context
 from gatepath.diag.probe import VpnDetail
@@ -75,6 +78,10 @@ def test_count_dns_servers_zero_for_missing_file(tmp_path) -> None:
     assert diag_context._count_dns_servers(str(missing)) == 0
 
 
+@pytest.mark.skipif(
+    hasattr(os, "geteuid") and os.geteuid() == 0,
+    reason="chmod does not restrict root, so this would pass vacuously",
+)
 def test_count_dns_servers_zero_for_unreadable_file(tmp_path) -> None:
     resolv = tmp_path / "resolv.conf"
     resolv.write_text("nameserver 1.1.1.1\n")
@@ -83,6 +90,16 @@ def test_count_dns_servers_zero_for_unreadable_file(tmp_path) -> None:
         assert diag_context._count_dns_servers(str(resolv)) == 0
     finally:
         resolv.chmod(0o644)  # restore so tmp_path cleanup can remove it
+
+
+def test_count_dns_servers_survives_invalid_utf8(tmp_path) -> None:
+    """A resolv.conf containing invalid UTF-8 must not raise. The valid
+    `nameserver` line is still counted — only the garbage bytes on the
+    other line are replaced during decoding, so real signal on an
+    otherwise-corrupted file isn't discarded."""
+    resolv = tmp_path / "resolv.conf"
+    resolv.write_bytes(b"nameserver 1.1.1.1\n\xff\xfe invalid\n")
+    assert diag_context._count_dns_servers(str(resolv)) == 1
 
 
 # ---------------------------------------------------------------------------
@@ -208,8 +225,11 @@ def test_build_probe_context_active_probe_calls_portal_probe() -> None:
         ctx = diag_context.build_probe_context("wlan0", probe_url="http://probe.test/", environ={})
 
     assert ctx.active_probe() is result
-    # Called once during context assembly (for the bypass derivation) and
-    # again here via the injected callable — both must hit the same probe_url.
+    # The probe is called exactly once during context assembly; both the
+    # bypass derivation and `active_probe()` share that single cached result
+    # (deliberate — it keeps the context internally consistent instead of
+    # re-probing and possibly observing a different outcome).
+    probe_fn.assert_called_once()
     for call in probe_fn.call_args_list:
         assert call.args[0] == "http://probe.test/" or call.kwargs.get("url") == "http://probe.test/"
 
