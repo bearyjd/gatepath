@@ -13,7 +13,7 @@ class RedirectLoopProbeTest {
     private fun ok204() = HttpFetchResult(204, null, null, null, null)
     private fun page200() = HttpFetchResult(200, null, null, "<html>portal</html>", null)
 
-    private fun ctx(responses: Map<String, HttpFetchResult>) = ProbeContext(
+    private fun ctx(responses: Map<String, HttpFetchResult>, defaultRouteBypassesCaptive: Boolean = false) = ProbeContext(
         networkId = "test",
         isPrivateDnsActive = false,
         privateDnsServer = null,
@@ -21,6 +21,7 @@ class RedirectLoopProbeTest {
         vpnInterfaces = emptyList(),
         isTailscaleFullTunnel = false,
         dnsServerCount = 1,
+        defaultRouteBypassesCaptive = defaultRouteBypassesCaptive,
         probeUrl = "http://portal.test/probe",
         httpFetch = { url, _ ->
             responses[url] ?: HttpFetchResult(null, null, null, null, "unexpected url: $url")
@@ -105,5 +106,22 @@ class RedirectLoopProbeTest {
             ),
         )
         assertEquals(DiagnosticReport.Healthy, report)
+    }
+
+    @Test
+    fun `declines without probing when the default route is not the captive network`() = runBlocking {
+        var fetched = false
+        val base = ctx(emptyMap(), defaultRouteBypassesCaptive = true)
+        val report = RedirectLoopProbe().run(
+            base.copy(
+                httpFetch = { _, _ -> fetched = true; HttpFetchResult(204, null, null, null, null) },
+            ),
+        )
+        assertTrue(report is DiagnosticReport.Inconclusive)
+        assertTrue(
+            (report as DiagnosticReport.Inconclusive).probeErrors.single()
+                .contains("default route is not the captive network"),
+        )
+        assertEquals(false, fetched)
     }
 }

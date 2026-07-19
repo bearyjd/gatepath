@@ -212,6 +212,7 @@ class MainViewModel @Inject constructor(
                 isTailscaleFullTunnel = diagnostics.isTailscaleFullTunnel,
                 dnsServerCount = diagnostics.dnsServerCount,
                 hasValidatedCellular = diagnostics.hasValidatedCellular,
+                defaultRouteBypassesCaptive = diagnostics.defaultRouteBypassesCaptive,
                 probeUrl = monitor.probeUrl,
                 httpFetch = { url, accept -> httpFetcher.fetch(network = null, url = url, accept = accept) },
                 resolveHost = { host ->
@@ -244,6 +245,7 @@ class MainViewModel @Inject constructor(
                 network = network,
                 bindError = previous?.bindProbeError,
                 fallbackError = previous?.fallbackProbeError,
+                defaultRouteBypassesCaptive = previous?.defaultRouteBypassesCaptive ?: false,
             )
         }.getOrElse { ex ->
             Log.w(TAG, "Diagnostics re-run snapshot failed: ${ex.message}")

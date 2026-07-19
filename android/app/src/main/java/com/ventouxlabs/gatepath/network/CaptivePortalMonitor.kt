@@ -179,10 +179,13 @@ class CaptivePortalMonitor(
                                 "default route returned 204 (probe went via a different network — likely VPN tunnel or cellular)"
                             else -> null
                         }
+                        val defaultRouteBypassesCaptive =
+                            fallbackResult is ProbeResult.Validated
                         val diagnostics = buildDiagnostics(
                             network = network,
                             bindError = bindResult.message,
                             fallbackError = fallbackError,
+                            defaultRouteBypassesCaptive = defaultRouteBypassesCaptive,
                         )
                         Log.w(TAG, "Captive suspected on $network: $diagnostics")
                         trySend(NetworkEvent.CaptivePortalSuspected(network, diagnostics))
@@ -271,7 +274,8 @@ class CaptivePortalMonitor(
         network: Network,
         bindError: String?,
         fallbackError: String?,
-    ): NetworkDiagnostics = buildDiagnostics(network, bindError, fallbackError)
+        defaultRouteBypassesCaptive: Boolean,
+    ): NetworkDiagnostics = buildDiagnostics(network, bindError, fallbackError, defaultRouteBypassesCaptive)
 
     /**
      * Snapshot the current network and global state for the troubleshooting
@@ -283,6 +287,7 @@ class CaptivePortalMonitor(
         network: Network,
         bindError: String?,
         fallbackError: String?,
+        defaultRouteBypassesCaptive: Boolean,
     ): NetworkDiagnostics {
         val linkProps = runCatching { connectivityManager.getLinkProperties(network) }.getOrNull()
         val vpn = runCatching { VpnDetector.detect() }.getOrNull()
@@ -307,6 +312,7 @@ class CaptivePortalMonitor(
             httpProxyDescription = httpProxyDescription,
             dnsServerCount = linkProps?.dnsServers?.size ?: 0,
             hasValidatedCellular = hasValidatedCellular(),
+            defaultRouteBypassesCaptive = defaultRouteBypassesCaptive,
         )
     }
 

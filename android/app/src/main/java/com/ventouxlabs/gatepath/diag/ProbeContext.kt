@@ -33,6 +33,14 @@ data class ProbeContext(
      */
     val hasValidatedCellular: Boolean = false,
 
+    /**
+     * `true` when the default route demonstrably is not the captive network
+     * (the fallback probe got a 204 through it). Probes that interrogate the
+     * captive path itself must not report a finding in this state — see
+     * [defaultRouteNotCaptiveReport].
+     */
+    val defaultRouteBypassesCaptive: Boolean = false,
+
     /** URL the monitor's own connectivity probe uses (debug builds may override — see AppModule). */
     val probeUrl: String = CONNECTIVITY_CHECK_URL,
 
@@ -52,3 +60,13 @@ data class ProbeContext(
 
     val activeProbe: suspend () -> ProbeResult,
 )
+
+/**
+ * Standard `Inconclusive` for a probe that can only answer by talking to the
+ * captive network, when the default route isn't it. Honest "didn't test"
+ * beats a green "no problem found" for a check that never ran.
+ */
+internal fun defaultRouteNotCaptiveReport(probeName: String): DiagnosticReport =
+    DiagnosticReport.Inconclusive(
+        listOf("$probeName: default route is not the captive network — this check would test the wrong path"),
+    )

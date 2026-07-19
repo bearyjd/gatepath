@@ -15,11 +15,17 @@ private const val MAX_HOPS = 5
  * [MAX_HOPS] without repeating is not a loop: Healthy. Only a failure of the
  * very first fetch is Inconclusive — mid-chain errors mean the gateway is
  * serving *something*, which other probes judge better.
+ *
+ * Declines with [DiagnosticReport.Inconclusive] when
+ * [ProbeContext.defaultRouteBypassesCaptive] is set — following redirects
+ * over a path that isn't the captive network can't say anything about the
+ * captive gateway's redirect behavior.
  */
 class RedirectLoopProbe : DiagnosticProbe {
     override val name = "redirect_loop"
 
     override suspend fun run(ctx: ProbeContext): DiagnosticReport {
+        if (ctx.defaultRouteBypassesCaptive) return defaultRouteNotCaptiveReport(name)
         val visited = mutableListOf(ctx.probeUrl)
         var current = ctx.probeUrl
         repeat(MAX_HOPS) { hop ->

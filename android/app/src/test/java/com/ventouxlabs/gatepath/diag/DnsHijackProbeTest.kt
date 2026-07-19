@@ -14,7 +14,11 @@ class DnsHijackProbeTest {
         return """{"Status":0,"Answer":[$answers]}"""
     }
 
-    private fun ctx(systemAnswers: List<String>, doh: HttpFetchResult) = ProbeContext(
+    private fun ctx(
+        systemAnswers: List<String>,
+        doh: HttpFetchResult,
+        defaultRouteBypassesCaptive: Boolean = false,
+    ) = ProbeContext(
         networkId = "test",
         isPrivateDnsActive = false,
         privateDnsServer = null,
@@ -22,6 +26,7 @@ class DnsHijackProbeTest {
         vpnInterfaces = emptyList(),
         isTailscaleFullTunnel = false,
         dnsServerCount = 1,
+        defaultRouteBypassesCaptive = defaultRouteBypassesCaptive,
         probeUrl = "http://connectivitycheck.gstatic.com/generate_204",
         httpFetch = { _, accept ->
             // The DoH request must ask for the JSON media type.
@@ -91,5 +96,24 @@ class DnsHijackProbeTest {
             ),
         )
         assertEquals(DiagnosticReport.Healthy, report)
+    }
+
+    @Test
+    fun `declines without probing when the default route is not the captive network`() = runBlocking {
+        var resolveHostCalled = false
+        val base = ctx(
+            systemAnswers = emptyList(),
+            doh = HttpFetchResult(200, null, null, dohBody("1.2.3.4"), null),
+            defaultRouteBypassesCaptive = true,
+        )
+        val report = DnsHijackProbe().run(
+            base.copy(resolveHost = { resolveHostCalled = true; emptyList() }),
+        )
+        assertTrue(report is DiagnosticReport.Inconclusive)
+        assertTrue(
+            (report as DiagnosticReport.Inconclusive).probeErrors.single()
+                .contains("default route is not the captive network"),
+        )
+        assertEquals(false, resolveHostCalled)
     }
 }
