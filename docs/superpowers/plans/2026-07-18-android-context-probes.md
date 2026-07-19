@@ -18,6 +18,7 @@
 - D1: recommended actions are descriptors only; never auto-apply a fix.
 - D3: engine budgets are 5s total / 2s per probe; context-only probes must not touch the network.
 - `DiagnosticEngine.rankOf` is the single source of truth for severity; UI must not re-rank.
+- `android/run-jvm-tests.sh` compiles a **hardcoded file list** — every new production file must be added to its `MAIN_SOURCES` block (~line 126) and every new test file to its `TEST_SOURCES` block (~line 196), in the same task that creates the file. A test file not listed there silently never runs; verify the new test names appear in the run output.
 - Test command (no Android SDK needed): `bash android/run-jvm-tests.sh` from the repo root. Requires JDK 21, kotlinc 2.0.x, python3. If `ANDROID_HOME` is set, also run `(cd android && ./gradlew :app:assembleDebug)` at the end; otherwise CI covers it.
 - Commit format: `<type>: <description>` (feat/fix/test/docs/chore). No attribution lines.
 
