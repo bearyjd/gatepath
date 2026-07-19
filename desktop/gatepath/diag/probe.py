@@ -7,10 +7,7 @@ with fakes and the package needs no I/O imports. Whoever runs the engine
 system.
 
 Deliberately absent versus Android: `is_private_dns_active` (an Android
-system setting), `has_validated_cellular` (no cellular), and
-`default_route_bypasses_captive` (Android has a bound-vs-unbound socket
-distinction; desktop isolates with netns at the OS level and has no
-per-request binding to bypass).
+system setting) and `has_validated_cellular` (no cellular).
 """
 
 from __future__ import annotations
@@ -18,7 +15,7 @@ from __future__ import annotations
 import dataclasses
 from typing import TYPE_CHECKING, Callable, Optional, Protocol
 
-from gatepath.diag.report import DiagnosticReport
+from gatepath.diag.report import DiagnosticReport, Inconclusive
 
 if TYPE_CHECKING:
     # Type-only import: erased at runtime, so `diag/` keeps its
@@ -63,6 +60,29 @@ class ProbeContext:
     resolve_host: Callable[[str], tuple[str, ...]]
     now_epoch_seconds: Callable[[], float]
     active_probe: Callable[[], "ProbeResult"]
+    # `active_probe` above has no default, so a defaulted field must go here
+    # at the end — putting it any earlier (e.g. right after `dns_server_count`,
+    # which would otherwise mirror Android's field order) raises TypeError at
+    # class-definition time, since dataclasses forbid a defaulted field
+    # before a non-defaulted one.
+    #
+    # `True` when the default route demonstrably is not the captive network
+    # (e.g. a split-tunnel VPN's fallback probe got a 204 through it). Probes
+    # that must interrogate the captive path itself must not report a finding
+    # in this state — see `default_route_not_captive_report`. Mirror of
+    # Android `ProbeContext.defaultRouteBypassesCaptive`.
+    default_route_bypasses_captive: bool = False
+
+
+def default_route_not_captive_report(probe_name: str) -> DiagnosticReport:
+    """Standard `Inconclusive` for a probe that can only answer by talking to
+    the captive network, when the default route isn't it. Honest "didn't
+    test" beats a green "no problem found" for a check that never ran.
+    Mirror of Android `defaultRouteNotCaptiveReport`.
+    """
+    return Inconclusive(
+        probe_errors=(f"{probe_name}: default route is not the captive network — this check would test the wrong path",),
+    )
 
 
 class Probe(Protocol):

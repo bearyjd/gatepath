@@ -7,6 +7,8 @@ RedirectLoopProbeTest.kt, ClockSkewProbeTest.kt, HttpsOnlyProbeTest.kt.
 """
 from __future__ import annotations
 
+from typing import Callable
+
 from gatepath.diag.clock_skew_probe import ClockSkewProbe
 from gatepath.diag.https_only_probe import HttpsOnlyProbe
 from gatepath.diag.probe import HttpFetchResult, ProbeContext
@@ -47,7 +49,7 @@ def _error(message: str) -> HttpFetchResult:
     return HttpFetchResult(status_code=None, location=None, date_epoch_seconds=None, body=None, error=message)
 
 
-def _fetch_from(responses: dict[str, HttpFetchResult]):
+def _fetch_from(responses: dict[str, HttpFetchResult]) -> Callable[[str, object], HttpFetchResult]:
     def _fetch(url: str, accept: object) -> HttpFetchResult:
         return responses.get(url, _error(f"unexpected url: {url}"))
 
@@ -124,6 +126,21 @@ def test_redirect_loop_long_non_repeating_chain_gives_up_healthy_at_hop_cap() ->
     }
     report = RedirectLoopProbe().run(ctx(http_fetch=_fetch_from(responses)))
     assert report.cause is Cause.HEALTHY
+
+
+def test_redirect_loop_declines_when_default_route_bypasses_captive() -> None:
+    called = {"fetch": False}
+
+    def fetch(url: str, accept: object) -> HttpFetchResult:
+        called["fetch"] = True
+        return _redirect("http://portal.test/a")
+
+    report = RedirectLoopProbe().run(
+        ctx(http_fetch=fetch, default_route_bypasses_captive=True)
+    )
+    assert report.cause is Cause.INCONCLUSIVE
+    assert "default route is not the captive network" in report.probe_errors[0]
+    assert called["fetch"] is False
 
 
 # --- ClockSkewProbe ---
@@ -220,6 +237,7 @@ def test_https_only_healthy_when_http_still_captive() -> None:
         )
     )
     assert report.cause is Cause.HEALTHY
+    assert called["fetch"] is False
 
 
 def test_https_only_healthy_when_http_errors() -> None:
@@ -230,3 +248,18 @@ def test_https_only_healthy_when_http_errors() -> None:
         )
     )
     assert report.cause is Cause.HEALTHY
+
+
+def test_https_only_declines_when_default_route_bypasses_captive() -> None:
+    called = {"active_probe": False}
+
+    def active_probe() -> ProbeResult:
+        called["active_probe"] = True
+        return ProbeResult(status="validated")
+
+    report = HttpsOnlyProbe().run(
+        ctx(active_probe=active_probe, default_route_bypasses_captive=True)
+    )
+    assert report.cause is Cause.INCONCLUSIVE
+    assert "default route is not the captive network" in report.probe_errors[0]
+    assert called["active_probe"] is False

@@ -10,13 +10,17 @@ While the network is still captive (HTTP -> portal) or broken (HTTP ->
 error), HTTPS failing tells us nothing new — those cases are Healthy here
 and owned by other probes.
 
+Declines with `Inconclusive` when `ProbeContext.default_route_bypasses_captive`
+is set — HTTP/HTTPS parity over a path that isn't the captive network says
+nothing about the captive gateway.
+
 Mirror of Android `HttpsOnlyProbe.kt`. Desktop's `ProbeResult.status` is the
 string "validated" | "portal" | "error", not a sealed type.
 """
 
 from __future__ import annotations
 
-from gatepath.diag.probe import ProbeContext
+from gatepath.diag.probe import ProbeContext, default_route_not_captive_report
 from gatepath.diag.report import DiagnosticReport, Healthy, HttpsOnlyCaptive
 
 
@@ -24,6 +28,8 @@ class HttpsOnlyProbe:
     name = "https_only"
 
     def run(self, ctx: ProbeContext) -> DiagnosticReport:
+        if ctx.default_route_bypasses_captive:
+            return default_route_not_captive_report(self.name)
         http_result = ctx.active_probe()
         if http_result.status != "validated":
             return Healthy()

@@ -10,6 +10,10 @@ A chain that terminates (204, page, error mid-chain) or simply runs past
 very first fetch is Inconclusive — mid-chain errors mean the gateway is
 serving *something*, which other probes judge better.
 
+Declines with `Inconclusive` when `ProbeContext.default_route_bypasses_captive`
+is set — following redirects over a path that isn't the captive network can't
+say anything about the captive gateway's redirect behavior.
+
 Mirror of Android `RedirectLoopProbe.kt`.
 """
 
@@ -17,7 +21,7 @@ from __future__ import annotations
 
 import urllib.parse
 
-from gatepath.diag.probe import ProbeContext
+from gatepath.diag.probe import ProbeContext, default_route_not_captive_report
 from gatepath.diag.report import DiagnosticReport, Healthy, Inconclusive, PortalRedirectLoop
 
 # Redirect hops to follow before concluding "long but not looping".
@@ -28,6 +32,8 @@ class RedirectLoopProbe:
     name = "redirect_loop"
 
     def run(self, ctx: ProbeContext) -> DiagnosticReport:
+        if ctx.default_route_bypasses_captive:
+            return default_route_not_captive_report(self.name)
         visited = [ctx.probe_url]
         current = ctx.probe_url
         for hop in range(MAX_HOPS):
