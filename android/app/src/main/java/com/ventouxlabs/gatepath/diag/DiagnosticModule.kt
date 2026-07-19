@@ -23,10 +23,14 @@ object DiagnosticModule {
     fun provideDiagnosticEngine(): DiagnosticEngine = DiagnosticEngine(
         probes = listOf(
             VpnProbe(),
+            DnsHijackProbe(),
             NoDnsProbe(),
             PrivateDnsProbe(),
             HttpProxyProbe(),
+            RedirectLoopProbe(),
+            ClockSkewProbe(),
             CellularFallbackProbe(),
+            HttpsOnlyProbe(),
             HttpProbe(),
         ),
     )

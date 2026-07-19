@@ -10,6 +10,7 @@ import com.ventouxlabs.gatepath.diag.DiagnosisResult
 import com.ventouxlabs.gatepath.diag.DiagnosticEngine
 import com.ventouxlabs.gatepath.diag.ProbeContext
 import com.ventouxlabs.gatepath.network.CaptivePortalMonitor
+import com.ventouxlabs.gatepath.network.HttpFetcher
 import com.ventouxlabs.gatepath.network.NetworkDiagnostics
 import com.ventouxlabs.gatepath.network.NetworkEvent
 import com.ventouxlabs.gatepath.network.PortalProbe
@@ -24,6 +25,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import java.net.InetAddress
 import java.net.URI
 import java.time.Instant
 import java.time.format.DateTimeFormatter
@@ -40,6 +42,7 @@ class MainViewModel @Inject constructor(
 ) : ViewModel() {
 
     private val portalProbe = PortalProbe()
+    private val httpFetcher = HttpFetcher()
 
     private val _session = MutableStateFlow<PortalSession>(PortalSession.Idle)
     val session: StateFlow<PortalSession> = _session.asStateFlow()
@@ -192,7 +195,11 @@ class MainViewModel @Inject constructor(
      * (no bind) — bind has already failed by the time we reach this branch
      * (that's what triggered Suspected), so re-running it would just confirm
      * EPERM. The default-route probe instead exercises whether the userspace
-     * fallback might be working now (e.g. VPN was just paused).
+     * fallback might be working now (e.g. VPN was just paused). It probes
+     * `monitor.probeUrl` — the same URL the monitor itself uses, which in
+     * debug builds may be overridden to point at a mock portal — rather than
+     * a hardcoded endpoint, so the diagnostic battery agrees with the monitor
+     * about what "captive" means.
      */
     private fun runDiagnosticEngine(network: Network, diagnostics: NetworkDiagnostics) {
         viewModelScope.launch {
@@ -205,7 +212,14 @@ class MainViewModel @Inject constructor(
                 isTailscaleFullTunnel = diagnostics.isTailscaleFullTunnel,
                 dnsServerCount = diagnostics.dnsServerCount,
                 hasValidatedCellular = diagnostics.hasValidatedCellular,
-                activeProbe = { portalProbe.probe(network = null) },
+                probeUrl = monitor.probeUrl,
+                httpFetch = { url, accept -> httpFetcher.fetch(network = null, url = url, accept = accept) },
+                resolveHost = { host ->
+                    runCatching {
+                        InetAddress.getAllByName(host).mapNotNull { it.hostAddress }
+                    }.getOrElse { emptyList() }
+                },
+                activeProbe = { portalProbe.probe(network = null, testUrl = monitor.probeUrl) },
             )
             val result = diagnosticEngine.run(ctx)
             Log.i(TAG, "Diagnosis on ${network}: top=${result.top::class.simpleName} action=${result.recommended}")

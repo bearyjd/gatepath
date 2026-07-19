@@ -100,7 +100,7 @@ class CaptivePortalMonitor(
     // gstatic endpoint; debug builds may override it (see AppModule) so the
     // e2e harness can point it at its mock portal. Production always uses the
     // default.
-    private val probeUrl: String = CONNECTIVITY_CHECK_URL,
+    val probeUrl: String = CONNECTIVITY_CHECK_URL,
 ) {
 
     fun observe(): Flow<NetworkEvent> = callbackFlow {
