@@ -261,8 +261,9 @@ try:
             if not self._alive:
                 # The window was closed while this run was in flight; its
                 # widgets may be disposed. Drop the stale continuation rather
-                # than touch a finalized button/banner. Returning is enough —
-                # idle_add won't repeat (we return None -> falsy).
+                # than touch a finalized button/banner. (idle_add repetition is
+                # already prevented by the runner's _deliver wrapper, which
+                # returns False regardless of what this method returns.)
                 return
             self._run_button.set_sensitive(True)
             self._ensure_diagnosis_panel().render(result)
