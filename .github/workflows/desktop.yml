@@ -63,6 +63,29 @@ jobs:
             echo "::error::Forbidden HTTP library import found in desktop/gatepath/"
             exit 1
           fi
+      - name: diag/ stays pure — no platform imports
+        # The diagnostics package is pure logic over an injected ProbeContext:
+        # every probe must be unit-testable with fakes, and importing it must
+        # not drag in I/O. All platform reads belong in gatepath/diag_context.py
+        # and gatepath/http_fetcher.py, which live outside the package.
+        # Machine-checked rather than trusted, per this repo's convention for
+        # cross-cutting invariants (cf. schema-parity.yml).
+        run: |
+          if grep -rnE '^\s*(import|from)\s+(urllib\.request|urllib\.error|socket|os|dasbus|gi)\b' desktop/gatepath/diag/; then
+            echo "::error::desktop/gatepath/diag/ must stay pure — move platform reads to diag_context.py"
+            exit 1
+          fi
+          python3 - <<'EOF'
+          import sys
+          sys.path.insert(0, "desktop")
+          import gatepath.diag.engine  # noqa: F401
+          import gatepath.diag.dns_hijack_probe  # noqa: F401
+          leaked = [m for m in ("urllib.request", "socket", "dasbus", "gi") if m in sys.modules]
+          if leaked:
+              print(f"::error::importing diag/ pulled in {leaked} at runtime")
+              sys.exit(1)
+          print("diag/ is pure at import time")
+          EOF
 
   rust-helper:
     name: cargo test (gatepath-netns-helper)

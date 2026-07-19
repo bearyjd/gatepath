@@ -18,6 +18,8 @@ import urllib.error
 import urllib.request
 from typing import Optional
 
+from gatepath.no_follow_redirect import NoFollowRedirectHandler
+
 logger = logging.getLogger(__name__)
 
 # MUST be HTTP, not HTTPS — captive portals work by intercepting cleartext
@@ -47,26 +49,6 @@ class ProbeResult:
     message: Optional[str] = None
 
 
-class _NoFollowRedirectHandler(urllib.request.HTTPRedirectHandler):
-    """Capture redirect Location without following it."""
-
-    def __init__(self) -> None:
-        self.redirect_location: Optional[str] = None
-
-    def redirect_request(  # type: ignore[override]
-        self,
-        req: urllib.request.Request,
-        fp: object,
-        code: int,
-        msg: str,
-        headers: object,
-        newurl: str,
-    ) -> None:
-        # Store the location and return None to abort the follow.
-        self.redirect_location = newurl
-        return None  # type: ignore[return-value]
-
-
 def probe(
     url: str = CONNECTIVITY_CHECK_URL,
     timeout: int = 5,
@@ -76,7 +58,7 @@ def probe(
     Returns:
         ProbeResult with status "validated", "portal", or "error".
     """
-    redirect_handler = _NoFollowRedirectHandler()
+    redirect_handler = NoFollowRedirectHandler()
     opener = urllib.request.build_opener(redirect_handler)
 
     try:
