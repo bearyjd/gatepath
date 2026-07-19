@@ -27,7 +27,7 @@
 - Immutability: every dataclass `frozen=True`; collections on the context are tuples, not lists.
 - Cause names must match the Kotlin sealed-variant names **exactly** (`Healthy`, `VpnBlocking`, `DnsHijack`, `HttpProxyBlocking`, `HttpsOnlyCaptive`, `NoDnsServers`, `PortalRedirectLoop`, `ClockSkew`, `Inconclusive`) — PR 5's guard string-matches them.
 - Severity ranks mirror `DiagnosticEngine.rankOf` exactly: VpnBlocking 100, DnsHijack 90, NoDnsServers 85, HttpProxyBlocking 70, PortalRedirectLoop 65, ClockSkew 55, HttpsOnlyCaptive 40, Inconclusive 10, Healthy 0.
-- Test command: `python -m pytest desktop/ mockportal/ -q` from repo root. Baseline **277**. Every task states its expected new total.
+- Test command: `python -m pytest desktop/ mockportal/ -q` from repo root. Baseline **277**. Every task states an expected total, but the **delta** is the binding number — Task 3's fix added a regression test, shifting every later absolute by +1. If the absolute disagrees with what you observe, trust the delta, report both, and do not invent tests to hit a number.
 - Type annotations on all signatures; `from __future__ import annotations` at the top of each new module (matches existing files).
 - Commit format `<type>: <description>`, no attribution.
 
@@ -926,7 +926,7 @@ class VpnProbe:
 `HttpProxyProbe` and `NoDnsProbe` follow the same shape against
 `ctx.http_proxy_description` and `ctx.dns_server_count == 0`.
 
-- [ ] **Step 4: GREEN** — expected **301**.
+- [ ] **Step 4: GREEN** — expected **302** (+7).
 
 - [ ] **Step 5: Commit**
 
@@ -987,7 +987,7 @@ def test_connection_failure_becomes_an_error_never_raises() -> None:
 
 - [ ] **Step 3: Implement.** Read `desktop/gatepath/portal_probe.py` first and follow its urllib idiom and `_NoFollowRedirectHandler` pattern. Requirements: `instanceFollowRedirects`-equivalent off (the handler returns `None` from `redirect_request`); 2s default timeout; read at most `64 * 1024` bytes and decode UTF-8 with `errors="replace"`; parse `Date` with `email.utils.parsedate_to_datetime(...).timestamp()` inside a `try` so a malformed header yields `None`; catch `urllib.error.*`, `OSError` and `ValueError` into `error`; a `HTTPError` still carries a status code and headers, so report it as a result rather than an error.
 
-- [ ] **Step 4: GREEN** — expected **306**.
+- [ ] **Step 4: GREEN** — expected **307** (+5).
 
 - [ ] **Step 5: Commit**
 
