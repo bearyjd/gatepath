@@ -6,8 +6,13 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import java.net.URL
 
-/** Cloudflare's DoH JSON endpoint; answer format is stable and documented. */
-private const val DOH_ENDPOINT = "https://cloudflare-dns.com/dns-query"
+/**
+ * Cloudflare's DoH JSON endpoint, addressed by IP literal deliberately: the
+ * hostname form would itself need bootstrap resolution through the very
+ * system resolver this probe suspects of hijacking. 1.1.1.1 is in
+ * Cloudflare's certificate SAN, so TLS and the JSON API work identically.
+ */
+private const val DOH_ENDPOINT = "https://1.1.1.1/dns-query"
 private const val DOH_ACCEPT = "application/dns-json"
 
 /** DNS record type 1 = A. We only compare IPv4 answers. */
@@ -16,7 +21,8 @@ private const val TYPE_A = 1
 /**
  * Compares the system resolver's answer for the connectivity-check host
  * ([ProbeContext.resolveHost]) against a DNS-over-HTTPS lookup
- * ([ProbeContext.httpFetch] on Cloudflare's JSON API). A gateway that answers
+ * ([ProbeContext.httpFetch] on Cloudflare's JSON API via the 1.1.1.1 IP
+ * literal, not the hostname — see [DOH_ENDPOINT]). A gateway that answers
  * with its own private address while the true record is public is hijacking
  * DNS beyond the probe endpoints — the aggressive-captive signature that also
  * breaks HTTPS after sign-in.
