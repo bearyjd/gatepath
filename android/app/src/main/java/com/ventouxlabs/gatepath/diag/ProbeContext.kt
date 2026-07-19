@@ -24,5 +24,11 @@ data class ProbeContext(
     val vpnInterfaces: List<String>,
     val isTailscaleFullTunnel: Boolean,
     val dnsServerCount: Int,
+    /**
+     * `true` if some *other* network is cellular AND validated right now —
+     * i.e. mobile data is silently carrying traffic while the user thinks
+     * they're on the captive WiFi.
+     */
+    val hasValidatedCellular: Boolean = false,
     val activeProbe: suspend () -> ProbeResult,
 )

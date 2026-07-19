@@ -261,6 +261,19 @@ class CaptivePortalMonitor(
     }
 
     /**
+     * Re-snapshot the environment (VPN, Private DNS, proxy, DNS count,
+     * cellular) for a network we already flagged as suspected-captive. Used by
+     * the manual "Run diagnostics again" path so the user sees fresh state
+     * after e.g. pausing their VPN. The probe errors are carried over from the
+     * original failure — this method does not re-probe.
+     */
+    fun snapshotDiagnostics(
+        network: Network,
+        bindError: String?,
+        fallbackError: String?,
+    ): NetworkDiagnostics = buildDiagnostics(network, bindError, fallbackError)
+
+    /**
      * Snapshot the current network and global state for the troubleshooting
      * UI. Called when both probe paths fail. All field reads are wrapped in
      * runCatching because LinkProperties / VPN enumeration can race with
@@ -293,6 +306,21 @@ class CaptivePortalMonitor(
             privateDnsServer = linkProps?.privateDnsServerName,
             httpProxyDescription = httpProxyDescription,
             dnsServerCount = linkProps?.dnsServers?.size ?: 0,
+            hasValidatedCellular = hasValidatedCellular(),
         )
     }
+
+    /**
+     * `true` if any currently-known network is cellular AND validated.
+     * `allNetworks` is deprecated in favor of callback tracking, but for a
+     * one-shot diagnostic snapshot the simple enumeration is the right tool.
+     */
+    private fun hasValidatedCellular(): Boolean = runCatching {
+        @Suppress("DEPRECATION")
+        connectivityManager.allNetworks.any { net ->
+            val caps = connectivityManager.getNetworkCapabilities(net) ?: return@any false
+            caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) &&
+                caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
+        }
+    }.getOrDefault(false)
 }

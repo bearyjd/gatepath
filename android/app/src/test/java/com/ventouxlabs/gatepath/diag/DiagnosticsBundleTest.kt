@@ -113,7 +113,9 @@ class DiagnosticsBundleTest {
         // redaction must catch it there too, not only in the audit line.
         val diagnosis = DiagnosisResult(
             top = DiagnosticReport.HttpsOnlyCaptive("TLS handshake failed to portal.example.com"),
-            all = listOf(DiagnosticReport.HttpsOnlyCaptive("TLS handshake failed to portal.example.com")),
+            checks = listOf(
+                ProbeCheck("https", DiagnosticReport.HttpsOnlyCaptive("TLS handshake failed to portal.example.com")),
+            ),
             recommended = RecommendedAction.NoActionAvailable,
         )
         val out = DiagnosticsBundle.build(meta, listOf(entry()), diagnosis, redact = true)
@@ -129,8 +131,11 @@ class DiagnosticsBundleTest {
                 systemAnswer = "10.0.0.7",
                 doHAnswer = "93.184.216.34",
             ),
-            all = listOf(
-                DiagnosticReport.DnsHijack("connectivitycheck.gstatic.example", "10.0.0.7", "93.184.216.34"),
+            checks = listOf(
+                ProbeCheck(
+                    "dns",
+                    DiagnosticReport.DnsHijack("connectivitycheck.gstatic.example", "10.0.0.7", "93.184.216.34"),
+                ),
             ),
             recommended = RecommendedAction.NoActionAvailable,
         )
@@ -144,7 +149,7 @@ class DiagnosticsBundleTest {
     fun `no redact keeps the diagnosis ip literals intact`() {
         val diagnosis = DiagnosisResult(
             top = DiagnosticReport.DnsHijack("host.example", "10.0.0.7", "93.184.216.34"),
-            all = listOf(DiagnosticReport.DnsHijack("host.example", "10.0.0.7", "93.184.216.34")),
+            checks = listOf(ProbeCheck("dns", DiagnosticReport.DnsHijack("host.example", "10.0.0.7", "93.184.216.34"))),
             recommended = RecommendedAction.NoActionAvailable,
         )
         val out = DiagnosticsBundle.build(meta, entries = emptyList(), diagnosis = diagnosis, redact = false)
@@ -157,9 +162,9 @@ class DiagnosticsBundleTest {
     fun `latest diagnosis is rendered when present`() {
         val diagnosis = DiagnosisResult(
             top = DiagnosticReport.VpnBlocking(interfaceName = "tun0", isFullTunnel = true),
-            all = listOf(
-                DiagnosticReport.VpnBlocking(interfaceName = "tun0", isFullTunnel = true),
-                DiagnosticReport.Healthy,
+            checks = listOf(
+                ProbeCheck("vpn", DiagnosticReport.VpnBlocking(interfaceName = "tun0", isFullTunnel = true)),
+                ProbeCheck("ok", DiagnosticReport.Healthy),
             ),
             recommended = RecommendedAction.UserAction(RecommendedAction.PAUSE_VPN, "Pause your VPN"),
         )

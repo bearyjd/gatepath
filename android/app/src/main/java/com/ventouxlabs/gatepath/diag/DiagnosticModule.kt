@@ -22,7 +22,11 @@ object DiagnosticModule {
     @Singleton
     fun provideDiagnosticEngine(): DiagnosticEngine = DiagnosticEngine(
         probes = listOf(
+            VpnProbe(),
+            NoDnsProbe(),
             PrivateDnsProbe(),
+            HttpProxyProbe(),
+            CellularFallbackProbe(),
             HttpProbe(),
         ),
     )
