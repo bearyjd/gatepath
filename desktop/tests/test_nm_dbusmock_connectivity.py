@@ -33,6 +33,10 @@ import pytest
 dbusmock = pytest.importorskip("dbusmock", reason="python-dbusmock not installed")
 pytest.importorskip("dasbus", reason="dasbus not installed")
 
+# Safe after the importorskip above: dbus-python is a hard dependency of
+# python-dbusmock, so if dbusmock imported, dbus does too.
+import dbus  # noqa: E402
+
 if shutil.which("dbus-daemon") is None:
     pytest.skip("no dbus-daemon binary on PATH", allow_module_level=True)
 
@@ -58,14 +62,25 @@ class NMConnectivityWireContractTest(dbusmock.DBusTestCase):
         cls.dbus_con = cls.get_dbus(system_bus=True)
 
     def setUp(self) -> None:
-        (self.mock_proc, self.mock_obj) = self.spawn_server(
+        # spawn_server returns a bare Popen (blocking until the name is
+        # owned); the mock control object is fetched off the bus separately.
+        # The original tuple-unpack here raised TypeError under real
+        # python-dbusmock, and because tearDown is skipped when setUp raises,
+        # the leaked server made every later test fail with "name already
+        # owned" — hence addCleanup, which always runs.
+        self.mock_proc = self.spawn_server(
             NM_BUS,
             NM_PATH,
             "org.freedesktop.NetworkManager",
             system_bus=True,
         )
+        self.addCleanup(self._terminate_mock)
+        self.mock_obj = dbus.Interface(
+            self.dbus_con.get_object(NM_BUS, NM_PATH),
+            MOCK_IFACE,
+        )
 
-    def tearDown(self) -> None:
+    def _terminate_mock(self) -> None:
         self.mock_proc.terminate()
         self.mock_proc.wait()
 

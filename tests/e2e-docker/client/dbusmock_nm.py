@@ -10,7 +10,8 @@ the surface the production Gatepath stack queries:
   /org/freedesktop/NetworkManager/Devices/0:
       Interface       (s)  = "wlan0"
       DeviceType      (u)  = 2   (NM_DEVICE_TYPE_WIFI)
-      Connectivity    (u)  = 2   (NM_CONNECTIVITY_PORTAL)
+      Ip4Connectivity (u)  = 2   (NM_CONNECTIVITY_PORTAL)
+      Ip6Connectivity (u)  = 1   (NM_CONNECTIVITY_NONE)
       [Device.Wireless] ActiveAccessPoint (o) = AccessPoints/0
 
   /org/freedesktop/NetworkManager/AccessPoints/0:
@@ -20,12 +21,12 @@ the surface the production Gatepath stack queries:
       RsnFlags   (u)  = 0
 
 Why these:
-  * Python desktop (`gatepath.portal_monitor.CaptiveInterfaceLookup`) requires
-    DeviceType == 2 AND Connectivity == 2, then keys off Interface to know
+  * Python desktop (`gatepath.portal_monitor.NMCaptiveInterfaceLookup`) requires
+    DeviceType == 2 AND Ip4Connectivity == 2, then keys off Interface to know
     which iface to hand the helper.
   * Rust helper (`gatepath-netns-helper::network_manager::NMCaptiveCheck`)
-    iterates GetDevices(), matches Interface == "wlan0", reads Connectivity,
-    and accepts only Connectivity == 2 as captive. It ALSO (DESK-002/003) reads
+    iterates GetDevices(), matches Interface == "wlan0", reads Ip4Connectivity,
+    and accepts only Ip4Connectivity == 2 as captive. It ALSO (DESK-002/003) reads
     Device.Wireless.ActiveAccessPoint → the AccessPoint's Ssid + security flags
     to capture the SSID and refuse secured networks up front; without the
     Device.Wireless + AccessPoint surface, active_ap_state() fails and
@@ -57,6 +58,7 @@ MOCK_IFACE = "org.freedesktop.DBus.Mock"
 # scenario test can flip them without grep-search across the file.
 WIFI_DEVICE_TYPE = dbus.UInt32(2)         # NM_DEVICE_TYPE_WIFI
 PORTAL_CONNECTIVITY = dbus.UInt32(2)      # NM_CONNECTIVITY_PORTAL
+NO_CONNECTIVITY = dbus.UInt32(1)          # NM_CONNECTIVITY_NONE
 INTERFACE_NAME = dbus.String("wlan0")
 
 
@@ -106,7 +108,17 @@ def main() -> int:
         {
             "Interface": INTERFACE_NAME,
             "DeviceType": WIFI_DEVICE_TYPE,
-            "Connectivity": PORTAL_CONNECTIVITY,
+            # Ip4Connectivity, NOT bare `Connectivity`: real NM ≥1.16 has no
+            # bare `Connectivity` property on the Device interface, and both
+            # consumers (Python NMCaptiveInterfaceLookup, Rust NMCaptiveCheck)
+            # read `Ip4Connectivity`. Publishing only the real name means a
+            # consumer regressing to the legacy name fails here, loudly —
+            # same philosophy as test_nm_dbusmock_connectivity.py.
+            "Ip4Connectivity": PORTAL_CONNECTIVITY,
+            # Real NM publishes both split properties. The Rust helper peeks
+            # Ip6Connectivity on the not-captive branch (to log IPv6-only
+            # portals); NONE here keeps that branch on its normal path.
+            "Ip6Connectivity": NO_CONNECTIVITY,
         },
         [],
     )
