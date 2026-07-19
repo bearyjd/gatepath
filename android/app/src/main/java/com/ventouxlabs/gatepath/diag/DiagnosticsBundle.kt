@@ -137,6 +137,10 @@ object DiagnosticsBundle {
             "CellularFallback(validated=${r.cellularValidated})"
         is DiagnosticReport.NoDnsServers ->
             "NoDnsServers"
+        is DiagnosticReport.PortalRedirectLoop ->
+            "PortalRedirectLoop(chain=${r.chain.joinToString(" -> ")})"
+        is DiagnosticReport.ClockSkew ->
+            "ClockSkew(skewSeconds=${r.skewSeconds})"
         is DiagnosticReport.Inconclusive ->
             "Inconclusive(errors=${r.probeErrors.joinToString("; ")})"
     }

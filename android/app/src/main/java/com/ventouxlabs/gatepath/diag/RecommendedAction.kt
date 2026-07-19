@@ -34,5 +34,6 @@ sealed interface RecommendedAction {
         const val DISABLE_CELLULAR = "disable_cellular_temporarily"
         const val APPLY_WEBVIEW_BRIDGE = "apply_webview_bridge"   // Phase 3.5
         const val RECONNECT_NETWORK = "reconnect_network"
+        const val OPEN_DATE_TIME_SETTINGS = "open_date_time_settings"
     }
 }

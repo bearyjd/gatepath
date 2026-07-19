@@ -83,7 +83,9 @@ class DiagnosticEngine(
         is DiagnosticReport.NoDnsServers -> 85
         is DiagnosticReport.PrivateDnsBlocking -> 80
         is DiagnosticReport.HttpProxyBlocking -> 70
+        is DiagnosticReport.PortalRedirectLoop -> 65
         is DiagnosticReport.SandboxedWebView -> 60
+        is DiagnosticReport.ClockSkew -> 55
         is DiagnosticReport.CellularFallback -> 50
         is DiagnosticReport.HttpsOnlyCaptive -> 40
         is DiagnosticReport.Inconclusive -> 10
@@ -118,6 +120,14 @@ class DiagnosticEngine(
         is DiagnosticReport.NoDnsServers -> RecommendedAction.UserAction(
             id = RecommendedAction.Ids.RECONNECT_NETWORK,
             instruction = "This network gave no DNS servers — the connection is half-broken. Forget or reconnect to the network in Wi-Fi settings.",
+        )
+        is DiagnosticReport.PortalRedirectLoop -> RecommendedAction.UserAction(
+            id = RecommendedAction.Ids.RECONNECT_NETWORK,
+            instruction = "The sign-in page is stuck in a redirect loop (${report.chain.size} hops). Forget or reconnect to the network in Wi-Fi settings.",
+        )
+        is DiagnosticReport.ClockSkew -> RecommendedAction.UserAction(
+            id = RecommendedAction.Ids.OPEN_DATE_TIME_SETTINGS,
+            instruction = "Your clock is off by about ${report.skewSeconds / 60} minutes, which breaks secure connections to the portal. Enable automatic date & time in Settings.",
         )
         is DiagnosticReport.DnsHijack,
         is DiagnosticReport.HttpsOnlyCaptive,

@@ -86,6 +86,25 @@ sealed interface DiagnosticReport {
     data object NoDnsServers : DiagnosticReport
 
     /**
+     * The captive gateway's sign-in redirect chain revisits a URL it already
+     * issued — the portal is looping instead of serving its page (misconfigured
+     * gateway, or a stale auth cookie the portal keeps bouncing). [chain] is
+     * the URLs in order, ending with the first repeat.
+     */
+    data class PortalRedirectLoop(
+        val chain: List<String>,
+    ) : DiagnosticReport
+
+    /**
+     * The device clock disagrees with the gateway's HTTP `Date` header by more
+     * than the tolerance. A wrong clock breaks TLS certificate validation, so
+     * HTTPS portal pages fail in ways that look like network errors.
+     */
+    data class ClockSkew(
+        val skewSeconds: Long,
+    ) : DiagnosticReport
+
+    /**
      * No probe could conclude. Carries the raw probe errors so the user (or
      * a developer reading logs) can see what actually went wrong.
      */

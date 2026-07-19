@@ -100,7 +100,7 @@ class CaptivePortalMonitor(
     // gstatic endpoint; debug builds may override it (see AppModule) so the
     // e2e harness can point it at its mock portal. Production always uses the
     // default.
-    private val probeUrl: String = CONNECTIVITY_CHECK_URL,
+    val probeUrl: String = CONNECTIVITY_CHECK_URL,
 ) {
 
     fun observe(): Flow<NetworkEvent> = callbackFlow {
@@ -179,10 +179,19 @@ class CaptivePortalMonitor(
                                 "default route returned 204 (probe went via a different network — likely VPN tunnel or cellular)"
                             else -> null
                         }
+                        // Validated here means the default route reached the
+                        // internet without meeting the captive gateway — so it
+                        // is not the captive network. A `Portal` result cannot
+                        // reach this branch (it returns above), so the two
+                        // remaining cases are Validated and Error, and only
+                        // Validated proves the bypass.
+                        val defaultRouteBypassesCaptive =
+                            fallbackResult is ProbeResult.Validated
                         val diagnostics = buildDiagnostics(
                             network = network,
                             bindError = bindResult.message,
                             fallbackError = fallbackError,
+                            defaultRouteBypassesCaptive = defaultRouteBypassesCaptive,
                         )
                         Log.w(TAG, "Captive suspected on $network: $diagnostics")
                         trySend(NetworkEvent.CaptivePortalSuspected(network, diagnostics))
@@ -271,7 +280,8 @@ class CaptivePortalMonitor(
         network: Network,
         bindError: String?,
         fallbackError: String?,
-    ): NetworkDiagnostics = buildDiagnostics(network, bindError, fallbackError)
+        defaultRouteBypassesCaptive: Boolean,
+    ): NetworkDiagnostics = buildDiagnostics(network, bindError, fallbackError, defaultRouteBypassesCaptive)
 
     /**
      * Snapshot the current network and global state for the troubleshooting
@@ -283,6 +293,7 @@ class CaptivePortalMonitor(
         network: Network,
         bindError: String?,
         fallbackError: String?,
+        defaultRouteBypassesCaptive: Boolean,
     ): NetworkDiagnostics {
         val linkProps = runCatching { connectivityManager.getLinkProperties(network) }.getOrNull()
         val vpn = runCatching { VpnDetector.detect() }.getOrNull()
@@ -307,6 +318,7 @@ class CaptivePortalMonitor(
             httpProxyDescription = httpProxyDescription,
             dnsServerCount = linkProps?.dnsServers?.size ?: 0,
             hasValidatedCellular = hasValidatedCellular(),
+            defaultRouteBypassesCaptive = defaultRouteBypassesCaptive,
         )
     }
 
