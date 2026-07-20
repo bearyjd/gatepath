@@ -176,7 +176,7 @@ follow-up.
 ### P3.1 — Field diagnostics / troubleshooting
 **Status:** **desktop done (2026-06-30); Android in-app share done (2026-07-01).**
 `docs/TROUBLESHOOTING.md` documents the desktop preconditions, the 14
-`RefusalReason` causes/fixes, the 9 Android `DiagnosticEngine` findings, how to
+`RefusalReason` causes/fixes, the 12 diagnosis findings, how to
 read the audit logs, and common scenarios; and
 `desktop/gatepath-netns-helper/packaging/collect-diagnostics.sh` produces a
 redactable support bundle (unit status + journal, sysext/netns/NM state, tool
@@ -200,6 +200,19 @@ can't leak). The bundle-assembly + redaction logic lives in the pure, Android-fr
 leak" checks); the platform I/O + share sheet live in `share/DiagnosticsSharer.kt`
 + `MainActivity`, verified by the Android CI build.
 
+**Diagnostics expansion — DONE (2026-07-19):** the diagnosis vocabulary grew to a
+shared **12-cause** set (network probes — DNS hijack, HTTPS-only, portal redirect
+loop, clock skew — on top of the original context probes) and the in-app diagnosis
+panel now ships on **both** platforms: Android (`MainScreen`, automatic) and
+desktop (the "Run diagnostics" button in the monitoring window, manual-run today).
+Sequence: #79/#80 (Android context + network probes), #82/#83 (desktop engine
+package + panel), and a cross-platform **cause-parity drift guard**
+(`desktop/tests/test_cause_parity.py`) that parses the Kotlin `DiagnosticReport`
+sealed interface and asserts desktop `Cause` == Kotlin − the three Android-only
+causes (`PrivateDnsBlocking`, `SandboxedWebView`, `CellularFallback`). This is a
+source-parsing guard in the same tier as the refusal-reasons test — **not** the
+heavier shared-schema drift guard still open under P1.1.
+
 ---
 
 ## Known limitations (intentional, tracked elsewhere)
@@ -220,7 +233,9 @@ leak" checks); the platform I/O + share sheet live in `share/DiagnosticsSharer.k
 - Strong unit coverage (Rust + pytest + Android JVM) with pinned privileged argv.
 - **Two** real e2e harnesses (Android emulator, desktop Docker) that prove the
   portal flow + off-domain blocking.
-- `schema-parity.yml` CI for the audit-log schema across desktop/Android.
+- Three cross-language drift guards: `schema-parity.yml` (audit-log schema,
+  desktop/Android), `test_netns_client.py` (Rust helper refusal/wire-error names),
+  and `test_cause_parity.py` (diagnostic cause vocabulary, Android/desktop).
 - `cargo-audit` in CI; an `unsafe`-free privileged crate (`unsafe_code = "deny"`).
 - Unusually honest docs and blocker tracking (`BLOCKERS.md`, `SECURITY_MODEL.md`).
 
