@@ -74,22 +74,36 @@ refusal, returned as a typed D-Bus error
 
 ---
 
-## Android: diagnosis findings
+## Diagnosis findings
 
-The app's `DiagnosticEngine` runs probes and surfaces the highest-severity
-finding plus a recommended action in the diagnosis panel:
+The diagnosis panel ships on **both platforms** — Android (`MainScreen`, run
+automatically) and desktop (the **Run diagnostics** button in the monitoring
+window, manual-run today). It runs probes and surfaces the highest-severity
+finding plus a recommended action. The two engines share one **12-cause**
+vocabulary (Android `DiagnosticReport` ↔ desktop `Cause`, kept in sync by a
+cause-parity drift guard); three causes are **Android-only** because they name
+Android platform concepts with no desktop equivalent — flagged in the table.
 
 | Finding | What it means | What to do |
 |---|---|---|
 | `vpn_blocking` | A full-tunnel VPN is blocking captive sign-in. | Disable the VPN, sign in, then re-enable it. |
 | `dns_hijack` | The gateway is hijacking DNS beyond the connectivity check. | Informational; expected on some captive gateways. |
-| `private_dns_blocking` | Android **Private DNS** (DoT) is active and the captive net blocks it. | Settings → Network → Private DNS → **Off/Automatic** during sign-in. |
+| `private_dns_blocking` *(Android-only)* | Android **Private DNS** (DoT) is active and the captive net blocks it. | Settings → Network → Private DNS → **Off/Automatic** during sign-in. |
 | `http_proxy_blocking` | An HTTP proxy is configured on this network. | Remove the proxy for this Wi-Fi, sign in, restore it. |
-| `sandboxed_webview` | The WebView ran in a sandboxed subprocess without network binding. | Device/WebView issue; update Android System WebView. |
-| `cellular_fallback` | Cellular is masking the captive Wi-Fi state. | Toggle mobile data off briefly so the portal is forced over Wi-Fi. |
+| `sandboxed_webview` *(Android-only)* | The WebView ran in a sandboxed subprocess without network binding. | Device/WebView issue; update Android System WebView. |
 | `https_only_captive` | The captive portal blocks HTTPS outright. | Network-side; try the http:// connectivity-check URL. |
+| `cellular_fallback` *(Android-only)* | Cellular is masking the captive Wi-Fi state. | Toggle mobile data off briefly so the portal is forced over Wi-Fi. |
+| `no_dns_servers` | DHCP handed this network zero DNS servers — a half-broken connect. | Reconnect to the Wi-Fi so DHCP completes and hands out resolvers. |
+| `portal_redirect_loop` | The sign-in redirect chain revisits a URL it already issued. | Gateway-side loop (often a stale auth cookie); clear cookies/reconnect. |
+| `clock_skew` | The device clock disagrees with the gateway beyond tolerance, breaking TLS. | Fix the date/time (enable automatic time), then retry sign-in. |
 | `inconclusive` | No probe could conclude. | See the probe errors in the report; collect logs. |
 | `healthy` | No problem detected. | If sign-in still fails, capture the audit log and file a bug. |
+
+The three Android-only causes (`private_dns_blocking`, `sandboxed_webview`,
+`cellular_fallback`) name Android platform mechanisms — system Private DNS, the
+Android WebView process model, and a cellular radio to fall back onto — that the
+desktop app has no analogue for, so the desktop `Cause` set is these 12 minus
+those 3 (= 9).
 
 ---
 
