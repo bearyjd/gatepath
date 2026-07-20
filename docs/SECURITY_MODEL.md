@@ -46,10 +46,13 @@ requests Gatepath originates on your behalf. Neither kind is the portal page.
 to decide whether a network is captive. Debug builds may retarget it so the e2e harness
 can aim at a mock (`AppModule.resolveProbeUrl`); release builds never do.
 
-**2. The diagnostic battery** (Android only today; the desktop mirror is planned and must
-land under this same section). Runs only when a network is flagged captive-suspected and
-sign-in is stuck — never on a healthy network. Of the ten probes, five read cached state
-and send nothing at all. The other five issue, at most:
+**2. The diagnostic battery.** Both platforms ship a battery now; each declares its probe
+membership in one place (Android `DiagnosticModule`, desktop `diag_context.default_engine()`).
+Most probes read cached/context state and send nothing at all; a few issue network requests.
+
+*Android* (ten probes; five read cached state and send nothing). Runs only when a network is
+flagged captive-suspected and sign-in is stuck — never on a healthy network. The other five
+issue, at most:
 
 - one GET re-running the connectivity check (`HttpProbe`)
 - up to 5 GETs following the portal's own redirect chain (`RedirectLoopProbe`)
@@ -57,6 +60,24 @@ and send nothing at all. The other five issue, at most:
   GET to the HTTPS variant of the probe URL (`HttpsOnlyProbe`)
 - one GET whose `Date` response header is compared against the device clock
   (`ClockSkewProbe`)
+- one system-resolver lookup of the connectivity-check host, plus **one DNS-over-HTTPS
+  query to `1.1.1.1`** naming that same host (`DnsHijackProbe`); the two answers are
+  compared to detect a gateway hijacking DNS beyond the probe endpoints
+
+*Desktop* (eight probes; four read cached/context state and send nothing — `VpnProbe`,
+`NoDnsProbe`, `HttpProxyProbe`, `HttpProbe`). The desktop mirror ships as of this release
+and is reachable by a real user: a **"Run diagnostics" button** in the monitoring window
+runs the battery manually, so on desktop it can be triggered at any time, not only while a
+portal is suspected. Assembling the battery's context runs the connectivity probe (§1) once
+up front — that request's result is what the cached `HttpProbe`/`HttpsOnlyProbe` replay
+without re-fetching. Beyond that connectivity GET, the four network probes issue, at most:
+
+- one GET of the connectivity-check URL (`connectivity-check.ubuntu.com`) whose `Date`
+  response header is compared against the device clock (`ClockSkewProbe`)
+- up to 5 no-follow GETs walking that URL's own redirect chain, one hop at a time
+  (`RedirectLoopProbe`)
+- one GET to the HTTPS variant of the connectivity-check URL — issued only if the cached
+  HTTP connectivity result already validated (`HttpsOnlyProbe`)
 - one system-resolver lookup of the connectivity-check host, plus **one DNS-over-HTTPS
   query to `1.1.1.1`** naming that same host (`DnsHijackProbe`); the two answers are
   compared to detect a gateway hijacking DNS beyond the probe endpoints
@@ -90,6 +111,14 @@ guessing: if the fallback probe proves the default route reaches the internet wi
 passing through the captive gateway, `RedirectLoopProbe`, `HttpsOnlyProbe`, and
 `DnsHijackProbe` report *inconclusive* and send nothing at all, instead of reporting a
 clean result for a network they never touched.
+
+On **desktop** there is no bound path to contrast against in the first place: the Flatpak
+sandbox lacks `CAP_NET_RAW`, so Gatepath cannot bind even the portal session to the captive
+interface (see *Desktop-specific limitations* below). The diagnostic fetches — plain
+`urllib` GETs and a system-resolver lookup, with no `SO_BINDTODEVICE` and no netns — inherit
+that same unconfined default-route behavior. This is deliberate and known: the desktop
+diagnostic battery has **no route confinement**, and the netns helper's hwsim no-leak eval
+proves confinement only of the portal *session* inside the namespace, not of this battery.
 
 ## Android-specific guarantees
 
@@ -246,4 +275,5 @@ portal-window banner.
 | Connectivity-check host (Google/Canonical) learning a device is probing | Out (inherent — the OS's own captive check contacts the same endpoint) |
 | Third party (Cloudflare) learning a device is behind a captive portal | **Out — accepted cost**: one DoH query per diagnostic run, no identifiers attached; see [What Gatepath itself sends](#what-gatepath-itself-sends) |
 | Portal operator observing Gatepath's own diagnostic requests | Out (unavoidable — diagnosing a portal means talking to it) |
-| Diagnostic requests travelling the VPN/cellular default route | **In scope — accepted and bounded**: documented above; probes whose answer would be meaningless on that route decline and send nothing. Not covered by the no-leak sentinel, which proves confinement of the *portal session*, not the diagnostic battery |
+| Diagnostic requests travelling the VPN/cellular default route (Android) | **In scope — accepted and bounded**: documented above; probes whose answer would be meaningless on that route decline and send nothing. Not covered by the no-leak sentinel, which proves confinement of the *portal session*, not the diagnostic battery |
+| Desktop diagnostic requests travelling the default route (no confinement) | **In scope — accepted**: the Flatpak sandbox cannot bind even the portal session (`CAP_NET_RAW` unavailable), so the diagnostic battery — plain `urllib` GETs plus the DoH query — is likewise unbound and rides the system default route. The netns helper's hwsim no-leak eval covers only the portal session inside the namespace, not this battery |
