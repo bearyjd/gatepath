@@ -17,11 +17,74 @@ from gatepath.desktop_isolation import (
     EngageSuccess,
     wait_result_to_close_reason,
 )
+from gatepath.diag.engine import DiagnosisResult
+from gatepath.diag.report import Cause
+from gatepath.diagnosis_runner import run_diagnostics_async
 from gatepath.portal_monitor import CaptiveInterfaceLookup
 from gatepath.portal_session import CloseReason, PortalSession
 from gatepath.session_controller import SessionController
+from gatepath.ui.diagnosis_panel import DiagnosisPanel
 
 logger = logging.getLogger(__name__)
+
+# Cosmetic label used when no captive interface is resolvable. Every desktop
+# probe uses the system default route (unbound sockets); ``interface_name`` is
+# a display label that lands in the context and ``VpnBlocking.interface_name``,
+# never a bind target — so a stable placeholder is correct here.
+_DEFAULT_ROUTE_LABEL = "(default route)"
+
+
+def resolve_interface_name(lookup: Optional[CaptiveInterfaceLookup]) -> str:
+    """Best-effort interface *label* for a manual diagnostics run.
+
+    Prefers the captive-interface lookup when the window was built with one and
+    it yields a non-empty name; otherwise falls back to a stable placeholder.
+    Pure (no ``gi``, no I/O beyond the lookup) so it is unit-testable headless.
+    """
+    if lookup is not None:
+        name = lookup.get_captive_interface()
+        if name:
+            return name
+    return _DEFAULT_ROUTE_LABEL
+
+
+def vpn_labels_from_result(result: DiagnosisResult) -> list[str]:
+    """VPN interface label(s) to surface in the banner, or ``[]``.
+
+    Driven off the diagnosis result's *top* finding (not a second independent
+    VPN call): a non-empty list is returned only when the top cause is
+    ``VPN_BLOCKING``, in which case it carries that report's interface name.
+    Pure, so the banner decision is unit-testable without a live display.
+    """
+    top = result.top
+    if getattr(top, "cause", None) is Cause.VPN_BLOCKING:
+        return [top.interface_name]
+    return []
+
+
+def _begin_diagnostics_run(
+    run_button: object,
+    lookup: Optional[CaptiveInterfaceLookup],
+    on_result: Callable[[DiagnosisResult], None],
+    *,
+    runner: Callable[..., None] = run_diagnostics_async,
+) -> None:
+    """Disable the run button and kick off an async diagnostics run.
+
+    The interface label is resolved **on the worker thread** (via an
+    ``interface_resolver`` closure), not here: ``resolve_interface_name`` can
+    do blocking D-Bus round-trips through ``NMCaptiveInterfaceLookup``, and
+    doing that on the GTK main loop would freeze the UI the instant the button
+    is clicked — defeating the point of the async runner. Factored to module
+    level (gi-free) so this control flow is unit-testable with a fake button
+    and a fake runner, without a live display.
+    """
+    run_button.set_sensitive(False)
+    runner(
+        None,
+        on_result,
+        interface_resolver=lambda: resolve_interface_name(lookup),
+    )
 
 
 def _require_gtk() -> None:
@@ -96,15 +159,43 @@ try:
             # plan's degradation contract for Flatpak-only deployments).
             self._isolation = isolation
             self._captive_interface_lookup = captive_interface_lookup
+            # Diagnosis UI: the panel is created lazily on the first manual
+            # run and re-rendered in place on every subsequent run. The banner
+            # and button are built eagerly in _build_ui.
+            self._diagnosis_panel: Optional[DiagnosisPanel] = None
+            # Guards against an in-flight diagnostics run's idle continuation
+            # firing after the window is gone: a still-running worker will
+            # GLib.idle_add(_on_diagnosis_result), which must not touch disposed
+            # widgets. Cleared on close-request.
+            self._alive = True
             self.set_title("Gatepath")
             self.set_default_size(900, 650)
             self._build_ui()
+            self.connect("close-request", self._on_close_request)
+
+        def _on_close_request(self, _window: object) -> bool:
+            """Mark the window dead so a late diagnostics continuation no-ops.
+
+            Returns False to let the default close proceed unchanged.
+            """
+            self._alive = False
+            return False
 
         def _build_ui(self) -> None:
             """Construct the initial monitoring UI."""
             toolbar_view = Adw.ToolbarView()
             header = Adw.HeaderBar()
             toolbar_view.add_top_bar(header)
+
+            # VPN warning banner: built hidden, revealed only when a diagnosis
+            # result's top cause is VPN_BLOCKING (see _on_diagnosis_result).
+            self._vpn_banner = Adw.Banner()
+            self._vpn_banner.set_revealed(False)
+            toolbar_view.add_top_bar(self._vpn_banner)
+
+            # Vertical content: the monitoring status page on top, and the
+            # diagnosis panel appended below it on the first manual run.
+            content_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
 
             status_page = Adw.StatusPage()
             status_page.set_title("Monitoring for Captive Portal")
@@ -114,13 +205,100 @@ try:
                 "Consider pausing your VPN before connecting to this network."
             )
             status_page.set_icon_name("network-wireless-symbolic")
+            # Let the panel below claim vertical space once it appears.
+            status_page.set_vexpand(False)
 
-            toolbar_view.set_content(status_page)
+            # "Run diagnostics" is always available on the monitoring view.
+            self._run_button = Gtk.Button(label="Run diagnostics")
+            self._run_button.add_css_class("pill")
+            self._run_button.add_css_class("suggested-action")
+            self._run_button.set_halign(Gtk.Align.CENTER)
+            self._run_button.connect("clicked", self._on_run_diagnostics_clicked)
+            status_page.set_child(self._run_button)
+
+            content_box.append(status_page)
+            self._content_box = content_box
+
+            toolbar_view.set_content(content_box)
             self.set_content(toolbar_view)
 
-        def show_vpn_warning(self, vpn_labels: list[str]) -> None:
-            """Show an in-app VPN warning banner."""
+        def _ensure_diagnosis_panel(self) -> DiagnosisPanel:
+            """Create the diagnosis panel on first use, appended below the
+            status page inside a scroller; return the existing one thereafter.
+            """
+            if self._diagnosis_panel is None:
+                panel = DiagnosisPanel()
+                scroller = Gtk.ScrolledWindow()
+                scroller.set_vexpand(True)
+                scroller.set_child(panel)
+                self._content_box.append(scroller)
+                self._diagnosis_panel = panel
+            return self._diagnosis_panel
+
+        def _on_run_diagnostics_clicked(self, _button: "Gtk.Button") -> None:
+            """Kick off a manual diagnostics run off the main loop.
+
+            Delegates to ``_begin_diagnostics_run`` (module level), which
+            disables the button so a run can't be double-triggered and hands
+            the battery to ``run_diagnostics_async`` — resolving the interface
+            label on the worker thread, not here, so the (possibly blocking)
+            D-Bus lookup never runs on the GTK main loop.
+            """
+            _begin_diagnostics_run(
+                self._run_button,
+                self._captive_interface_lookup,
+                self._on_diagnosis_result,
+            )
+
+        def _on_diagnosis_result(self, result: DiagnosisResult) -> None:
+            """Main-loop continuation once the battery finishes.
+
+            Re-enables the run button, (re)renders the result into the panel,
+            and drives the VPN banner from the *result* (not a second VPN
+            call): reveal it when the top cause is VPN_BLOCKING, hide it
+            otherwise.
+            """
+            if not self._alive:
+                # The window was closed while this run was in flight; its
+                # widgets may be disposed. Drop the stale continuation rather
+                # than touch a finalized button/banner. (idle_add repetition is
+                # already prevented by the runner's _deliver wrapper, which
+                # returns False regardless of what this method returns.)
+                return
+            self._run_button.set_sensitive(True)
+            self._ensure_diagnosis_panel().render(result)
+            vpn_labels = vpn_labels_from_result(result)
+            if vpn_labels:
+                # Reuse the engine's recommended instruction as the banner text
+                # so the VPN wording lives in one place (the engine), not a
+                # second hand-authored copy here.
+                self.show_vpn_warning(vpn_labels, result.recommended.instruction)
+            else:
+                self._vpn_banner.set_revealed(False)
+
+        def show_vpn_warning(
+            self, vpn_labels: list[str], instruction: Optional[str] = None
+        ) -> None:
+            """Reveal the in-app VPN warning banner.
+
+            Uses *instruction* (the engine's recommended action text) when
+            given, else a built-in fallback derived from *vpn_labels*. The
+            banner title is Pango markup, so the message is escaped before it
+            is set — ``vpn_labels`` are local interface names today, but
+            escaping keeps this consistent with the panel and safe if the
+            source ever widens.
+            """
             logger.warning("VPN interfaces active: %s", vpn_labels)
+            if instruction:
+                message = instruction
+            else:
+                joined = ", ".join(vpn_labels) if vpn_labels else "unknown interface"
+                message = (
+                    f"A VPN ({joined}) may block captive sign-in. "
+                    "Pause it, sign in, then re-enable."
+                )
+            self._vpn_banner.set_title(GLib.markup_escape_text(message))
+            self._vpn_banner.set_revealed(True)
 
         def open_portal(self, portal_url: str, active_session: PortalSession) -> None:
             """Switch to the portal WebView via the controller.
@@ -240,4 +418,9 @@ except (ImportError, ValueError, AttributeError):
         """Stub for environments without PyGObject."""
 
         def __init__(self, *args, **kwargs) -> None:  # type: ignore[misc]
+            raise ImportError("PyGObject with GTK 4 is required for GatepathWindow.")
+
+        def show_vpn_warning(
+            self, vpn_labels: list[str], instruction: Optional[str] = None
+        ) -> None:
             raise ImportError("PyGObject with GTK 4 is required for GatepathWindow.")
