@@ -21,7 +21,7 @@ from gatepath.diag.engine import DiagnosisResult
 from gatepath.diag.report import Cause
 from gatepath.diagnosis_runner import run_diagnostics_async
 from gatepath.portal_monitor import CaptiveInterfaceLookup
-from gatepath.portal_session import CloseReason, PortalSession
+from gatepath.portal_session import CloseReason, PortalPhase, PortalSession
 from gatepath.session_controller import SessionController
 from gatepath.ui.diagnosis_panel import DiagnosisPanel
 
@@ -300,6 +300,19 @@ try:
             self._vpn_banner.set_title(GLib.markup_escape_text(message))
             self._vpn_banner.set_revealed(True)
 
+        def is_session_active(self) -> bool:
+            """True iff the controller holds a live ACTIVE portal session.
+
+            Public re-entrancy predicate for the portal launcher: it lets the
+            launcher avoid opening a second portal while one is live without
+            reaching into window/controller privates. This is a thin read over
+            ``controller.session.phase`` — the isolated path also calls
+            ``controller.set_active`` (see ``_try_open_portal_isolated``), so a
+            portal opened via the netns helper reads as active here too.
+            """
+            session = self._controller.session
+            return session is not None and session.phase == PortalPhase.ACTIVE
+
         def open_portal(self, portal_url: str, active_session: PortalSession) -> None:
             """Switch to the portal WebView via the controller.
 
@@ -423,4 +436,7 @@ except (ImportError, ValueError, AttributeError):
         def show_vpn_warning(
             self, vpn_labels: list[str], instruction: Optional[str] = None
         ) -> None:
+            raise ImportError("PyGObject with GTK 4 is required for GatepathWindow.")
+
+        def is_session_active(self) -> bool:
             raise ImportError("PyGObject with GTK 4 is required for GatepathWindow.")

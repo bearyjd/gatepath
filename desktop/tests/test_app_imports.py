@@ -69,6 +69,104 @@ class TestPureStdlibModulesDoNotImportGi:
         )
 
 
+class TestAppImportableWithoutGi:
+    """gatepath.app must import without PyGObject (only run_app() touches gi)."""
+
+    def test_import_app_without_gi(self) -> None:
+        code = (
+            "import sys, importlib; "
+            "importlib.import_module('gatepath.app'); "
+            "gi_mods = [k for k in sys.modules if k == 'gi' or k.startswith('gi.')]; "
+            "print(gi_mods); "
+            "sys.exit(1 if gi_mods else 0)"
+        )
+        result = subprocess.run(
+            [sys.executable, "-c", code],
+            capture_output=True,
+            timeout=10,
+            env=_env_with_desktop_on_path(),
+        )
+        assert result.returncode == 0, (
+            f"gatepath.app imported gi: {result.stdout.decode().strip()}\n"
+            f"stderr: {result.stderr.decode()}"
+        )
+
+
+class _FakeWindow:
+    """Minimal stand-in for GatepathWindow exposing the launcher's collaborators."""
+
+    def __init__(self) -> None:
+        self.opened: list = []
+        self._active = False
+
+    def open_portal(self, portal_url: str, active_session: object) -> None:
+        self.opened.append((portal_url, active_session))
+        self._active = True
+
+    def is_session_active(self) -> bool:
+        return self._active
+
+
+class TestStartPortalMonitoring:
+    """Unit tests for the app.py wiring seam (no GTK, injected start)."""
+
+    def test_builds_launcher_and_starts_monitor(self) -> None:
+        from gatepath.app import _start_portal_monitoring
+
+        recorded: dict = {}
+        sentinel_monitor = object()
+
+        def fake_start(on_detected, *, probe_url):
+            recorded["on_detected"] = on_detected
+            recorded["probe_url"] = probe_url
+            return sentinel_monitor
+
+        win = _FakeWindow()
+        monitor = _start_portal_monitoring(win, "http://probe.test", start=fake_start)
+
+        assert monitor is sentinel_monitor
+        assert recorded["probe_url"] == "http://probe.test"
+        assert callable(recorded["on_detected"])
+
+    def test_detection_callback_drives_open_portal(self) -> None:
+        from gatepath.app import _start_portal_monitoring
+
+        captured: dict = {}
+
+        def fake_start(on_detected, *, probe_url):
+            captured["on_detected"] = on_detected
+            return object()
+
+        win = _FakeWindow()
+        # Inject a synchronous launcher (dispatch runs the callback inline, VPN
+        # detection stubbed) so the wired callback reaches window.open_portal
+        # without a GTK main loop.
+        from gatepath.portal_launcher import PortalLauncher
+
+        def launcher_factory(*, open_portal, is_session_active):
+            return PortalLauncher(
+                open_portal,
+                is_session_active,
+                detect_vpn=lambda: [],
+                dispatch=lambda cb: cb(),
+            )
+
+        _start_portal_monitoring(
+            win,
+            None,
+            start=fake_start,
+            launcher_factory=launcher_factory,
+        )
+
+        captured["on_detected"]("http://portal.test/login")
+        assert len(win.opened) == 1
+        assert win.opened[0][0] == "http://portal.test/login"
+
+        # Re-entrancy: a second detection while the session is active is dropped.
+        captured["on_detected"]("http://portal.test/login")
+        assert len(win.opened) == 1
+
+
 def _env_with_desktop_on_path() -> dict:
     """Return os.environ with desktop/ prepended to PYTHONPATH."""
     import os
