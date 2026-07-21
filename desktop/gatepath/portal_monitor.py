@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import logging
 import threading
-import time
 from typing import Callable, Optional, Protocol, runtime_checkable
 
 logger = logging.getLogger(__name__)
@@ -87,6 +86,186 @@ class Monitor:
             except Exception as exc:  # noqa: BLE001
                 logger.warning("Monitor probe error: %s", exc)
             self._stop_event.wait(self._poll_interval)
+
+
+class Subscription(Protocol):
+    """Handle returned by :py:meth:`NMConnectivitySignals.subscribe`.
+
+    Calling :py:meth:`unsubscribe` releases the underlying signal handler.
+    Idempotent — multiple unsubscribes are safe. Mirrors
+    :py:class:`desktop_isolation.Subscription`; kept local so this module
+    stays self-contained (stdlib + typing only at the top).
+    """
+
+    def unsubscribe(self) -> None:
+        ...
+
+
+@runtime_checkable
+class NMConnectivitySignals(Protocol):
+    """Surface for subscribing to NetworkManager connectivity-change signals.
+
+    Real impl (added in a later task) is a lazy-dasbus subscriber to NM's
+    manager ``StateChanged`` signal; tests inject a fake. The ``callback``
+    fires — on the GLib main loop in production — whenever NM's overall
+    connectivity state changes. It takes no arguments: the signal is only a
+    *trigger*; :py:class:`NMSignalMonitor` re-probes to confirm captivity.
+    """
+
+    def subscribe(self, callback: Callable[[], None]) -> Subscription:
+        """Register a connectivity-change callback.
+
+        Returns a :py:class:`Subscription` whose :py:meth:`unsubscribe` MUST
+        be called to release the underlying handler.
+        """
+        ...
+
+
+class NMSignalMonitor:
+    """Event-driven captive-portal monitor.
+
+    Subscribes to NetworkManager connectivity-change signals and, on each
+    change, runs ``probe_fn`` on a short-lived daemon thread (never inline —
+    the signal fires on the GLib main loop, and the probe does blocking
+    network I/O). When ``probe_fn`` returns a portal URL, ``on_portal_detected``
+    is invoked with it on that worker thread.
+
+    Debounced: a single in-flight flag coalesces a burst of signals into at
+    most one probe at a time, so rapid NM transitions can't spawn a probe
+    storm. Same ``start()``/``stop()`` surface as :py:class:`Monitor`.
+    """
+
+    def __init__(
+        self,
+        signals: NMConnectivitySignals,
+        probe_fn: Callable[[], Optional[str]],
+        on_portal_detected: Callable[[str], None],
+    ) -> None:
+        self._signals = signals
+        self._probe_fn = probe_fn
+        self._on_portal_detected = on_portal_detected
+        self._subscription: Optional[Subscription] = None
+        self._lock = threading.Lock()
+        self._probe_in_flight = False
+        self._worker: Optional[threading.Thread] = None
+
+    def start(self) -> None:
+        """Subscribe to connectivity-change signals. Idempotent."""
+        if self._subscription is not None:
+            return
+        self._subscription = self._signals.subscribe(self._on_connectivity_change)
+        logger.info("NM-signal portal monitor started")
+
+    def stop(self) -> None:
+        """Unsubscribe from connectivity-change signals. Idempotent."""
+        if self._subscription is not None:
+            self._subscription.unsubscribe()
+            self._subscription = None
+        logger.info("NM-signal portal monitor stopped")
+
+    def _on_connectivity_change(self) -> None:
+        """Signal handler (runs on the GLib main loop in production).
+
+        Must never raise (it fires from a signal handler) and must never
+        probe inline. Spawns a worker only if no probe is already in flight.
+        """
+        try:
+            with self._lock:
+                if self._probe_in_flight:
+                    return
+                self._probe_in_flight = True
+            worker = threading.Thread(
+                target=self._probe_worker,
+                name="gatepath-nm-probe",
+                daemon=True,
+            )
+            self._worker = worker
+            worker.start()
+        except Exception as exc:  # noqa: BLE001
+            # A failure spawning the worker must not escape into the signal
+            # dispatcher; clear the flag so a later signal can retry.
+            logger.warning("NM-signal probe dispatch error: %s", exc)
+            with self._lock:
+                self._probe_in_flight = False
+
+    def _probe_worker(self) -> None:
+        """Run the probe off the main loop; report a detected portal URL."""
+        try:
+            portal_url = self._probe_fn()
+            if portal_url is not None:
+                logger.info("Portal detected via NM-signal probe: %s", portal_url)
+                self._on_portal_detected(portal_url)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("NM-signal probe error: %s", exc)
+        finally:
+            with self._lock:
+                self._probe_in_flight = False
+
+
+# ── Production NMConnectivitySignals impl (lazy dasbus import) ───────────
+#
+# NM's manager emits ``StateChanged(state: u)`` whenever the overall NMState
+# changes. We deliberately IGNORE the ``state`` argument: NMState numeric
+# semantics vary and can't be exercised against real NM here, and the probe
+# (portal_probe.probe) is the authoritative captive check. The signal is only
+# a *trigger*; NMSignalMonitor re-probes on every transition to confirm.
+
+NM_BUS_NAME = "org.freedesktop.NetworkManager"
+NM_OBJECT_PATH = "/org/freedesktop/NetworkManager"
+
+
+class DbusNMConnectivitySignals:
+    """System-bus subscription to NM manager ``StateChanged``.
+
+    Lazy dasbus import (mirrors :py:class:`desktop_isolation.DbusIsolationSignals`):
+    constructing this with no injected bus raises ``RuntimeError`` if dasbus or
+    the bus is unavailable, so :py:func:`start_nm_monitor` can fall back to
+    polling. Not unit-tested against a real bus — same posture as
+    ``DbusIsolationSignals`` (only the integration harness exercises live
+    signal delivery); the subscribe/adapter/unsubscribe wiring IS unit-tested
+    with a fake bus.
+    """
+
+    def __init__(self, bus=None) -> None:  # type: ignore[no-untyped-def]
+        """Construct a signals subscriber.
+
+        ``bus`` is an optional dasbus message-bus instance; ``None`` (the
+        default) uses the system bus. Tests inject a fake bus to exercise the
+        signal-subscription path headless.
+        """
+        if bus is None:
+            try:
+                from dasbus.connection import SystemMessageBus  # noqa: PLC0415
+            except ImportError as exc:
+                raise RuntimeError(f"dasbus not available: {exc}") from exc
+            bus = SystemMessageBus()
+        self._bus = bus
+        self._proxy = None  # constructed on first subscribe
+
+    def subscribe(self, callback: Callable[[], None]) -> Subscription:
+        if self._proxy is None:
+            self._proxy = self._bus.get_proxy(NM_BUS_NAME, NM_OBJECT_PATH)
+
+        def adapter(state: int) -> None:
+            # Drop the NMState arg: the probe is authoritative (see note above).
+            callback()
+
+        # dasbus signals: the proxy exposes the signal as an attribute that
+        # supports `.connect(handler)` returning a handler ID; disconnect via
+        # `.disconnect(id)`. Matches DbusIsolationSignals.
+        signal = self._proxy.StateChanged
+        handler_id = signal.connect(adapter)
+
+        proxy = self._proxy
+
+        class _DbusSubscription:
+            def unsubscribe(self) -> None:
+                try:
+                    proxy.StateChanged.disconnect(handler_id)
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("signal disconnect raised: %s", exc)
+
+        return _DbusSubscription()
 
 
 def _make_probe_fn(probe_url: Optional[str] = None) -> Callable[[], Optional[str]]:
@@ -191,24 +370,42 @@ def _check_device_for_captive(device_path: str) -> Optional[str]:
 def start_nm_monitor(
     on_portal_detected: Callable[[str], None],
     probe_url: Optional[str] = None,
-) -> Monitor:
-    """Attempt to use NetworkManager via dasbus; fall back to polling Monitor.
+    *,
+    signals_factory: Optional[Callable[[], NMConnectivitySignals]] = None,
+) -> "Monitor | NMSignalMonitor":
+    """Start a captive-portal monitor, preferring the event-driven NM path.
 
-    Returns the Monitor instance (already started).
+    Tries to build an :py:class:`NMConnectivitySignals` source (by default the
+    lazy-dasbus :py:class:`DbusNMConnectivitySignals`) and, on success, returns a
+    started :py:class:`NMSignalMonitor` that re-probes on every NM connectivity
+    transition. If building or starting that source fails for ANY reason (no
+    dasbus, no system bus, no NetworkManager), falls back to the polling
+    :py:class:`Monitor`. Both share the ``start()``/``stop()`` surface and are
+    returned already started; callers (``app.py``) only hold the handle.
+
+    ``signals_factory`` is injectable for headless tests: pass a factory
+    returning a fake :py:class:`NMConnectivitySignals` to exercise the
+    signal path, or one that raises to exercise the polling fallback. The
+    public 2-arg form (``on_portal_detected``, ``probe_url``) is unchanged.
     """
-    try:
-        import gi  # noqa: PLC0415
-
-        gi.require_version("NM", "1.0")
-        from gi.repository import NM  # noqa: PLC0415, F401
-
-        # dasbus NM integration would be wired here.
-        # For the MVP, we fall through to the polling fallback.
-        logger.info("NetworkManager available; using polling fallback for MVP")
-    except (ImportError, ValueError) as exc:
-        logger.info("NetworkManager/dasbus unavailable (%s); using polling fallback", exc)
-
+    factory = signals_factory or DbusNMConnectivitySignals
     probe_fn = _make_probe_fn(probe_url)
+
+    try:
+        signals = factory()
+        monitor = NMSignalMonitor(
+            signals=signals,
+            probe_fn=probe_fn,
+            on_portal_detected=on_portal_detected,
+        )
+        monitor.start()
+        logger.info("Portal monitor: event-driven NM-signal path active")
+        return monitor
+    except Exception as exc:  # noqa: BLE001 — NM/dasbus can fail many ways
+        logger.info(
+            "NM-signal path unavailable (%s); falling back to polling", exc
+        )
+
     monitor = Monitor(
         probe_fn=probe_fn,
         on_portal_detected=on_portal_detected,
