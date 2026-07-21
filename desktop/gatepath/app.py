@@ -8,7 +8,10 @@ to work in environments without GTK.
 from __future__ import annotations
 
 import logging
-from typing import Optional
+from typing import TYPE_CHECKING, Callable, Optional
+
+if TYPE_CHECKING:
+    from gatepath.portal_monitor import Monitor
 
 logger = logging.getLogger(__name__)
 
@@ -52,6 +55,40 @@ def _try_build_isolation():
     return isolation, lookup
 
 
+def _start_portal_monitoring(
+    win,
+    probe_url: Optional[str],
+    *,
+    start: Optional[Callable[..., "Monitor"]] = None,
+    launcher_factory: Optional[Callable[..., object]] = None,
+) -> "Monitor":
+    """Wire *win* to a polling portal monitor and start it.
+
+    Builds a :class:`PortalLauncher` bridging the monitor's detection callback
+    to ``win.open_portal`` (guarded by ``win.is_session_active``), then starts a
+    polling :class:`Monitor` via ``start_nm_monitor``. Returns the started
+    monitor; the caller must keep the returned handle alive so the daemon-thread
+    poller (and, transitively, the launcher bound into its callback) is not
+    garbage-collected.
+
+    ``start`` and ``launcher_factory`` are injectable for headless unit tests;
+    they default to the real ``start_nm_monitor`` / ``PortalLauncher``. This
+    function is gi-free to import — GTK is only touched when the launcher
+    dispatches to the main loop at detection time.
+    """
+    from gatepath.portal_launcher import PortalLauncher  # noqa: PLC0415
+    from gatepath.portal_monitor import start_nm_monitor  # noqa: PLC0415
+
+    start = start or start_nm_monitor
+    launcher_factory = launcher_factory or PortalLauncher
+
+    launcher = launcher_factory(
+        open_portal=win.open_portal,
+        is_session_active=win.is_session_active,
+    )
+    return start(launcher.on_detected, probe_url=probe_url)
+
+
 def run_app(*, probe_url: Optional[str] = None) -> None:
     """Import gi, construct Adw.Application, and run the GTK main loop.
 
@@ -62,7 +99,7 @@ def run_app(*, probe_url: Optional[str] = None) -> None:
 
         gi.require_version("Gtk", "4.0")
         gi.require_version("Adw", "1")
-        from gi.repository import Adw, Gio, GLib  # noqa: PLC0415
+        from gi.repository import Adw, Gio  # noqa: PLC0415
     except (ImportError, ValueError) as exc:
         raise ImportError(
             "PyGObject with GTK 4 and libadwaita is required to run the Gatepath GUI.\n"
@@ -81,6 +118,7 @@ def run_app(*, probe_url: Optional[str] = None) -> None:
                 flags=Gio.ApplicationFlags.DEFAULT_FLAGS,
             )
             self._probe_url = probe_url
+            self._monitor: Optional[Monitor] = None
 
         def do_activate(self) -> None:  # type: ignore[override]
             win = self.get_active_window()
@@ -91,6 +129,11 @@ def run_app(*, probe_url: Optional[str] = None) -> None:
                     isolation=isolation,
                     captive_interface_lookup=captive_lookup,
                 )
+                # Start the portal monitor exactly once, when the window is
+                # first created — do_activate can fire repeatedly. The handle is
+                # retained on the app so the daemon-thread poller isn't GC'd.
+                if self._monitor is None:
+                    self._monitor = _start_portal_monitoring(win, self._probe_url)
             win.present()
 
     app = GatepathApp()
