@@ -9,7 +9,7 @@ the Rust source, round-trips every wire name). This is the third such guard —
 same tier as the refusal-reasons one: a lightweight source parser, NOT the
 shared-schema upgrade tracked in ROADMAP P1.1.
 
-Kotlin is the source of truth (12 variants); desktop mirrors it minus three
+Kotlin is the source of truth (12 variants); desktop mirrors it minus two
 causes that are Android platform concepts. If either side drifts, the parity
 tests below fail loudly and name what moved.
 """
@@ -38,11 +38,12 @@ _KOTLIN_REPORT = (
 )
 
 # Causes that legitimately exist only on Android — see `gatepath/diag/report.py`'s
-# module docstring for the per-cause rationale (Private DNS is an Android system
-# setting, the sandboxed-WebView process model is Android-specific, and desktop
-# has no cellular radio to fall back onto). This allowlist is the ONLY sanctioned
-# asymmetry; test 2 pins it against real Kotlin variants so it can't go stale.
-_ANDROID_ONLY = {"PrivateDnsBlocking", "SandboxedWebView", "CellularFallback"}
+# module docstring for the per-cause rationale (the sandboxed-WebView process
+# model is Android-specific, and desktop has no cellular radio to fall back
+# onto). This allowlist is the ONLY sanctioned asymmetry; test 2 pins it against
+# real Kotlin variants so it can't go stale. (`PrivateDnsBlocking` was here too
+# until desktop gained systemd-resolved strict-DoT detection.)
+_ANDROID_ONLY = {"SandboxedWebView", "CellularFallback"}
 
 
 # A `data object`/`data class <Name>` declaration ending in `: DiagnosticReport`.
@@ -193,7 +194,7 @@ def test_no_desktop_only_cause() -> None:
 
 
 def test_variant_counts_are_pinned() -> None:
-    """12 Kotlin − 3 Android-only = 9 desktop.
+    """12 Kotlin − 2 Android-only = 10 desktop.
 
     A blunt count check so *adding* a Kotlin variant (without touching either the
     desktop enum or the allowlist) fails here too, not only via the set diff.
@@ -205,7 +206,7 @@ def test_variant_counts_are_pinned() -> None:
         f"{sorted(kotlin)}. If the vocabulary changed on purpose, update this "
         "count and reconcile the desktop side + docs/TROUBLESHOOTING.md."
     )
-    assert len(python) == 9, (
-        f"expected 9 desktop Cause values (12 Kotlin − 3 Android-only), found "
+    assert len(python) == 10, (
+        f"expected 10 desktop Cause values (12 Kotlin − 2 Android-only), found "
         f"{len(python)}: {sorted(python)}."
     )

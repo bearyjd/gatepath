@@ -43,6 +43,7 @@ _RANK: dict[Cause, int] = {
     Cause.VPN_BLOCKING: 100,
     Cause.DNS_HIJACK: 90,
     Cause.NO_DNS_SERVERS: 85,
+    Cause.PRIVATE_DNS_BLOCKING: 80,
     Cause.HTTP_PROXY_BLOCKING: 70,
     Cause.PORTAL_REDIRECT_LOOP: 65,
     Cause.CLOCK_SKEW: 55,
@@ -76,6 +77,14 @@ def _recommended_action_for(report: DiagnosticReport) -> RecommendedAction:
             instruction=(
                 f"Your VPN ({report.interface_name}) is blocking captive sign-in. "
                 "Pause it, sign in, then re-enable."
+            ),
+        )
+    if report.cause is Cause.PRIVATE_DNS_BLOCKING:
+        return RecommendedAction(
+            action_id=ActionId.DISABLE_PRIVATE_DNS,
+            instruction=(
+                "DNS-over-TLS (Private DNS) is blocking captive sign-in. Disable "
+                "strict DNS-over-TLS for this network, sign in, then re-enable."
             ),
         )
     if report.cause is Cause.HTTP_PROXY_BLOCKING:

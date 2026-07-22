@@ -208,10 +208,14 @@ desktop (the "Run diagnostics" button in the monitoring window, manual-run today
 Sequence: #79/#80 (Android context + network probes), #82/#83 (desktop engine
 package + panel), and a cross-platform **cause-parity drift guard**
 (`desktop/tests/test_cause_parity.py`) that parses the Kotlin `DiagnosticReport`
-sealed interface and asserts desktop `Cause` == Kotlin − the three Android-only
-causes (`PrivateDnsBlocking`, `SandboxedWebView`, `CellularFallback`). This is a
-source-parsing guard in the same tier as the refusal-reasons test — **not** the
-heavier shared-schema drift guard still open under P1.1.
+sealed interface and asserts desktop `Cause` == Kotlin − the Android-only causes
+(now just `SandboxedWebView`, `CellularFallback`). This is a source-parsing
+guard in the same tier as the refusal-reasons test — **not** the heavier
+shared-schema drift guard still open under P1.1. **`PrivateDnsBlocking` is now
+shared:** desktop detects strict systemd-resolved DNS-over-TLS
+(`private_dns_probe` + `_detect_private_dns` reading resolved's `DNSOverTLS`
+property over the `org.freedesktop.resolve1` D-Bus interface, so it works
+inside the Flatpak sandbox); DoH-proxy detection remains a future extension.
 
 ---
 

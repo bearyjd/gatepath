@@ -81,14 +81,14 @@ automatically) and desktop (the **Run diagnostics** button in the monitoring
 window, manual-run today). It runs probes and surfaces the highest-severity
 finding plus a recommended action. The two engines share one **12-cause**
 vocabulary (Android `DiagnosticReport` ↔ desktop `Cause`, kept in sync by a
-cause-parity drift guard); three causes are **Android-only** because they name
+cause-parity drift guard); two causes are **Android-only** because they name
 Android platform concepts with no desktop equivalent — flagged in the table.
 
 | Finding | What it means | What to do |
 |---|---|---|
 | `vpn_blocking` | A full-tunnel VPN is blocking captive sign-in. | Disable the VPN, sign in, then re-enable it. |
 | `dns_hijack` | The gateway is hijacking DNS beyond the connectivity check. | Informational; expected on some captive gateways. |
-| `private_dns_blocking` *(Android-only)* | Android **Private DNS** (DoT) is active and the captive net blocks it. | Settings → Network → Private DNS → **Off/Automatic** during sign-in. |
+| `private_dns_blocking` | Strict **DNS-over-TLS / Private DNS** is active and the captive net blocks it. | **Android:** Settings → Network → Private DNS → **Off/Automatic** during sign-in. **Desktop:** disable strict systemd-resolved DoT (`DNSOverTLS=yes`) for this network, sign in, re-enable. |
 | `http_proxy_blocking` | An HTTP proxy is configured on this network. | Remove the proxy for this Wi-Fi, sign in, restore it. |
 | `sandboxed_webview` *(Android-only)* | The WebView ran in a sandboxed subprocess without network binding. | Device/WebView issue; update Android System WebView. |
 | `https_only_captive` | The captive portal blocks HTTPS outright. | Network-side; try the http:// connectivity-check URL. |
@@ -99,11 +99,12 @@ Android platform concepts with no desktop equivalent — flagged in the table.
 | `inconclusive` | No probe could conclude. | See the probe errors in the report; collect logs. |
 | `healthy` | No problem detected. | If sign-in still fails, capture the audit log and file a bug. |
 
-The three Android-only causes (`private_dns_blocking`, `sandboxed_webview`,
-`cellular_fallback`) name Android platform mechanisms — system Private DNS, the
-Android WebView process model, and a cellular radio to fall back onto — that the
-desktop app has no analogue for, so the desktop `Cause` set is these 12 minus
-those 3 (= 9).
+The two Android-only causes (`sandboxed_webview`, `cellular_fallback`) name
+Android platform mechanisms — the Android WebView process model and a cellular
+radio to fall back onto — that the desktop app has no analogue for, so the
+desktop `Cause` set is these 12 minus those 2 (= 10). (`private_dns_blocking`
+used to be Android-only; desktop now detects strict systemd-resolved
+DNS-over-TLS, so it is shared.)
 
 ---
 

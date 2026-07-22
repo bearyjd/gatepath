@@ -6,8 +6,9 @@ with fakes and the package needs no I/O imports. Whoever runs the engine
 (`gatepath.diag_context`) is responsible for filling these in from the real
 system.
 
-Deliberately absent versus Android: `is_private_dns_active` (an Android
-system setting) and `has_validated_cellular` (no cellular).
+Deliberately absent versus Android: `has_validated_cellular` (desktop has no
+cellular radio to fall back onto). `private_dns_active` IS present — desktop
+detects strict systemd-resolved DNS-over-TLS (see `diag_context.py`).
 """
 
 from __future__ import annotations
@@ -72,6 +73,13 @@ class ProbeContext:
     # in this state — see `default_route_not_captive_report`. Mirror of
     # Android `ProbeContext.defaultRouteBypassesCaptive`.
     default_route_bypasses_captive: bool = False
+    # Strict DNS-over-TLS (Private DNS) state, populated by `diag_context`.
+    # `private_dns_active` is `True` only when the resolver enforces DoT (it
+    # cannot silently downgrade to plaintext); `private_dns_server` is the
+    # configured resolver host, if known. Mirror of Android
+    # `ProbeContext.isPrivateDnsActive` / `ProbeContext.privateDnsServer`.
+    private_dns_active: bool = False
+    private_dns_server: Optional[str] = None
 
 
 def default_route_not_captive_report(probe_name: str) -> DiagnosticReport:
