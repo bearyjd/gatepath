@@ -97,12 +97,28 @@ messages name the likely cause; and `schema-parity.yml` cross-referenced as the
 heavier alternative. Mutation-tested (missing + swapped mapping both fail the
 guard) and independently code-reviewed (APPROVE; 5 LOW hardening notes applied).
 
-**Bigger drift guard (still open):** extend the `schema-parity.yml` pattern
-(shared artifact + per-language conformance tests) to the **D-Bus interface +
-error names** — a checked introspection XML / shared error-name list both sides
-validate against — and move the `LaunchPortal` arity pin and the
-`PortalSubprocessExited` signal-shape check out of `--ignored` (they never run in
-CI today).
+**Bigger drift guard — DONE (2026-07-21) for the interface surface.** The
+`schema-parity.yml` pattern now covers the **D-Bus method/signal signatures**: a
+shared artifact `docs/netns_helper_dbus_contract.json` that both sides validate
+against in CI (`dbus-contract-parity.yml`). The Rust side introspects the real
+zbus interface **without a bus** (`src/dbus_contract_test.rs` calls the
+macro-generated `Interface::introspect_to_writer` on the interface built over
+the backend fakes, then asserts every method's in/out signature + the
+`PortalSubprocessExited` signal args match the artifact, both directions). The
+Python side (`test_dbus_contract.py`) pins the client's bus/path/interface
+constants, method arities, and the `SubprocessExit` payload against the same
+artifact. This moves the `LaunchPortal` arity + `PortalSubprocessExited`
+signal-shape drift-detection into CI **without needing a live bus** — the
+mechanism the old `#[ignore]`d integration tests couldn't. Error *names* stay
+guarded by `test_netns_client.py` (the artifact references only the prefix).
+**Still open:** the `#[ignore]`d `tests/dbus_integration.rs` live-wire round-trip
+checks (real bus/polkit) remain manual — they verify runtime behaviour, not
+static drift, and genuinely need a bus. Also: the error-name *prefix* is pinned
+against the artifact only Python-side (`ERROR_PREFIX`); the Rust
+`#[zbus(prefix = …)]` literal is not cross-checked, so a lone edit of it would
+change wire error names uncaught (the variant *names* are still round-tripped by
+`test_netns_client.py`). Narrow; a one-line source-parse of the prefix would
+close it.
 
 ### P1.2 — Property/fuzz the privileged boundary validators
 **Status:** **`proptest` done (2026-06-30)**; a `cargo-fuzz`/libFuzzer target is an

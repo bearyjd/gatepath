@@ -68,6 +68,11 @@ pub mod spawn;
 pub mod throttle;
 pub mod validation;
 
+// D-Bus contract drift guard: asserts the zbus interface matches the shared
+// docs/netns_helper_dbus_contract.json (introspection, no bus). Test-only.
+#[cfg(test)]
+mod dbus_contract_test;
+
 /// Request shape for the D-Bus method `SetupCaptiveNetns(interface_name: s)`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SetupCaptiveRequest {
