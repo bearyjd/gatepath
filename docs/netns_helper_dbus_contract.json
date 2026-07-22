@@ -1,0 +1,30 @@
+{
+  "_comment": "Shared D-Bus contract for gatepath-netns-helper. Single source of truth for the wire interface between the Rust helper (desktop/gatepath-netns-helper/src/dbus_service.rs) and the Python client (desktop/gatepath/netns_client.py). Both sides are drift-guarded against THIS file in CI (.github/workflows/dbus-contract-parity.yml), mirroring docs/audit_log_schema.json + schema-parity.yml. D-Bus type codes: s=string, u=uint32, i=int32, ''=no value. Method args exclude the &self receiver and zbus header/signal-emitter parameters. Error NAMES are guarded separately by desktop/tests/test_netns_client.py; only the prefix is pinned here.",
+  "bus_name": "com.ventouxlabs.Gatepath.NetNsHelper",
+  "object_path": "/com/ventouxlabs/Gatepath/NetNsHelper",
+  "interface": "com.ventouxlabs.Gatepath.NetNsHelper1",
+  "error_prefix": "com.ventouxlabs.Gatepath.NetNsHelper.Error.",
+  "methods": {
+    "SetupCaptive": {
+      "in": ["s"],
+      "out": "s",
+      "doc": "interface_name -> netns path; errors on refusal"
+    },
+    "TeardownCaptive": {
+      "in": [],
+      "out": "",
+      "doc": "tear down the active session; errors on refusal"
+    },
+    "LaunchPortal": {
+      "in": ["s", "s", "s", "s"],
+      "out": "u",
+      "doc": "portal_url, wayland_display, x_display, x_authority -> spawned PID (DESK-004 display args)"
+    }
+  },
+  "signals": {
+    "PortalSubprocessExited": {
+      "args": ["u", "i", "i"],
+      "doc": "pid, exit_code (-1 if signalled), signal_num (0 if exited normally)"
+    }
+  }
+}

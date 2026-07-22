@@ -1,0 +1,54 @@
+name: dbus-contract-parity
+
+# Guards the gatepath-netns-helper D-Bus wire interface against drift between
+# the Rust helper (dbus_service.rs) and the Python client (netns_client.py).
+# Both sides validate against the single shared artifact
+# docs/netns_helper_dbus_contract.json — the same shape as the audit-log
+# schema-parity guard (docs/audit_log_schema.json + schema-parity.yml). The
+# Rust side introspects the real zbus interface (no bus); the Python side
+# checks the client constants/arities/signal payload. Error *names* are guarded
+# separately by desktop/tests/test_netns_client.py.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'docs/netns_helper_dbus_contract.json'
+      - 'desktop/gatepath-netns-helper/src/dbus_service.rs'
+      - 'desktop/gatepath-netns-helper/src/dbus_contract_test.rs'
+      - 'desktop/gatepath-netns-helper/src/lib.rs'
+      - 'desktop/gatepath/netns_client.py'
+      - 'desktop/tests/test_dbus_contract.py'
+      - '.github/workflows/dbus-contract-parity.yml'
+  pull_request:
+    paths:
+      - 'docs/netns_helper_dbus_contract.json'
+      - 'desktop/gatepath-netns-helper/src/dbus_service.rs'
+      - 'desktop/gatepath-netns-helper/src/dbus_contract_test.rs'
+      - 'desktop/gatepath-netns-helper/src/lib.rs'
+      - 'desktop/gatepath/netns_client.py'
+      - 'desktop/tests/test_dbus_contract.py'
+      - '.github/workflows/dbus-contract-parity.yml'
+
+jobs:
+  parity:
+    name: D-Bus contract parity (helper ⇄ client)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Validate the contract JSON itself parses
+        run: python -c "import json; json.load(open('docs/netns_helper_dbus_contract.json'))"
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - name: Install pytest
+        run: python -m pip install --upgrade pip pytest
+      - name: Python client conforms to the contract
+        run: python -m pytest desktop/tests/test_dbus_contract.py -v
+
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Rust helper interface conforms to the contract
+        working-directory: desktop/gatepath-netns-helper
+        run: cargo test dbus_interface_matches_shared_contract

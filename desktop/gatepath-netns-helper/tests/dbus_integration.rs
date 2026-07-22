@@ -6,6 +6,14 @@
 //! signatures, the macros silently regenerate code with the new shapes
 //! and our unit tests (which use Fake* impls) won't catch the drift.
 //!
+//! Note: drift in *our own* helper interface (`NetNsHelper1` method/signal
+//! signatures) is now caught in CI without a bus by
+//! `src/dbus_contract_test.rs` — it introspects the real zbus interface and
+//! asserts it matches `docs/netns_helper_dbus_contract.json` (see
+//! `dbus-contract-parity.yml`). These integration tests remain the manual
+//! live-wire check for the EXTERNAL PolicyKit/NetworkManager signatures and
+//! `launch_portal`'s runtime round-trip, which genuinely need a real bus.
+//!
 //! All tests are `#[ignore]`'d so they don't run in CI (Github-hosted
 //! runners have no system bus + no polkitd). Run manually on a real
 //! Linux box with PolicyKit and NetworkManager active:
