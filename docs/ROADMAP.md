@@ -225,16 +225,18 @@ heavier shared-schema drift guard still open under P1.1.
   Wi-Fi stack); physical-card confirmation (real Wi-Fi firmware/RF quirks) is
   pending but is no longer the core unproven risk — the privileged path and
   no-leak invariant are proven. **Open captive networks only.**
-- **Desktop live portal detection is polling-based (MVP) and on-hardware
-  unproven.** The GTK app now wires a portal detection loop to the portal
-  window (`app.py` → `portal_launcher.PortalLauncher` → `window.open_portal`),
-  so a detected captive portal opens automatically. Detection uses the
-  `portal_monitor` 30s **polling** fallback; the real NetworkManager
-  D-Bus-signal (event-driven) path remains a stub. The wiring is unit-tested,
-  but no automated harness exercises the GTK monitor→open flow end-to-end
-  (the desktop e2e drives the helper/netns path directly), so the live loop is
-  **not** proven on a real captive network — that needs the `hwsim` harness or
-  hardware.
+- **Desktop live portal detection is wired but on-hardware unproven.** The GTK
+  app wires a portal detection loop to the portal window (`app.py` →
+  `portal_launcher.PortalLauncher` → `window.open_portal`), so a detected
+  captive portal opens automatically. Detection prefers the **event-driven
+  NetworkManager D-Bus-signal path** (`portal_monitor.NMSignalMonitor` +
+  `DbusNMConnectivitySignals`, subscribing to NM's manager `StateChanged` and
+  re-probing to confirm), falling back to the 30s **polling** `Monitor` when
+  dasbus/NM is unavailable. The detection/debounce/fallback and open-wiring
+  logic is unit-tested, but no automated harness exercises the real NM-signal
+  delivery or the GTK monitor→open flow end-to-end (the desktop e2e drives the
+  helper/netns path directly), so the live loop is **not** proven on a real
+  captive network — that needs the `hwsim` harness or hardware.
 
 ---
 
