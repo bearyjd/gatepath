@@ -11,6 +11,7 @@ finish-args:
   - --share=ipc
   - --share=network
   - --system-talk-name=org.freedesktop.NetworkManager
+  - --system-talk-name=org.freedesktop.resolve1
   - --filesystem=xdg-data/gatepath:create
   - --filesystem=xdg-cache/gatepath:create
   - --talk-name=org.freedesktop.portal.Desktop

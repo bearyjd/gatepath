@@ -15,7 +15,7 @@ from __future__ import annotations
 import os
 import socket
 import time
-from typing import Mapping, Optional
+from typing import Callable, Mapping, Optional
 
 from gatepath import http_fetcher, portal_probe, vpn_detector
 from gatepath.diag.clock_skew_probe import ClockSkewProbe
@@ -25,6 +25,7 @@ from gatepath.diag.http_probe import HttpProbe
 from gatepath.diag.http_proxy_probe import HttpProxyProbe
 from gatepath.diag.https_only_probe import HttpsOnlyProbe
 from gatepath.diag.no_dns_probe import NoDnsProbe
+from gatepath.diag.private_dns_probe import PrivateDnsProbe
 from gatepath.diag.probe import HttpFetchResult, ProbeContext, VpnDetail
 from gatepath.diag.redirect_loop_probe import RedirectLoopProbe
 from gatepath.diag.vpn_probe import VpnProbe
@@ -82,6 +83,91 @@ def _count_dns_servers(path: str) -> int:
         if stripped.split()[:1] == ["nameserver"]:
             count += 1
     return count
+
+
+_RESOLVE1_SERVICE = "org.freedesktop.resolve1"
+_RESOLVE1_OBJECT_PATH = "/org/freedesktop/resolve1"
+_RESOLVE1_MANAGER_INTERFACE = "org.freedesktop.resolve1.Manager"
+
+
+def _resolve1_manager() -> object:
+    """Return a dasbus proxy for systemd-resolved's `Manager` interface.
+
+    Lazy import of dasbus (mirrors `NMCaptiveInterfaceLookup` in
+    `portal_monitor`) so this module stays importable in environments without
+    it — CI nodes, and any host where dasbus isn't installed. Raises if
+    dasbus, the system bus, or systemd-resolved is absent;
+    `_detect_private_dns` owns the "never raise, benign default" contract and
+    turns any such failure into an inactive result.
+
+    Reading systemd-resolved over `org.freedesktop.resolve1` (instead of
+    shelling out to `resolvectl`) is what makes this work inside the shipped
+    Flatpak: the GNOME runtime ships no `resolvectl` binary, and the manifest
+    grants `--system-talk-name=org.freedesktop.resolve1`.
+    """
+    from dasbus.connection import SystemMessageBus  # noqa: PLC0415
+
+    bus = SystemMessageBus()
+    return bus.get_proxy(
+        service_name=_RESOLVE1_SERVICE,
+        object_path=_RESOLVE1_OBJECT_PATH,
+        interface_name=_RESOLVE1_MANAGER_INTERFACE,
+    )
+
+
+def _format_current_dns_server(current: object) -> Optional[str]:
+    """Best-effort format of resolve1's `CurrentDNSServer` `(iiay)` struct.
+
+    The struct is `(ifindex, family, address_bytes)` where `family` is an
+    `AF_INET`/`AF_INET6` constant and `address_bytes` is the raw address. We
+    render it to text with `socket.inet_ntop`. Returns `None` on ANY
+    difficulty — the resolver host is purely cosmetic, so a malformed or
+    unexpected value must never raise or affect the DoT verdict.
+    """
+    try:
+        _ifindex, family, address = current  # type: ignore[misc]
+        return socket.inet_ntop(family, bytes(address))
+    except Exception:  # noqa: BLE001 — resolver host is best-effort; None is fine.
+        return None
+
+
+def _detect_private_dns(
+    get_manager: Callable[[], object] = _resolve1_manager,
+) -> tuple[bool, Optional[str]]:
+    """Detect strict systemd-resolved DNS-over-TLS over the `resolve1` D-Bus API.
+
+    Reads the `DNSOverTLS` property of `org.freedesktop.resolve1.Manager`.
+    Returns `(True, resolver)` **only** for strict DoT (`DNSOverTLS == "yes"`,
+    case-insensitive). `opportunistic` downgrades to plaintext when the DoT
+    endpoint is unreachable, so it does *not* deadlock captive DNS and reports
+    `(False, None)`. `no`/empty/absent, a missing dasbus, no system bus, no
+    running systemd-resolved, or any property read failure all yield
+    `(False, None)`.
+
+    This function NEVER raises — like `_count_dns_servers`, `diag_context`
+    exists to survive hostile/missing system state and return benign defaults.
+    The `resolver` host is best-effort from `CurrentDNSServer` and read in a
+    *separate* guarded step, so a formatting failure still returns
+    `(True, None)` when DoT is strict rather than downgrading the verdict.
+
+    `get_manager` is injectable so tests feed a fake manager object (exposing
+    `.DNSOverTLS` / `.CurrentDNSServer`, or a source that raises to simulate
+    resolved/dasbus absent) with no real D-Bus.
+    """
+    try:
+        manager = get_manager()
+
+        if str(manager.DNSOverTLS).strip().lower() != "yes":  # type: ignore[attr-defined]
+            return (False, None)
+
+        try:
+            resolver = _format_current_dns_server(manager.CurrentDNSServer)  # type: ignore[attr-defined]
+        except Exception:  # noqa: BLE001 — resolver host is best-effort.
+            resolver = None
+
+        return (True, resolver)
+    except Exception:  # noqa: BLE001 — detection must never escape; benign default.
+        return (False, None)
 
 
 def resolve_host(host: str) -> tuple[str, ...]:
@@ -142,6 +228,8 @@ def build_probe_context(
         for vpn in vpn_detector.detect_vpn_details()
     )
 
+    private_dns_active, private_dns_server = _detect_private_dns()
+
     return ProbeContext(
         interface_name=interface_name,
         probe_url=probe_url,
@@ -153,11 +241,13 @@ def build_probe_context(
         now_epoch_seconds=now_epoch_seconds,
         active_probe=lambda: probe_result,
         default_route_bypasses_captive=probe_result.status == "validated",
+        private_dns_active=private_dns_active,
+        private_dns_server=private_dns_server,
     )
 
 
 def default_engine() -> DiagnosticEngine:
-    """The eight-probe battery run against every diagnosed interface.
+    """The nine-probe battery run against every diagnosed interface.
 
     This is the single place probe membership is declared for desktop —
     mirrors Android's `DiagnosticModule`. Order here has no runtime meaning;
@@ -169,6 +259,7 @@ def default_engine() -> DiagnosticEngine:
             VpnProbe(),
             DnsHijackProbe(),
             NoDnsProbe(),
+            PrivateDnsProbe(),
             HttpProxyProbe(),
             RedirectLoopProbe(),
             ClockSkewProbe(),

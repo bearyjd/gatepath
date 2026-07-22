@@ -4,7 +4,7 @@ Two layers:
 
 * The pure module-level helpers (`cause_label`, `report_detail`,
   `check_status`) run everywhere — they never import ``gi`` — and are
-  exercised against every one of the nine cause shapes.
+  exercised against every one of the ten cause shapes.
 * The GTK widget (`DiagnosisPanel`) is only reachable when PyGObject is
   installed, so those tests ``pytest.importorskip("gi")`` and merely assert
   that ``render()`` on each cause shape does not raise.
@@ -32,6 +32,7 @@ from gatepath.diag.report import (
     NO_ACTION,
     NoDnsServers,
     PortalRedirectLoop,
+    PrivateDnsBlocking,
     VpnBlocking,
 )
 from gatepath.ui.diagnosis_panel import (
@@ -51,6 +52,7 @@ _REPORT_BY_CAUSE = {
         system_answer="10.0.0.1",
         doh_answer="142.250.72.196",
     ),
+    Cause.PRIVATE_DNS_BLOCKING: PrivateDnsBlocking(resolver_host="1.1.1.1"),
     Cause.HTTP_PROXY_BLOCKING: HttpProxyBlocking(description="proxy.corp:3128"),
     Cause.HTTPS_ONLY_CAPTIVE: HttpsOnlyCaptive(https_error_message="connection reset"),
     Cause.NO_DNS_SERVERS: NoDnsServers(),

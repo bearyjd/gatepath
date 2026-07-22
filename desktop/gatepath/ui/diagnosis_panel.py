@@ -35,6 +35,7 @@ from gatepath.diag.report import (
     Inconclusive,
     NoDnsServers,
     PortalRedirectLoop,
+    PrivateDnsBlocking,
     VpnBlocking,
 )
 
@@ -50,6 +51,7 @@ _CAUSE_LABELS: dict[Cause, str] = {
     Cause.HEALTHY: "No problem found",
     Cause.VPN_BLOCKING: "A VPN is blocking captive sign-in",
     Cause.DNS_HIJACK: "DNS answers are being intercepted",
+    Cause.PRIVATE_DNS_BLOCKING: "Private DNS (DNS-over-TLS) is blocking sign-in",
     Cause.HTTP_PROXY_BLOCKING: "An HTTP proxy is eating the sign-in redirect",
     Cause.HTTPS_ONLY_CAPTIVE: "HTTPS is blocked or intercepted",
     Cause.NO_DNS_SERVERS: "This network offered no DNS servers",
@@ -91,6 +93,10 @@ def report_detail(report: DiagnosticReport) -> str:
             f"{report.host_probed}: system resolver says {report.system_answer}, "
             f"DoH says {report.doh_answer}"
         )
+    if isinstance(report, PrivateDnsBlocking):
+        if report.resolver_host:
+            return f"Strict DNS-over-TLS via {report.resolver_host}"
+        return "Strict DNS-over-TLS is active"
     if isinstance(report, HttpProxyBlocking):
         return report.description
     if isinstance(report, HttpsOnlyCaptive):

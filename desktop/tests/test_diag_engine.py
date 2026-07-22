@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import time
 
-from gatepath.diag.engine import DiagnosticEngine
+from gatepath.diag.engine import _RANK, DiagnosticEngine
 from gatepath.diag.probe import HttpFetchResult, ProbeContext
 from gatepath.diag.report import (
     ActionId,
@@ -11,6 +11,7 @@ from gatepath.diag.report import (
     Healthy,
     HttpProxyBlocking,
     NoDnsServers,
+    PrivateDnsBlocking,
     VpnBlocking,
 )
 
@@ -76,6 +77,36 @@ def test_no_dns_outranks_http_proxy() -> None:
     result = engine.run(NOOP_CTX)
     assert result.top.cause is Cause.NO_DNS_SERVERS
     assert result.recommended.action_id == ActionId.RECONNECT_NETWORK
+
+
+def test_private_dns_blocking_yields_disable_private_dns_action() -> None:
+    engine = DiagnosticEngine(
+        [StubProbe("private_dns", PrivateDnsBlocking(resolver_host="1.1.1.1"))]
+    )
+    result = engine.run(NOOP_CTX)
+    assert result.top.cause is Cause.PRIVATE_DNS_BLOCKING
+    assert result.recommended.action_id == ActionId.DISABLE_PRIVATE_DNS
+    assert "DNS-over-TLS" in result.recommended.instruction
+
+
+def test_private_dns_blocking_rank_sits_between_no_dns_and_http_proxy() -> None:
+    assert _RANK[Cause.PRIVATE_DNS_BLOCKING] == 80
+    assert (
+        _RANK[Cause.HTTP_PROXY_BLOCKING]
+        < _RANK[Cause.PRIVATE_DNS_BLOCKING]
+        < _RANK[Cause.NO_DNS_SERVERS]
+    )
+
+
+def test_no_dns_outranks_private_dns_blocking() -> None:
+    engine = DiagnosticEngine(
+        [
+            StubProbe("private_dns", PrivateDnsBlocking(resolver_host="1.1.1.1")),
+            StubProbe("nodns", NoDnsServers()),
+        ]
+    )
+    result = engine.run(NOOP_CTX)
+    assert result.top.cause is Cause.NO_DNS_SERVERS
 
 
 def test_checks_carry_probe_names_in_probe_list_order() -> None:

@@ -16,6 +16,21 @@ from gatepath.portal_probe import ProbeResult
 from gatepath.vpn_detector import VpnInterface
 
 
+@pytest.fixture(autouse=True)
+def _no_real_resolve1():
+    """Guarantee no test reads the real systemd-resolved over D-Bus (the file's
+    contract: nothing here touches the real system). `build_probe_context` calls
+    `_detect_private_dns`, whose default source builds a dasbus proxy; patch that
+    source to behave as if resolved/dasbus is absent. Tests that exercise
+    detection directly inject their own `get_manager=` callable and never reach
+    here; tests that assert wiring patch `_detect_private_dns` itself."""
+    with mock.patch(
+        "gatepath.diag_context._resolve1_manager",
+        side_effect=RuntimeError("resolve1 unavailable"),
+    ):
+        yield
+
+
 # ---------------------------------------------------------------------------
 # _proxy_description
 # ---------------------------------------------------------------------------
@@ -100,6 +115,124 @@ def test_count_dns_servers_survives_invalid_utf8(tmp_path) -> None:
     resolv = tmp_path / "resolv.conf"
     resolv.write_bytes(b"nameserver 1.1.1.1\n\xff\xfe invalid\n")
     assert diag_context._count_dns_servers(str(resolv)) == 1
+
+
+# ---------------------------------------------------------------------------
+# _detect_private_dns
+# ---------------------------------------------------------------------------
+
+
+# Fake `org.freedesktop.resolve1.Manager` proxies. The real proxy exposes
+# `DNSOverTLS` (a string) and `CurrentDNSServer` (an `(iiay)` struct); these
+# stand in for it so no test touches a real system bus.
+import socket as _socket  # noqa: E402 — local alias for building AF_INET addresses
+
+
+class _FakeManager:
+    """A resolve1 Manager stand-in exposing `.DNSOverTLS` / `.CurrentDNSServer`.
+
+    Omit `current_dns_server` to model the property being absent — accessing it
+    then raises `AttributeError`, exactly as a real proxy would for a property
+    the interface doesn't return.
+    """
+
+    _MISSING = object()
+
+    def __init__(self, dns_over_tls, current_dns_server=_MISSING) -> None:
+        self.DNSOverTLS = dns_over_tls
+        if current_dns_server is not self._MISSING:
+            self.CurrentDNSServer = current_dns_server
+
+
+class _RaisingManager:
+    """A Manager whose `DNSOverTLS` property read raises (simulates a D-Bus
+    read error on the property itself)."""
+
+    @property
+    def DNSOverTLS(self):  # noqa: N802 — mirrors the D-Bus property name
+        raise RuntimeError("dbus property read failed")
+
+
+# An `(iiay)` CurrentDNSServer for 1.1.1.1: ifindex, AF_INET, raw address bytes.
+_CURRENT_DNS_1111 = (2, _socket.AF_INET, bytes([1, 1, 1, 1]))
+# A malformed CurrentDNSServer whose family/bytes cannot be formatted.
+_CURRENT_DNS_BAD = (2, 999, b"\x01")
+
+
+def test_detect_private_dns_strict_yes_returns_active_with_server() -> None:
+    active, server = diag_context._detect_private_dns(
+        get_manager=lambda: _FakeManager("yes", _CURRENT_DNS_1111)
+    )
+    assert active is True
+    assert server == "1.1.1.1"
+
+
+def test_detect_private_dns_strict_yes_case_insensitive() -> None:
+    active, server = diag_context._detect_private_dns(
+        get_manager=lambda: _FakeManager("YES", _CURRENT_DNS_1111)
+    )
+    assert active is True
+    assert server == "1.1.1.1"
+
+
+def test_detect_private_dns_strict_yes_server_none_when_absent() -> None:
+    """`DNSOverTLS: yes` but `CurrentDNSServer` absent — still active, no host."""
+    active, server = diag_context._detect_private_dns(get_manager=lambda: _FakeManager("yes"))
+    assert active is True
+    assert server is None
+
+
+def test_detect_private_dns_strict_yes_server_none_when_unformattable() -> None:
+    """A `CurrentDNSServer` that can't be formatted must NOT downgrade the strict
+    DoT verdict — it returns `(True, None)`, never raises."""
+    active, server = diag_context._detect_private_dns(
+        get_manager=lambda: _FakeManager("yes", _CURRENT_DNS_BAD)
+    )
+    assert active is True
+    assert server is None
+
+
+def test_detect_private_dns_opportunistic_is_inactive() -> None:
+    """Opportunistic DoT downgrades to plaintext, so it does not block captive DNS."""
+    active, server = diag_context._detect_private_dns(
+        get_manager=lambda: _FakeManager("opportunistic", _CURRENT_DNS_1111)
+    )
+    assert (active, server) == (False, None)
+
+
+def test_detect_private_dns_plaintext_no_is_inactive() -> None:
+    active, server = diag_context._detect_private_dns(
+        get_manager=lambda: _FakeManager("no", _CURRENT_DNS_1111)
+    )
+    assert (active, server) == (False, None)
+
+
+def test_detect_private_dns_empty_string_is_inactive() -> None:
+    active, server = diag_context._detect_private_dns(get_manager=lambda: _FakeManager(""))
+    assert (active, server) == (False, None)
+
+
+def test_detect_private_dns_manager_unavailable_returns_inactive() -> None:
+    """get_manager raising (dasbus/bus/resolved absent) → inactive, no raise."""
+    def _missing() -> object:
+        raise FileNotFoundError("no system bus")
+
+    assert diag_context._detect_private_dns(get_manager=_missing) == (False, None)
+
+
+def test_detect_private_dns_property_read_raises_returns_inactive() -> None:
+    """A manager whose `.DNSOverTLS` access raises → inactive, no raise."""
+    assert diag_context._detect_private_dns(get_manager=_RaisingManager) == (False, None)
+
+
+def test_detect_private_dns_default_source_survives_missing_resolve1() -> None:
+    """End-to-end: the real default source raising (no resolved/dasbus) still
+    yields a benign inactive result."""
+    with mock.patch(
+        "gatepath.diag_context._resolve1_manager",
+        side_effect=RuntimeError("resolve1 unavailable"),
+    ):
+        assert diag_context._detect_private_dns() == (False, None)
 
 
 # ---------------------------------------------------------------------------
@@ -234,6 +367,32 @@ def test_build_probe_context_active_probe_calls_portal_probe() -> None:
         assert call.args[0] == "http://probe.test/" or call.kwargs.get("url") == "http://probe.test/"
 
 
+def test_build_probe_context_wires_private_dns_active() -> None:
+    with mock.patch("gatepath.vpn_detector.detect_vpn_details", return_value=[]), mock.patch(
+        "gatepath.portal_probe.probe",
+        return_value=ProbeResult(status="portal", portal_url="http://portal.test/"),
+    ), mock.patch(
+        "gatepath.diag_context._detect_private_dns", return_value=(True, "1.1.1.1")
+    ):
+        ctx = diag_context.build_probe_context("wlan0", environ={})
+
+    assert ctx.private_dns_active is True
+    assert ctx.private_dns_server == "1.1.1.1"
+
+
+def test_build_probe_context_private_dns_inactive_by_default() -> None:
+    with mock.patch("gatepath.vpn_detector.detect_vpn_details", return_value=[]), mock.patch(
+        "gatepath.portal_probe.probe",
+        return_value=ProbeResult(status="portal", portal_url="http://portal.test/"),
+    ), mock.patch(
+        "gatepath.diag_context._detect_private_dns", return_value=(False, None)
+    ):
+        ctx = diag_context.build_probe_context("wlan0", environ={})
+
+    assert ctx.private_dns_active is False
+    assert ctx.private_dns_server is None
+
+
 # ---------------------------------------------------------------------------
 # default_route_bypasses_captive derivation
 # ---------------------------------------------------------------------------
@@ -284,10 +443,17 @@ def test_default_engine_declares_exactly_the_expected_probes() -> None:
         "vpn",
         "dns_hijack",
         "no_dns",
+        "private_dns",
         "http_proxy",
         "redirect_loop",
         "clock_skew",
         "https_only",
         "http",
     }
-    assert len(engine._probes) == 8  # type: ignore[attr-defined]
+    assert len(engine._probes) == 9  # type: ignore[attr-defined]
+
+
+def test_default_engine_includes_private_dns_probe() -> None:
+    engine = diag_context.default_engine()
+    names = {probe.name for probe in engine._probes}  # type: ignore[attr-defined]
+    assert "private_dns" in names

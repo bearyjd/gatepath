@@ -6,10 +6,11 @@ The [Cause] values are spelled exactly as the Kotlin variant names because
 PR 5's cross-platform parity guard string-matches them — treat the spelling
 as a wire contract, not a label.
 
-Desktop legitimately lacks three Android causes: `PrivateDnsBlocking`
-(Android system Private DNS), `CellularFallback` (no cellular), and
-`SandboxedWebView` (Android WebView process model). The parity guard
-encodes that allowlist.
+Desktop legitimately lacks two Android causes: `CellularFallback` (no
+cellular) and `SandboxedWebView` (Android WebView process model). The parity
+guard encodes that allowlist. (`PrivateDnsBlocking` used to be Android-only
+too, but desktop now diagnoses systemd-resolved strict DNS-over-TLS, so it is
+a shared cause.)
 
 Pure module: no I/O, no platform imports.
 """
@@ -27,6 +28,7 @@ class Cause(str, enum.Enum):
     HEALTHY = "Healthy"
     VPN_BLOCKING = "VpnBlocking"
     DNS_HIJACK = "DnsHijack"
+    PRIVATE_DNS_BLOCKING = "PrivateDnsBlocking"
     HTTP_PROXY_BLOCKING = "HttpProxyBlocking"
     HTTPS_ONLY_CAPTIVE = "HttpsOnlyCaptive"
     NO_DNS_SERVERS = "NoDnsServers"
@@ -59,6 +61,20 @@ class DnsHijack:
     system_answer: str
     doh_answer: str
     cause: ClassVar[Cause] = Cause.DNS_HIJACK
+
+
+@dataclasses.dataclass(frozen=True)
+class PrivateDnsBlocking:
+    """Strict DNS-over-TLS (Private DNS) is active and likely blocking sign-in.
+
+    The resolver can't reach its DoT endpoint until the user signs in, but
+    signing in requires DNS resolution — a chicken-and-egg deadlock. Mirrors
+    Android `DiagnosticReport.PrivateDnsBlocking`; on desktop the resolver is
+    systemd-resolved with global `DNSOverTLS: yes`.
+    """
+
+    resolver_host: Optional[str]
+    cause: ClassVar[Cause] = Cause.PRIVATE_DNS_BLOCKING
 
 
 @dataclasses.dataclass(frozen=True)
@@ -112,6 +128,7 @@ DiagnosticReport = Union[
     Healthy,
     VpnBlocking,
     DnsHijack,
+    PrivateDnsBlocking,
     HttpProxyBlocking,
     HttpsOnlyCaptive,
     NoDnsServers,
@@ -132,6 +149,7 @@ class ActionId:
     DISABLE_HTTP_PROXY = "disable_http_proxy"
     RECONNECT_NETWORK = "reconnect_network"
     OPEN_DATE_TIME_SETTINGS = "open_date_time_settings"
+    DISABLE_PRIVATE_DNS = "disable_private_dns"
 
 
 @dataclasses.dataclass(frozen=True)
