@@ -67,8 +67,9 @@ release notes.
    ```
 4. `release.yml` builds, keystore-signs (if secrets are set), **keyless-signs
    every artifact with cosign**, and publishes the GitHub Release with
-   `app-release.aab`, `app-release*.apk`, the SBOM, and a `.cosign.bundle`
-   companion for each.
+   `app-release.aab`, `app-release*.apk`, the SBOM, the desktop
+   `gatepath-netns-helper.raw` (systemd-sysext) and `gatepath.flatpak` bundle,
+   and a `.cosign.bundle` companion for each.
 
 ## 4. Verify release provenance (cosign)
 
@@ -91,7 +92,17 @@ cosign verify-blob \
 ```
 
 `Verified OK` means the artifact was produced by *this repo's* `release.yml` at
-that tag. To accept any tag, swap `--certificate-identity` for
+that tag. The **same recipe verifies the desktop artifacts** — swap the artifact
+and its bundle (the signing identity is the workflow file, not the artifact):
+
+```bash
+cosign verify-blob \
+  --bundle gatepath-netns-helper.raw.cosign.bundle \
+  --certificate-identity "https://github.com/bearyjd/gatepath/.github/workflows/release.yml@refs/tags/<TAG>" \
+  --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+  gatepath-netns-helper.raw
+# …and likewise for gatepath.flatpak + gatepath.flatpak.cosign.bundle
+``` To accept any tag, swap `--certificate-identity` for
 `--certificate-identity-regexp 'https://github\.com/bearyjd/gatepath/\.github/workflows/release\.yml@refs/tags/v.*'`.
 
 This provenance is **independent of** the Android keystore signature (§2): cosign
@@ -120,8 +131,9 @@ Play: **F-Droid builds from source and signs with its own key**, so it does
 - **Play upload key vs app signing key.** If you enroll in Play App Signing,
   the keystore above becomes your *upload* key; Google holds the app signing
   key. Either way, keep the upload key safe.
-- **Desktop artifacts.** The Android release artifacts now carry cosign
-  provenance (§4). The desktop sysext (`P2.1`) is still not *attached* to these
-  releases — attaching it (and giving it the same cosign provenance) remains a
-  follow-up (see ROADMAP P2.3 / DESKTOP_NETNS_DEPLOYMENT.md).
+- **Desktop artifacts.** The desktop sysext (`gatepath-netns-helper.raw`, `P2.1`)
+  and the Flatpak bundle (`gatepath.flatpak`) are now **attached to every release
+  with the same cosign provenance** as the Android artifacts (§4). They are built
+  by the `sysext-release` / `flatpak-build` + `flatpak-release` jobs and signed by
+  the same workflow identity, so the §4 recipe verifies them unchanged.
 - **Never commit** the keystore, passwords, or the base64 blob.
