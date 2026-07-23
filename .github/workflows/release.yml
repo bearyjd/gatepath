@@ -17,21 +17,32 @@ name: release
 #
 # F-Droid is a separate channel: it builds from source and signs with its OWN
 # key, so it needs the in-repo fastlane metadata + a build recipe, not these
-# secrets. Desktop artifacts (the sysext) are not part of this workflow yet —
-# see docs/DESKTOP_NETNS_DEPLOYMENT.md.
+# secrets.
+#
+# Desktop artifacts ARE part of this workflow: the netns-helper systemd-sysext
+# image (`*.raw`) and the Flatpak bundle (`*.flatpak`) are built, keyless-cosign
+# signed, and attached to the same Release (jobs `sysext-release` +
+# `flatpak-build`/`flatpak-release`). They carry the same provenance as the
+# Android artifacts and verify with the same recipe (docs/RELEASING.md §4) — the
+# signing identity is this workflow file, regardless of artifact.
 on:
   push:
     tags:
       - 'v*'
 
+# Least privilege: default read-only. Each job that publishes to the Release or
+# cosign-signs requests `contents: write` / `id-token: write` for itself; the
+# build-only `flatpak-build` job stays read-only.
 permissions:
-  contents: write   # create the GitHub Release
-  id-token: write   # keyless cosign signing via GitHub OIDC (Sigstore Fulcio/Rekor)
+  contents: read
 
 jobs:
   android-release:
     name: Android release (AAB + APK + SBOM)
     runs-on: ubuntu-latest
+    permissions:
+      contents: write   # create the GitHub Release
+      id-token: write   # keyless cosign signing via GitHub OIDC (Fulcio/Rekor)
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-java@v5
@@ -126,3 +137,111 @@ jobs:
             --title "$GITHUB_REF_NAME" \
             --notes "$notes" \
             release-artifacts/*
+
+  # ---------------------------------------------------------------------------
+  # Desktop artifacts: built here, keyless-cosign signed, and attached to the
+  # SAME Release the android-release job creates (hence `needs: android-release`,
+  # so `gh release upload` targets an existing Release). Same provenance model as
+  # the Android artifacts — signed by this workflow's OIDC identity (§4 recipe).
+  # ---------------------------------------------------------------------------
+  sysext-release:
+    name: Desktop sysext (.raw) — sign + attach
+    runs-on: ubuntu-latest
+    needs: android-release
+    permissions:
+      contents: write   # gh release upload
+      id-token: write   # keyless cosign signing
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install squashfs-tools
+        run: sudo apt-get update && sudo apt-get install -y squashfs-tools
+      - name: Build sysext image
+        run: desktop/gatepath-netns-helper/packaging/build-sysext.sh
+      - name: Validate sysext layout
+        run: desktop/gatepath-netns-helper/packaging/validate-sysext.sh desktop/gatepath-netns-helper/dist/gatepath-netns-helper.raw
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3
+      - name: Sign sysext with keyless cosign
+        working-directory: desktop/gatepath-netns-helper/dist
+        env:
+          COSIGN_YES: "true"   # non-interactive: accept the Rekor transparency-log entry
+        run: |
+          set -euo pipefail
+          cosign sign-blob --yes \
+            --bundle gatepath-netns-helper.raw.cosign.bundle \
+            gatepath-netns-helper.raw
+          ls -la
+
+      - name: Attach to Release
+        working-directory: desktop/gatepath-netns-helper/dist
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # --clobber so a re-run after a partial/transient upload succeeds
+          # instead of aborting on an already-attached asset.
+          gh release upload "$GITHUB_REF_NAME" \
+            gatepath-netns-helper.raw \
+            gatepath-netns-helper.raw.cosign.bundle \
+            --clobber
+
+  flatpak-build:
+    name: Desktop Flatpak — build bundle
+    runs-on: ubuntu-latest
+    # Build-only: no Release access and no cosign here. The bundle is signed +
+    # attached by flatpak-release, which runs outside this privileged container
+    # (cosign/gh aren't present in the flatpak-builder image). Mirrors
+    # desktop.yml's flatpak job.
+    container:
+      image: ghcr.io/flathub-infra/flatpak-github-actions:gnome-49
+      options: --privileged
+    steps:
+      - uses: actions/checkout@v7
+      - uses: flatpak/flatpak-github-actions/flatpak-builder@v6
+        with:
+          bundle: gatepath.flatpak
+          manifest-path: desktop/com.ventouxlabs.Gatepath.yml
+          cache-key: flatpak-builder-${{ hashFiles('desktop/com.ventouxlabs.Gatepath.yml') }}
+      - name: Upload flatpak bundle for the signing job
+        uses: actions/upload-artifact@v7
+        with:
+          name: gatepath-flatpak-bundle
+          path: gatepath.flatpak
+          if-no-files-found: error
+
+  flatpak-release:
+    name: Desktop Flatpak — sign + attach
+    runs-on: ubuntu-latest
+    needs: [android-release, flatpak-build]
+    permissions:
+      contents: write   # gh release upload
+      id-token: write   # keyless cosign signing
+    steps:
+      - name: Download flatpak bundle
+        uses: actions/download-artifact@v7
+        with:
+          name: gatepath-flatpak-bundle
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3
+      - name: Sign flatpak with keyless cosign
+        env:
+          COSIGN_YES: "true"   # non-interactive: accept the Rekor transparency-log entry
+        run: |
+          set -euo pipefail
+          cosign sign-blob --yes \
+            --bundle gatepath.flatpak.cosign.bundle \
+            gatepath.flatpak
+          ls -la
+      - name: Attach to Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # --clobber so a re-run after a partial/transient upload succeeds
+          # instead of aborting on an already-attached asset.
+          gh release upload "$GITHUB_REF_NAME" \
+            gatepath.flatpak \
+            gatepath.flatpak.cosign.bundle \
+            --clobber

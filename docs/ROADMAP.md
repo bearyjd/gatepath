@@ -184,8 +184,12 @@ GitHub OIDC → Fulcio → Rekor, `id-token: write`, no long-lived keys), emitti
 `<artifact>.cosign.bundle` per artifact; verification recipe in
 `docs/RELEASING.md §4`. This is provenance, independent of the optional Android
 keystore signature (P2.2). Only exercised on a real `v*` tag (OIDC needs a live
-Actions run) — not by PR CI. **Still open:** attach + cosign-sign the desktop
-sysext `.raw` and the Flatpak bundle (they aren't in `release.yml` yet).
+Actions run) — not by PR CI. **Desktop artifacts now covered too:** the
+netns-helper sysext (`gatepath-netns-helper.raw`) and the Flatpak bundle
+(`gatepath.flatpak`) are built by `release.yml` (`sysext-release` /
+`flatpak-build` + `flatpak-release`), keyless-cosign signed, and attached to the
+same Release — verifiable with the same `docs/RELEASING.md §4` recipe (the
+identity is the workflow file, not the artifact).
 
 ---
 
