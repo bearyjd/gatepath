@@ -54,6 +54,13 @@ cargo test              # unit tests; some are #[ignore] (need real privilege �
 `unsafe_code = "deny"` at the crate level — do not add `unsafe` without an
 explicit, reviewed reason.
 
+The five privileged-boundary validators (`validation::validate_interface_name`,
+`spawn::validate_portal_url` / `validate_wayland_display` / `validate_display` /
+`validate_xauthority`) are covered two ways: in-CI `proptest` suites (next to
+each validator, run by `cargo test`) **and** out-of-CI `cargo-fuzz` targets in
+`fuzz/` (nightly + libFuzzer — its own workspace, so it never affects the parent
+build; see `fuzz/README.md`). If you change a validator, update both.
+
 ### Mock captive portal (shared fixture)
 ```bash
 python -m pytest mockportal/            # tests for the mock itself
