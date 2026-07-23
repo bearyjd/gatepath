@@ -237,6 +237,9 @@ jobs:
       - name: Attach to Release
         env:
           GH_TOKEN: ${{ github.token }}
+          # This job has no repo checkout (it only downloads the built bundle),
+          # so gh can't infer the repo from a local .git — point it explicitly.
+          GH_REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
           # --clobber so a re-run after a partial/transient upload succeeds
