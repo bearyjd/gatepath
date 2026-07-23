@@ -30,6 +30,35 @@ security-sensitive piece of work. `WifiSecurity::Psk` is modelled but
 `bring_up` returns `ConnectivityError::Unsupported` rather than silently
 producing a session that can never associate.
 
+### Known limitation — desktop DoH-forwarder detection is intentionally not implemented
+
+Desktop diagnostics detect strict systemd-resolved **DNS-over-TLS**
+(`PrivateDnsBlocking`) by reading the `org.freedesktop.resolve1`
+`Manager.DNSOverTLS` D-Bus property — cheap and reliable, and reachable inside
+the Flatpak sandbox. The **DNS-over-HTTPS** analogue has **no equivalent signal**
+and is deliberately left undetected on desktop:
+
+- **systemd-resolved is DoT-only.** There is no `DNSOverHTTPS` property or method
+  on the `resolve1` interface; native DoH in resolved is an open, unimplemented
+  request (systemd #8639 / #42399). A DoH user runs a *separate* local forwarder
+  (cloudflared, dnscrypt-proxy, AdGuardHome, …) that resolved isn't even aware of.
+- **Local DoH forwarders expose no standard D-Bus interface** to query, and there
+  is **no xdg-desktop-portal for DNS/resolver config** (ProxyResolver is
+  HTTP/SOCKS only; NetworkMonitor exposes connectivity booleans, not resolver
+  config).
+- The only host-access paths that would surface a DoH signal are
+  **sandbox-escape-tier** (`--talk-name=org.freedesktop.Flatpak` host-spawn, i.e.
+  arbitrary host command execution) or brittle, proxy-specific config-file reads
+  that reveal *config presence*, not active DoH use. Both are disproportionate
+  sandbox-weakening for a best-effort, false-positive-prone heuristic, and
+  directly contradict this app's minimal-host-access security posture.
+
+So the cross-platform cause vocabulary keeps `PrivateDnsBlocking` shared (desktop
+covers the DoT case), and the DoH case is a **documented desktop gap** rather
+than a fuzzy probe. (Investigated 2026-07-22; conclusion: defer.) A possible
+future, in-sandbox angle unrelated to DoH: the NetworkMonitor portal's
+`captive-portal` connectivity enum value.
+
 ---
 
 ## Resolved

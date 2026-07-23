@@ -234,7 +234,10 @@ shared-schema drift guard still open under P1.1. **`PrivateDnsBlocking` is now
 shared:** desktop detects strict systemd-resolved DNS-over-TLS
 (`private_dns_probe` + `_detect_private_dns` reading resolved's `DNSOverTLS`
 property over the `org.freedesktop.resolve1` D-Bus interface, so it works
-inside the Flatpak sandbox); DoH-proxy detection remains a future extension.
+inside the Flatpak sandbox); DoH-forwarder detection is intentionally **not**
+implemented — no D-Bus/portal signal exists and the only host paths are
+sandbox-escape-tier, so it's a documented desktop gap (see `docs/BLOCKERS.md`),
+not a fuzzy probe.
 
 ---
 
