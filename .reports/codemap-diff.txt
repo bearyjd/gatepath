@@ -1,28 +1,45 @@
-Codemap generation report — 2026-07-05
+Codemap refresh — 2026-07-23 (prev: 2026-07-05)
+================================================
 
-No prior docs/CODEMAPS/ existed (first run). Created fresh:
-  - architecture.md
-  - backend.md
-  - frontend.md
-  - data.md
-  - dependencies.md
+Scope: docs/CODEMAPS/*.md re-synced to the current tree.
 
-Scope scanned: android/ (Kotlin/Compose), desktop/gatepath (Python GTK app),
-desktop/gatepath-netns-helper (Rust privileged D-Bus helper), mockportal/,
-tests/e2e-* (docker/android/hwsim), distribution/ (F-Droid+Flathub).
+FILES ADDED since last scan (not previously mapped)
+  desktop/gatepath/diag/                  — pure diagnostics package (13 files:
+                                            engine, report, probe + 9 probes)
+  desktop/gatepath/diag_context.py        — platform reads (NM + resolve1 D-Bus)
+  desktop/gatepath/diagnosis_runner.py    — async battery runner
+  desktop/gatepath/http_fetcher.py        — urllib fetch for probes
+  desktop/gatepath/no_follow_redirect.py  — no-redirect handler
+  desktop/gatepath/portal_launcher.py     — detection → window.open_portal
+  desktop/gatepath-netns-helper/src/dbus_contract_test.rs — bus-free contract guard
+  desktop/gatepath-netns-helper/fuzz/     — out-of-CI cargo-fuzz crate (5 targets)
+  android/.../network/HttpFetcher.kt, BoundedReader.kt
+  android/.../diag/* — probe set expanded to the shared ~12-cause battery
+  docs/netns_helper_dbus_contract.json    — shared D-Bus contract artifact
 
-Notable structure captured:
-- Cross-language audit-log schema contract (docs/audit_log_schema.json) shared
-  by desktop Python + Rust helper + Android Kotlin, each with its own writer.
-- D-Bus RefusalReason enum drift guard between netns_client.py and dbus_service.rs.
-- Recent refactor (05b6eb1, top of engineering/phase1-stabilization branch):
-  VpnHeuristics.kt extracted from VpnDetector.kt as a pure, unit-tested object.
-- AGP 9 / compileSdk 37 migration landed 2026-07-04 (dependabot #63 follow-up).
+FILES GROWN materially
+  desktop/gatepath/portal_monitor.py  209 → 429  (event-driven NMSignalMonitor)
+  desktop/gatepath/window.py          243 → 442  (diagnosis panel + VPN banner)
+  desktop/gatepath/vpn_detector.py    103 → 148
 
-Staleness note: existing docs/ARCHITECTURE.md, docs/SECURITY_MODEL.md,
-docs/ISOLATION_BACKENDS.md were not modified — codemaps here are a token-lean
-supplement for AI context loading, not a replacement for the prose docs.
+ARCHITECTURE CHANGES
+  + Desktop live portal detection: event-driven NM StateChanged path (#92/#93)
+  + Desktop diagnostics engine + panel (#82/#83); PrivateDnsBlocking DoT (#95)
+  + D-Bus method/signal contract now machine-pinned (#96/#99) + cause parity (#84)
+  + Trust-boundary validators now proptest (in-CI) + cargo-fuzz (out-of-CI, #103)
+  + Release signing: all artifacts (Android + desktop sysext/Flatpak) cosign-signed
+    on a v* tag (#97/#101)
 
-No architecture changes detected requiring flags beyond the above; no new
-external dependencies since last known state (memory: dependency bumps in
-#61/#62/#63 are dependency-version only, not new packages).
+RUST HELPER
+  Structurally unchanged — src/*.rs line counts identical to 2026-07-05,
+  plus the new dbus_contract_test.rs (352). No module churn.
+
+DRIFT ESTIMATE (per file)
+  architecture.md  > 30%  (desktop data flow + invariants) — regenerated
+  backend.md       > 30%  (8 new desktop modules + diag pkg) — regenerated
+  frontend.md      > 30%  (diag probe set + desktop panel)  — regenerated
+  dependencies.md  < 30%  (fuzz crate + CI test deps)       — edited in place
+  data.md            0%   (audit schema_version 1 unchanged) — untouched
+
+STALENESS
+  No docs/ file is >90 days old (oldest ARCHITECTURE.md, 79d — still accurate).

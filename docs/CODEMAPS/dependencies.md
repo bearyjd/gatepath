@@ -1,4 +1,4 @@
-<!-- Generated: 2026-07-05 | Files scanned: pyproject.toml, Cargo.toml, build.gradle.kts, libs.versions.toml | Token estimate: ~400 -->
+<!-- Generated: 2026-07-23 | Files scanned: pyproject.toml, Cargo.toml, fuzz/Cargo.toml, build.gradle.kts, libs.versions.toml | Token estimate: ~430 -->
 
 # Dependencies Codemap
 
@@ -6,6 +6,8 @@
 - Core runtime: **zero third-party deps** (stdlib only)
 - `gui` extra: `PyGObject`, `dasbus>=1.7` (D-Bus client to the Rust helper)
 - `dev` extra: `pytest>=8.0`, `pytest-timeout`
+- CI-only test deps (not in pyproject): `pyyaml`, `python-dbusmock` (private-bus
+  NM wire-contract test), `PyGObject`/`dasbus` — installed by `desktop.yml`
 - Packaged as a Flatpak (GNOME SDK's bundled Python + setuptools; no hatchling
   to avoid an extra Flatpak module)
 
@@ -24,6 +26,10 @@
 `unsafe_code = "deny"` lint — crate is unsafe-free since DESK-003 C4 (portal
 spawn moved to a transient `systemd-run` unit instead of hand-rolled
 fork/setns/setresuid; dropped the `nix` dependency).
+
+**Fuzz crate** (`fuzz/Cargo.toml`, its own workspace, **out-of-CI**): `libfuzzer-sys`
+0.4 + a path dep on the helper + `url` — nightly-only cargo-fuzz targets for the
+five boundary validators. Not built by the parent `cargo` invocations.
 
 External runtime dependents (not crates, invoked as subprocesses): `iw`,
 `wpa_supplicant`, a DHCP client, `systemd-run`, PolicyKit/`polkit`,
