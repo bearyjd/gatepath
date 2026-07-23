@@ -120,9 +120,10 @@ round-trip checks (real bus/polkit) remain manual — they verify runtime
 behaviour, not static drift, and genuinely need a bus.
 
 ### P1.2 — Property/fuzz the privileged boundary validators
-**Status:** **`proptest` done (2026-06-30)**; a `cargo-fuzz`/libFuzzer target is an
-optional heavier follow-up. **Why it matters:** these validators *are* the trust
-boundary; example-only tests can miss what an agent-introduced refactor breaks.
+**Status:** **DONE — `proptest` (2026-06-30) + `cargo-fuzz` (2026-07-23).** In-CI
+property tests and an out-of-CI coverage-guided fuzzer now both cover the five
+validators. **Why it matters:** these validators *are* the trust boundary;
+example-only tests can miss what an agent-introduced refactor breaks.
 
 `proptest` properties now cover `validate_interface_name` (validation.rs) and
 `validate_portal_url` + the DESK-004 display validators
@@ -185,7 +186,9 @@ secrets (RELEASING.md §1–2). F-Droid signs with its own key, so it needs the
 metadata + an fdroiddata recipe, not your keystore.
 
 ### P2.3 — Supply-chain hardening
-**Status:** **core done (2026-06-30); keyless release signing done (2026-07-22).**
+**Status:** **core done (2026-06-30); keyless release signing done (2026-07-22),
+extended to the desktop artifacts (2026-07-23) — all release artifacts now
+covered.**
 `cargo-audit` already scanned Rust advisories; `.github/dependabot.yml` opens
 weekly grouped update PRs across all four ecosystems (cargo, pip, gradle,
 github-actions); `.github/workflows/supply-chain.yml` adds a `pip-audit` job
