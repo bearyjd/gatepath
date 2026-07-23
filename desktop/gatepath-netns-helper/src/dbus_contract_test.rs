@@ -97,8 +97,8 @@ fn load_contract() -> Contract {
 /// is unambiguous; a loud panic fires if the attribute moves or is renamed.
 fn parse_error_prefix() -> String {
     let path = concat!(env!("CARGO_MANIFEST_DIR"), "/src/dbus_service.rs");
-    let src = std::fs::read_to_string(path)
-        .unwrap_or_else(|e| panic!("failed to read {path}: {e}"));
+    let src =
+        std::fs::read_to_string(path).unwrap_or_else(|e| panic!("failed to read {path}: {e}"));
     let needle = "#[zbus(prefix = \"";
     let start = src.find(needle).unwrap_or_else(|| {
         panic!(
