@@ -387,6 +387,21 @@ def start_nm_monitor(
     returning a fake :py:class:`NMConnectivitySignals` to exercise the
     signal path, or one that raises to exercise the polling fallback. The
     public 2-arg form (``on_portal_detected``, ``probe_url``) is unchanged.
+
+    Why not the ``org.freedesktop.portal.NetworkMonitor`` ``captive-portal``
+    signal (reachable via the already-held ``portal.Desktop`` grant)?
+    Investigated 2026-07-23 and deliberately NOT used: inside a Flatpak sandbox
+    that portal value is NetworkManager's own connectivity classification merely
+    proxied (GLib ``GNetworkMonitorPortal`` -> xdg-desktop-portal -> host
+    ``GNetworkMonitor`` -> NM), so it is the SAME signal this monitor already
+    subscribes to, just with extra hops and no better reliability. It is also
+    strictly coarser: a global connectivity enum that does NOT name the captive
+    WiFi interface, which the netns setup requires (see
+    ``NMCaptiveInterfaceLookup``). So it would let us drop no permission
+    (``--system-talk-name=org.freedesktop.NetworkManager`` stays required) while
+    adding a redundant, coarser code path. Revisit only if Gatepath ever needs
+    to run confined without ANY NM system-bus access — which the
+    interface-lookup + netns-helper design currently precludes.
     """
     factory = signals_factory or DbusNMConnectivitySignals
     probe_fn = _make_probe_fn(probe_url)
