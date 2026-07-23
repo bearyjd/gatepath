@@ -1,0 +1,66 @@
+# cargo-fuzz targets for the privileged-boundary validators (ROADMAP P1.2).
+#
+# This is a SEPARATE crate from the helper, and the empty `[workspace]` table
+# below makes it its own workspace root — so the parent crate's `cargo build`,
+# `cargo test --all-targets`, `cargo clippy --all-targets`, and `cargo fmt --all`
+# (the desktop.yml `rust-helper` CI job) never descend into it. The fuzzers need
+# a nightly toolchain + libFuzzer and run OUT of CI by design; see fuzz/README.md.
+[package]
+name = "gatepath-netns-helper-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+# Re-parse accepted URLs in the portal-URL target to re-check the scheme
+# allowlist through the same RFC 3986 grammar the validator uses.
+url = "2"
+
+[dependencies.gatepath-netns-helper]
+path = ".."
+
+# Isolate from the parent crate — see the header comment.
+[workspace]
+
+[profile.release]
+# Keep line info so a crash artifact backtraces into the validator.
+debug = 1
+
+[[bin]]
+name = "validate_interface_name"
+path = "fuzz_targets/validate_interface_name.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "validate_portal_url"
+path = "fuzz_targets/validate_portal_url.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "validate_wayland_display"
+path = "fuzz_targets/validate_wayland_display.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "validate_display"
+path = "fuzz_targets/validate_display.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "validate_xauthority"
+path = "fuzz_targets/validate_xauthority.rs"
+test = false
+doc = false
+bench = false

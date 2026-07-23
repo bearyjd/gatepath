@@ -138,8 +138,20 @@ a dropped `..` check each make a property fail). Runs under the existing
 `cargo test` CI (`cargo fmt`/`clippy -D warnings`/`test` all green); no production
 code changed.
 
-**Optional follow-up:** a `cargo-fuzz` target for deeper coverage — needs nightly
-plus an out-of-CI run, so it's lower-priority than the in-CI proptest suite now landed.
+**`cargo-fuzz` — DONE (2026-07-23):** `desktop/gatepath-netns-helper/fuzz/`
+adds a libFuzzer target per validator (`validate_interface_name`,
+`validate_portal_url`, `validate_wayland_display`, `validate_display`,
+`validate_xauthority`). Each asserts the same two properties as the proptest
+suite over coverage-guided input — *never panics* (libFuzzer catches any
+panic/abort) and *anything accepted is provably safe* (a drift-free acceptance
+oracle, re-checked through public APIs only, so no private allowlist/const is
+duplicated). It complements, not replaces, the in-CI proptests: fuzzing reaches
+`url::Url::parse`'s state space far more deeply (a 25 s smoke run hit ~2.8 k
+edges / 12.5 k features on the portal-URL target vs. the regex generators). Per
+this item's original note it needs **nightly + an out-of-CI run**, so it is a
+deliberate out-of-CI tool, not a PR gate; the crate is its own workspace so the
+parent `cargo build`/`test`/`clippy`/`fmt` never descend into it. Run + replay
+recipes in `fuzz/README.md`. Smoke-run clean on all five targets (no crash).
 
 ---
 
