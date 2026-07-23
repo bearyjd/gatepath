@@ -174,16 +174,19 @@ secrets (RELEASING.md §1–2). F-Droid signs with its own key, so it needs the
 metadata + an fdroiddata recipe, not your keystore.
 
 ### P2.3 — Supply-chain hardening
-**Status:** **core done (2026-06-30)**; signed releases still open. `cargo-audit`
-already scanned Rust advisories; now `.github/dependabot.yml` opens weekly grouped
-update PRs across all four ecosystems (cargo, pip, gradle, github-actions), and
-`.github/workflows/supply-chain.yml` adds a `pip-audit` job (Python deps) and a
-`syft` SBOM job (CycloneDX, all ecosystems, uploaded as an artifact). **Still open
-— signed releases:** there is no release pipeline yet (no tags / `release.yml` /
-`gh release`), so signing presupposes building one. Candidates: the sysext `.raw`,
-the Android AAB/APK (keystore secret; overlaps P2.2), the Flatpak bundle, and the
-SBOM — keyless cosign (sigstore/OIDC) is the lightest path. Deferred to a focused
-follow-up.
+**Status:** **core done (2026-06-30); keyless release signing done (2026-07-22).**
+`cargo-audit` already scanned Rust advisories; `.github/dependabot.yml` opens
+weekly grouped update PRs across all four ecosystems (cargo, pip, gradle,
+github-actions); `.github/workflows/supply-chain.yml` adds a `pip-audit` job
+(Python deps) and a `syft` SBOM job (CycloneDX, all ecosystems). **Signed
+releases — DONE for the Android release artifacts:** `release.yml` now signs
+every published artifact (AAB, APK, SBOM) with **keyless cosign** (Sigstore:
+GitHub OIDC → Fulcio → Rekor, `id-token: write`, no long-lived keys), emitting a
+`<artifact>.cosign.bundle` per artifact; verification recipe in
+`docs/RELEASING.md §4`. This is provenance, independent of the optional Android
+keystore signature (P2.2). Only exercised on a real `v*` tag (OIDC needs a live
+Actions run) — not by PR CI. **Still open:** attach + cosign-sign the desktop
+sysext `.raw` and the Flatpak bundle (they aren't in `release.yml` yet).
 
 ---
 

@@ -65,10 +65,41 @@ release notes.
    git tag v1.0.1
    git push origin v1.0.1
    ```
-4. `release.yml` builds, signs (if secrets are set), and publishes the GitHub
-   Release with `app-release.aab`, `app-release*.apk`, and the SBOM.
+4. `release.yml` builds, keystore-signs (if secrets are set), **keyless-signs
+   every artifact with cosign**, and publishes the GitHub Release with
+   `app-release.aab`, `app-release*.apk`, the SBOM, and a `.cosign.bundle`
+   companion for each.
 
-## 4. F-Droid
+## 4. Verify release provenance (cosign)
+
+Every artifact is signed with **keyless cosign** (Sigstore): the release
+workflow's short-lived GitHub OIDC token is exchanged for a Fulcio certificate,
+the signature is logged in the public Rekor transparency log, and the result is
+a self-contained `<artifact>.cosign.bundle`. There are **no long-lived signing
+keys** — verification pins the *identity of the workflow that produced the
+artifact*, not a key you have to distribute.
+
+To verify a downloaded artifact (needs [`cosign`](https://docs.sigstore.dev/);
+replace `<TAG>` with the release tag, e.g. `v1.0.1`):
+
+```bash
+cosign verify-blob \
+  --bundle app-release.apk.cosign.bundle \
+  --certificate-identity "https://github.com/bearyjd/gatepath/.github/workflows/release.yml@refs/tags/<TAG>" \
+  --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+  app-release.apk
+```
+
+`Verified OK` means the artifact was produced by *this repo's* `release.yml` at
+that tag. To accept any tag, swap `--certificate-identity` for
+`--certificate-identity-regexp 'https://github\.com/bearyjd/gatepath/\.github/workflows/release\.yml@refs/tags/v.*'`.
+
+This provenance is **independent of** the Android keystore signature (§2): cosign
+attests *where the artifact came from*; the keystore attests *the app is signed
+for distribution*. An artifact can have valid cosign provenance while still being
+keystore-unsigned (the release notes say so when that happens).
+
+## 5. F-Droid
 
 F-Droid is the natural channel for a privacy tool, and it works differently from
 Play: **F-Droid builds from source and signs with its own key**, so it does
@@ -89,7 +120,8 @@ Play: **F-Droid builds from source and signs with its own key**, so it does
 - **Play upload key vs app signing key.** If you enroll in Play App Signing,
   the keystore above becomes your *upload* key; Google holds the app signing
   key. Either way, keep the upload key safe.
-- **Desktop artifacts.** The desktop sysext (`P2.1`) is not attached to these
-  releases yet — sysext signing + attaching it is part of the deferred
-  "signed releases" follow-up (see ROADMAP P2.3 / DESKTOP_NETNS_DEPLOYMENT.md).
+- **Desktop artifacts.** The Android release artifacts now carry cosign
+  provenance (§4). The desktop sysext (`P2.1`) is still not *attached* to these
+  releases — attaching it (and giving it the same cosign provenance) remains a
+  follow-up (see ROADMAP P2.3 / DESKTOP_NETNS_DEPLOYMENT.md).
 - **Never commit** the keystore, passwords, or the base64 blob.

@@ -4,15 +4,21 @@ name: release
 # `v1.0.0` to build the release AAB + APK, generate an SBOM, and publish a
 # GitHub Release with all three.
 #
-# Signing is OPTIONAL: configure the four ANDROID_* secrets (see
-# docs/RELEASING.md) and the artifacts are signed with your keystore; without
-# them the pipeline still runs and produces UNSIGNED artifacts (clearly labelled
-# in the release notes). The keystore is NEVER stored in the repo.
+# Two independent kinds of signing happen here:
+#  1. Android keystore signing (OPTIONAL): configure the four ANDROID_* secrets
+#     (see docs/RELEASING.md) and the AAB/APK are signed with your keystore;
+#     without them the pipeline still runs and produces artifacts UNSIGNED by the
+#     keystore (clearly labelled in the release notes). The keystore is NEVER
+#     stored in the repo.
+#  2. Keyless cosign provenance (ALWAYS): every published artifact is signed via
+#     Sigstore keyless signing (GitHub OIDC → Fulcio → Rekor), producing a
+#     `.cosign.bundle` per artifact. No long-lived keys; needs `id-token: write`.
+#     This attests provenance (came from this workflow) independently of #1.
 #
 # F-Droid is a separate channel: it builds from source and signs with its OWN
 # key, so it needs the in-repo fastlane metadata + a build recipe, not these
 # secrets. Desktop artifacts (the sysext) are not part of this workflow yet —
-# see docs/DESKTOP_NETNS_DEPLOYMENT.md and the "signed releases" follow-up.
+# see docs/DESKTOP_NETNS_DEPLOYMENT.md.
 on:
   push:
     tags:
@@ -20,6 +26,7 @@ on:
 
 permissions:
   contents: write   # create the GitHub Release
+  id-token: write   # keyless cosign signing via GitHub OIDC (Sigstore Fulcio/Rekor)
 
 jobs:
   android-release:
@@ -66,6 +73,40 @@ jobs:
           format: cyclonedx-json
           output-file: gatepath-sbom.cdx.json
 
+      # Collect everything that ships into one dir so cosign can sign each blob
+      # and the release upload is a single glob (artifacts + their .cosign.bundle).
+      - name: Stage release artifacts
+        run: |
+          set -euo pipefail
+          shopt -s failglob   # a zero-artifact build fails loudly, not with a literal glob
+          mkdir -p release-artifacts
+          cp android/app/build/outputs/bundle/release/*.aab release-artifacts/
+          cp android/app/build/outputs/apk/release/*.apk release-artifacts/
+          cp gatepath-sbom.cdx.json release-artifacts/
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3
+
+      # Keyless provenance signing (Sigstore): the workflow's short-lived OIDC
+      # token → Fulcio cert → Rekor transparency log. No long-lived keys. Each
+      # artifact gets a self-contained `<name>.cosign.bundle` a verifier checks
+      # with `cosign verify-blob --bundle ...` (recipe in docs/RELEASING.md).
+      # This is provenance for the RELEASE PIPELINE, independent of (and in
+      # addition to) the Android keystore signature above.
+      - name: Sign artifacts with keyless cosign
+        working-directory: release-artifacts
+        env:
+          COSIGN_YES: "true"   # non-interactive: accept the Rekor transparency-log entry
+        run: |
+          set -euo pipefail
+          for f in *; do
+            [ -f "$f" ] || continue
+            case "$f" in *.cosign.bundle) continue ;; esac
+            echo "cosign sign-blob: $f"
+            cosign sign-blob --yes --bundle "${f}.cosign.bundle" "$f"
+          done
+          ls -la
+
       - name: Publish GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -73,15 +114,15 @@ jobs:
         run: |
           set -euo pipefail
           shopt -s failglob   # a zero-artifact build fails loudly, not with a literal glob
-          notes="Automated release for ${GITHUB_REF_NAME}."
+          notes="Automated release for ${GITHUB_REF_NAME}.
+
+          **Provenance:** every artifact is signed with keyless \`cosign\` (Sigstore) — each has a companion \`.cosign.bundle\`. Verify with \`cosign verify-blob\` (see docs/RELEASING.md §4). This attests the artifact came from this release workflow; it is separate from the Android app signature."
           if [ "$SIGNED" != "true" ]; then
             notes="${notes}
 
-          > ⚠️ These artifacts are **UNSIGNED** (no signing keystore was configured for this build). Do not distribute; see docs/RELEASING.md."
+          > ⚠️ These artifacts are **UNSIGNED by the Android keystore** (no signing keystore was configured for this build). The cosign provenance above still applies, but the app itself is not release-signed — do not distribute; see docs/RELEASING.md."
           fi
           gh release create "$GITHUB_REF_NAME" \
             --title "$GITHUB_REF_NAME" \
             --notes "$notes" \
-            android/app/build/outputs/bundle/release/*.aab \
-            android/app/build/outputs/apk/release/*.apk \
-            gatepath-sbom.cdx.json
+            release-artifacts/*
