@@ -110,15 +110,14 @@ constants, method arities, and the `SubprocessExit` payload against the same
 artifact. This moves the `LaunchPortal` arity + `PortalSubprocessExited`
 signal-shape drift-detection into CI **without needing a live bus** — the
 mechanism the old `#[ignore]`d integration tests couldn't. Error *names* stay
-guarded by `test_netns_client.py` (the artifact references only the prefix).
-**Still open:** the `#[ignore]`d `tests/dbus_integration.rs` live-wire round-trip
-checks (real bus/polkit) remain manual — they verify runtime behaviour, not
-static drift, and genuinely need a bus. Also: the error-name *prefix* is pinned
-against the artifact only Python-side (`ERROR_PREFIX`); the Rust
-`#[zbus(prefix = …)]` literal is not cross-checked, so a lone edit of it would
-change wire error names uncaught (the variant *names* are still round-tripped by
-`test_netns_client.py`). Narrow; a one-line source-parse of the prefix would
-close it.
+guarded by `test_netns_client.py`. The error-name *prefix* is now pinned on
+BOTH sides against the artifact: Python checks its `ERROR_PREFIX` const, and
+`dbus_error_prefix_matches_contract` (Rust) source-parses the
+`#[zbus(prefix = …)]` literal from `dbus_service.rs` and asserts it (+ the
+trailing `.`) equals the contract — so a lone edit of the Rust prefix now fails
+in CI. **Still open:** the `#[ignore]`d `tests/dbus_integration.rs` live-wire
+round-trip checks (real bus/polkit) remain manual — they verify runtime
+behaviour, not static drift, and genuinely need a bus.
 
 ### P1.2 — Property/fuzz the privileged boundary validators
 **Status:** **`proptest` done (2026-06-30)**; a `cargo-fuzz`/libFuzzer target is an

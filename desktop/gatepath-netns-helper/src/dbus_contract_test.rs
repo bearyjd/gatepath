@@ -48,6 +48,7 @@ struct Contract {
     bus_name: String,
     object_path: String,
     interface: String,
+    error_prefix: String,
     methods: BTreeMap<String, MethodSpec>,
     signals: BTreeMap<String, SignalSpec>,
 }
@@ -81,6 +82,36 @@ fn load_contract() -> Contract {
     });
     serde_json::from_str(&data)
         .unwrap_or_else(|e| panic!("failed to parse D-Bus contract at {path}: {e}"))
+}
+
+/// The wire error-name prefix from the `HelperError` enum's
+/// `#[zbus(prefix = "…")]` attribute in `dbus_service.rs`.
+///
+/// This one attribute is NOT part of the interface introspection XML (it maps
+/// error variants to `<prefix>.<Variant>` D-Bus error names, not the interface
+/// surface), so — unlike the method/signal signatures — it can only be read
+/// from source. zbus appends `.<Variant>`, so the attribute value carries no
+/// trailing dot; the caller adds it to compare against the contract's
+/// `error_prefix`. There is exactly one `#[zbus(prefix = …)]` in the file (the
+/// `#[zbus::interface]` macro uses `name = …`, not `prefix`), so a plain search
+/// is unambiguous; a loud panic fires if the attribute moves or is renamed.
+fn parse_error_prefix() -> String {
+    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/src/dbus_service.rs");
+    let src = std::fs::read_to_string(path)
+        .unwrap_or_else(|e| panic!("failed to read {path}: {e}"));
+    let needle = "#[zbus(prefix = \"";
+    let start = src.find(needle).unwrap_or_else(|| {
+        panic!(
+            "could not find `#[zbus(prefix = \"…\")]` in {path} — did the \
+             HelperError prefix attribute move or change shape? Update this \
+             parser (and reconcile the contract's error_prefix)."
+        )
+    }) + needle.len();
+    let rest = &src[start..];
+    let end = rest
+        .find('"')
+        .expect("unterminated `#[zbus(prefix = \"…` literal in dbus_service.rs");
+    rest[..end].to_string()
 }
 
 // ── The live interface, introspected without a bus ──────────────────────
@@ -296,4 +327,26 @@ fn dbus_interface_matches_shared_contract() {
             parsed.signals[name], spec.args
         );
     }
+}
+
+/// The wire error-name prefix isn't in the introspection XML, so guard the
+/// Rust `#[zbus(prefix = …)]` literal against the contract's `error_prefix`
+/// directly. Without this, a lone edit of the Rust prefix would change every
+/// wire error name (`<prefix>.<Variant>`) with nothing failing in CI — the
+/// Python side only checks its own `ERROR_PREFIX` const against the artifact,
+/// and `test_netns_client.py` builds names from that Python const, not the Rust
+/// literal. (Closes the LOW noted when the contract guard first landed.)
+#[test]
+fn dbus_error_prefix_matches_contract() {
+    let contract = load_contract();
+    // zbus emits `<prefix>.<Variant>`, so the source literal has no trailing
+    // dot; the contract's error_prefix does. Reconcile by appending the dot.
+    let rust_prefix = format!("{}.", parse_error_prefix());
+    assert_eq!(
+        rust_prefix, contract.error_prefix,
+        "wire error-name prefix drifted: Rust `#[zbus(prefix)]` + '.' = {:?} \
+         vs contract error_prefix {:?}. Reconcile dbus_service.rs, \
+         docs/netns_helper_dbus_contract.json, and netns_client.py's ERROR_PREFIX.",
+        rust_prefix, contract.error_prefix
+    );
 }
