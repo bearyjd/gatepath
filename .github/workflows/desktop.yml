@@ -183,9 +183,11 @@ jobs:
     runs-on: ubuntu-latest
     container: fedora:latest
     steps:
-      - uses: actions/checkout@v7
       - name: Install build deps
-        run: dnf install -y --setopt=install_weak_deps=False rpm-build cargo rust tar gzip git findutils
+        run: dnf install -y --setopt=install_weak_deps=False rpm-build systemd-rpm-macros cargo rust tar gzip git findutils
+      - uses: actions/checkout@v7
+      - name: Mark workspace a safe git dir (container uid mismatch)
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
       - name: Build RPM
         run: desktop/gatepath-netns-helper/packaging/build-rpm.sh
         env:

@@ -19,8 +19,13 @@
 # %cargo_* machinery; skip the debuginfo subpackage rather than fail extraction.
 %global debug_package %{nil}
 
+# Version is supplied by build-rpm.sh (`--define "version <x>"`, read from the
+# committed Cargo.toml) so it can't drift from the crate. Fallback keeps a direct
+# `rpmbuild` invocation working; bump it if you build the spec by hand.
+%{!?version: %global version 0.1.0}
+
 Name:           gatepath-netns-helper
-Version:        0.1.0
+Version:        %{version}
 Release:        1%{?dist}
 Summary:        Privileged helper for Gatepath's desktop network-namespace isolation
 
