@@ -248,6 +248,17 @@ Option B (systemd-sysext) as the primary path on Bazzite**, with **Option A
   is the right artifact to publish if Gatepath is ever packaged for plain
   Fedora, so the work is reusable.
 
+> **The RPM spec now ships** at
+> `desktop/gatepath-netns-helper/packaging/gatepath-netns-helper.spec` (Option A).
+> It installs to the same canonical `/usr` paths as the sysext (no source edits)
+> and adds the logrotate config natively into `/etc` (`%config(noreplace)`), with
+> the runtime `Requires` above, weak deps for the WebView stack, and
+> systemd/tmpfiles scriptlets for the D-Bus-activated unit. Build it with
+> `rpmbuild -ba` per the header comment in the spec; for a real Fedora dist-git
+> submission, regenerate crate `BuildRequires` with `rust2rpm` and switch to the
+> `%cargo_*` macros (the shipped spec builds straight from the vendored
+> `Cargo.lock` so it works from the repo without that tooling).
+
 Use **Option C only for development iteration** while 3a/3b are being built —
 not as the shipping mechanism.
 
