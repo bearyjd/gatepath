@@ -172,3 +172,47 @@ jobs:
           name: gatepath-netns-helper-sysext
           path: desktop/gatepath-netns-helper/dist/gatepath-netns-helper.raw
           if-no-files-found: error
+
+  build-rpm:
+    name: build RPM (gatepath-netns-helper)
+    # Runs in a Fedora container for authentic rpm macros + toolchain — the RPM
+    # is the conventional/signable alternative to the sysext for traditional
+    # (non-atomic) Fedora/RHEL (docs/DESKTOP_NETNS_DEPLOYMENT.md "Option A").
+    # Building it in CI keeps the .spec's independent file list from drifting out
+    # of sync with the crate / build-sysext.sh, and structurally checks the layout.
+    runs-on: ubuntu-latest
+    container: fedora:latest
+    steps:
+      - name: Install build deps
+        run: dnf install -y --setopt=install_weak_deps=False rpm-build systemd-rpm-macros cargo rust tar gzip git findutils
+      - uses: actions/checkout@v7
+      - name: Mark workspace a safe git dir (container uid mismatch)
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+      - name: Build RPM
+        run: desktop/gatepath-netns-helper/packaging/build-rpm.sh
+        env:
+          TOPDIR: ${{ github.workspace }}/rpmbuild
+      - name: Verify RPM layout
+        # Fail if the canonical paths the helper hardcodes aren't in the package.
+        run: |
+          set -euo pipefail
+          rpm=$(find "$GITHUB_WORKSPACE/rpmbuild/RPMS" -name 'gatepath-netns-helper-*.rpm' | head -1)
+          echo "built: $rpm"
+          files=$(rpm -qlp "$rpm")
+          echo "$files"
+          for want in \
+            /usr/libexec/gatepath-netns-helper \
+            /usr/lib/gatepath/portal-webview-runner \
+            /usr/lib/systemd/system/gatepath-netns-helper.service \
+            /usr/lib/tmpfiles.d/gatepath.conf \
+            /usr/share/dbus-1/system-services/com.ventouxlabs.Gatepath.NetNsHelper.service \
+            /usr/share/polkit-1/actions/com.ventouxlabs.Gatepath.NetNsHelper.policy \
+            /etc/logrotate.d/gatepath-netns-helper ; do
+            echo "$files" | grep -qx "$want" || { echo "::error::RPM missing $want"; exit 1; }
+          done
+      - name: Upload RPM artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: gatepath-netns-helper-rpm
+          path: ${{ github.workspace }}/rpmbuild/RPMS/*/gatepath-netns-helper-*.rpm
+          if-no-files-found: error

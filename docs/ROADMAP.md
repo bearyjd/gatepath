@@ -159,17 +159,26 @@ recipes in `fuzz/README.md`. Smoke-run clean on all five targets (no crash).
 ## P2 — Rollout safety (the intent isn't met if users can't run it)
 
 ### P2.1 — A buildable helper package
-**Status:** **sysext done (2026-06-30)**; an RPM `.spec` remains an optional
-alternative. `DESKTOP_NETNS_DEPLOYMENT.md` analysed sysext vs RPM but shipped no
+**Status:** **sysext done (2026-06-30); RPM `.spec` done (2026-07-24)** — both
+packaging paths now ship. `DESKTOP_NETNS_DEPLOYMENT.md` analysed sysext vs RPM but shipped no
 artifact; now `desktop/gatepath-netns-helper/packaging/build-sysext.sh` produces a
 `systemd-sysext` squashfs image (binary + runner + unit + D-Bus policy/activation +
 polkit action + tmpfiles.d + `extension-release` `ID=_any`), `validate-sysext.sh`
 structurally checks it, and a `build-sysext` CI job (`desktop.yml`) builds,
 validates, and uploads it. Every file installs under `/usr`, so it overlays a
 read-only `/usr` with **no source edits**; build + install steps are in
-`DESKTOP_NETNS_DEPLOYMENT.md` §6. **Follow-ups:** a real `systemd-sysext merge` +
-helper-start smoke test on a privileged host (the self-hosted runner is the natural
-place); sysext signing (→ P2.3); an optional RPM `.spec` for Fedora/RHEL.
+`DESKTOP_NETNS_DEPLOYMENT.md` §6. **The RPM alternative (Option A) now ships too:**
+`packaging/gatepath-netns-helper.spec` installs the helper to the same canonical
+`/usr` paths (so `PORTAL_RUNNER_PATH` etc. work with no source edits) plus the
+logrotate config natively into `/etc` (`%config(noreplace)`), with the deployment
+doc's runtime `Requires` (`iproute2`/`iw`/`wpa_supplicant`/a DHCP client) + weak
+deps for the WebView stack, systemd/tmpfiles scriptlets for the D-Bus-activated
+unit. Built + verified end-to-end (`rpmbuild -ba` → binary + noarch data,
+canonical layout, config/license flags, scriptlets). **Follow-ups:** a real
+`systemd-sysext merge` + helper-start smoke test on a privileged host (the
+self-hosted runner is the natural place); sysext signing (→ P2.3); a full Fedora
+dist-git submission (regenerate crate BuildRequires with `rust2rpm`, switch to the
+`%cargo_*` macros — the shipped spec builds straight from the vendored `Cargo.lock`).
 
 ### P2.2 — Android release pipeline
 **Status:** **pipeline done (2026-06-30)**; needs your keystore to sign.
