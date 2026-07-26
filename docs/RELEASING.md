@@ -60,6 +60,10 @@ release notes.
 2. Add a changelog for the new `versionCode` at
    `fastlane/metadata/android/en-US/changelogs/<versionCode>.txt`
    (F-Droid and Play both read these).
+2b. Roll the top-level [`CHANGELOG.md`](../CHANGELOG.md): rename the
+   `## [Unreleased]` section to the new version + date and start a fresh
+   `## [Unreleased]` above it. (The fastlane file is Android-only, end-user store
+   notes; `CHANGELOG.md` is the whole-project, developer-facing record.)
 3. Commit, then tag and push:
    ```bash
    git tag v1.0.1
