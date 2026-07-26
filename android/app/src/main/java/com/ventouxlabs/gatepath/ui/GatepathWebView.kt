@@ -52,12 +52,14 @@ private fun String.urlForLog(): String =
  * - Cookies and DOM storage ENABLED for the session (portals require them for
  *   sign-in), but session-scoped: wiped on dispose along with cache and history.
  * - No persistent cache (LOAD_NO_CACHE); file/content access disabled.
- * - Off-domain navigations refused and counted via [onBlockedNavigation].
- * - Tracker/analytics sub-requests blocked via [BlockedDomains] and counted via [onBlockedResource].
- * - TLS certificate errors on the portal page are proceeded past rather than
- *   aborting the load silently (see `onReceivedSslError` below) — matching
- *   stock Android's captive-portal handler, since gateways' local login pages
- *   routinely fail chain/hostname validation.
+ * - Off-domain navigations allowed (captive vendors POST sign-in forms
+ *   cross-host) but observed and counted via [onBlockedNavigation].
+ * - Tracker/analytics sub-requests observed and counted via [BlockedDomains] /
+ *   [onBlockedResource].
+ * - TLS certificate errors are proceeded past **on the portal host only**
+ *   (see [SslErrorPolicy] and `onReceivedSslError` below), since gateways'
+ *   local login pages routinely fail chain/hostname validation. Off-domain
+ *   hosts keep normal certificate enforcement.
  */
 @Composable
 fun GatepathWebView(
@@ -221,22 +223,24 @@ private fun buildWebViewClient(
     // callback and no visible message: the WebView is just left blank. That
     // silent-white-screen failure mode is what this override exists to close.
     //
-    // AOSP's own CaptivePortalLoginActivity (what GrapheneOS's built-in
-    // handler is based on) proceeds past these errors for the same reason —
-    // the portal session is time-boxed, isolated, and carries no sensitive
-    // credentials of the user's own, so trusting the gateway's page is no
-    // worse than trusting stock Android's handler already does.
+    // The bypass is scoped to the portal host (and its subdomains) — see
+    // [SslErrorPolicy] for why proceeding unconditionally would be unsafe
+    // here: off-domain navigation is deliberately unblocked below, so a
+    // hostile gateway could otherwise steer the page to any host and MITM it
+    // with an untrusted cert.
     override fun onReceivedSslError(
         view: WebView,
         handler: SslErrorHandler,
         error: SslError,
     ) {
+        val errorHost = runCatching { Uri.parse(error.url).host ?: "" }.getOrDefault("")
+        val proceed = SslErrorPolicy.shouldProceed(errorHost, portalHost)
         Log.w(
             TAG,
             "onReceivedSslError ${error.url.urlForLog()}: primaryError=${error.primaryError} " +
-                "— proceeding (captive portal pages routinely fail cert validation)",
+                "— ${if (proceed) "proceeding (portal host, cert errors expected)" else "cancelling (off-domain host=$errorHost, portal host=$portalHost)"}",
         )
-        handler.proceed()
+        if (proceed) handler.proceed() else handler.cancel()
     }
 
     override fun shouldOverrideUrlLoading(
