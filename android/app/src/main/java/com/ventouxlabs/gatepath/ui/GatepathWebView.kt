@@ -19,6 +19,7 @@ import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -69,6 +70,9 @@ fun GatepathWebView(
     onBlockedNavigation: () -> Unit,
     onBlockedResource: () -> Unit,
     onTlsCertErrorBypassed: () -> Unit,
+    onLoadStarted: () -> Unit,
+    onLoadError: (PortalLoadError) -> Unit,
+    reloadToken: Int,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
@@ -129,6 +133,8 @@ fun GatepathWebView(
                 onBlockedNavigation,
                 onBlockedResource,
                 onTlsCertErrorBypassed,
+                onLoadStarted,
+                onLoadError,
             )
             // Diagnostic-only WebChromeClient: forward console.log / console.error
             // from the captive portal page into logcat. Captive portal sign-in
@@ -177,6 +183,16 @@ fun GatepathWebView(
         }
     }
 
+    LaunchedEffect(reloadToken) {
+        // Skip the initial composition — DisposableEffect(network) already
+        // issued the first load. Re-drive the original portal URL rather than
+        // calling reload(), which would re-fetch whatever (often blank)
+        // document the failed load left behind.
+        if (reloadToken > 0) {
+            webView.loadUrl(url)
+        }
+    }
+
     AndroidView(factory = { webView }, modifier = modifier)
 }
 
@@ -185,10 +201,16 @@ private fun buildWebViewClient(
     onBlockedNavigation: () -> Unit,
     onBlockedResource: () -> Unit,
     onTlsCertErrorBypassed: () -> Unit,
+    onLoadStarted: () -> Unit,
+    onLoadError: (PortalLoadError) -> Unit,
 ): WebViewClient = object : WebViewClient() {
 
     override fun onPageStarted(view: WebView, url: String, favicon: Bitmap?) {
         Log.d(TAG, "Page started: ${url.urlForLog()}")
+        // A new main-frame load is underway: clear any error overlay so a
+        // successful retry (or a gateway redirect that finally works) shows
+        // the page instead of a stale failure.
+        onLoadStarted()
     }
 
     override fun onPageFinished(view: WebView, url: String) {
@@ -207,6 +229,17 @@ private fun buildWebViewClient(
             TAG,
             "onReceivedError ${request.url.forLog()}: code=${error.errorCode} desc=${error.description} " +
                 "isMainFrame=${request.isForMainFrame}",
+        )
+        // Subresource failures are routine on captive splash pages (blocked
+        // trackers, absent CDNs) and the page still renders — only a
+        // main-frame failure means the user is looking at a blank screen.
+        if (!request.isForMainFrame) return
+        onLoadError(
+            PortalLoadError(
+                kind = PortalLoadErrorKind.fromWebViewErrorCode(error.errorCode),
+                host = runCatching { request.url.host ?: "" }.getOrDefault(""),
+                technicalDetail = "code=${error.errorCode} desc=${error.description}",
+            ),
         )
     }
 
@@ -252,6 +285,16 @@ private fun buildWebViewClient(
             handler.proceed()
         } else {
             handler.cancel()
+            // cancel() fires no onReceivedError, so without this the refusal
+            // is exactly the silent white screen this whole flow exists to
+            // stop — just with a different cause.
+            onLoadError(
+                PortalLoadError(
+                    kind = PortalLoadErrorKind.CERT_REJECTED,
+                    host = errorHost,
+                    technicalDetail = "primaryError=${error.primaryError}",
+                ),
+            )
         }
     }
 
