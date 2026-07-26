@@ -21,13 +21,19 @@ the normal `cargo test` CI. Fuzzing adds coverage-guided exploration (notably of
 `url::Url::parse` in the portal-URL target) that regex-based generators reach
 less deeply.
 
-## Why this is not in CI
+## Why this is not a PR gate (but does run nightly)
 
 `cargo-fuzz` needs a **nightly** toolchain and a meaningful run needs wall-clock
-time, so — per ROADMAP P1.2 — this is a deliberate **out-of-CI** tool, not a PR
-gate. The in-CI guard for these validators is the `proptest` suite. This crate is
-its own workspace (see the empty `[workspace]` in `Cargo.toml`), so the parent's
-`cargo build` / `test` / `clippy` / `fmt` never descend into it.
+time, so — per ROADMAP P1.2 — it is deliberately **not a PR gate**. The in-CI
+guard for these validators is the `proptest` suite. This crate is its own
+workspace (see the empty `[workspace]` in `Cargo.toml`), so the parent's `cargo
+build` / `test` / `clippy` / `fmt` never descend into it.
+
+It *does* run as a **scheduled nightly soak** — `.github/workflows/fuzz.yml` runs
+each target time-boxed on nightly Rust, persists each target's corpus across
+nights (so coverage compounds), and fails the run + uploads a reproducer if a
+crash is found. Trigger it on demand from the Actions tab
+(`workflow_dispatch`, with an optional per-target duration).
 
 ## Running
 

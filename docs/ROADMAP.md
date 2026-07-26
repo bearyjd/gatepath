@@ -149,10 +149,13 @@ oracle, re-checked through public APIs only, so no private allowlist/const is
 duplicated). It complements, not replaces, the in-CI proptests: fuzzing reaches
 `url::Url::parse`'s state space far more deeply (a 25 s smoke run hit ~2.8 k
 edges / 12.5 k features on the portal-URL target vs. the regex generators). Per
-this item's original note it needs **nightly + an out-of-CI run**, so it is a
-deliberate out-of-CI tool, not a PR gate; the crate is its own workspace so the
-parent `cargo build`/`test`/`clippy`/`fmt` never descend into it. Run + replay
-recipes in `fuzz/README.md`. Smoke-run clean on all five targets (no crash).
+this item's original note it needs **nightly + an out-of-CI run**, so it is not a
+PR gate; the crate is its own workspace so the parent `cargo
+build`/`test`/`clippy`/`fmt` never descend into it. It *does* run as a
+**scheduled nightly soak** (`.github/workflows/fuzz.yml`): each target time-boxed
+on nightly Rust, corpus persisted across nights so coverage compounds, a crash
+fails the run + uploads a reproducer (`workflow_dispatch` for on-demand runs).
+Run + replay recipes in `fuzz/README.md`. Smoke-run clean on all five targets.
 
 ---
 

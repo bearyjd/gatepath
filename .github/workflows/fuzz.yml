@@ -1,0 +1,85 @@
+name: nightly-fuzz
+
+# Scheduled soak of the cargo-fuzz targets for the netns-helper's privileged
+# boundary validators (ROADMAP P1.2). These need a nightly toolchain + wall-clock
+# time, so they are deliberately NOT a PR gate — the in-CI guard stays the
+# proptest suites (desktop.yml `rust-helper`). This workflow operationalizes the
+# fuzzers as ongoing regression coverage: each target runs time-boxed, the corpus
+# is persisted across nights so coverage compounds, and any crash fails the run
+# and uploads a reproducer. See desktop/gatepath-netns-helper/fuzz/README.md.
+
+on:
+  schedule:
+    # 06:00 UTC nightly (low-traffic).
+    - cron: '0 6 * * *'
+  workflow_dispatch:
+    inputs:
+      max_total_time:
+        description: 'Seconds to fuzz each target'
+        default: '600'
+        required: false
+
+permissions:
+  contents: read
+
+# Never let two nightly soaks overlap; let a running one finish rather than kill it.
+concurrency:
+  group: nightly-fuzz
+  cancel-in-progress: false
+
+jobs:
+  fuzz:
+    name: fuzz ${{ matrix.target }}
+    # Only the canonical repo should spend minutes on the schedule (forks skip it);
+    # manual workflow_dispatch still works everywhere.
+    if: github.repository == 'bearyjd/gatepath' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: desktop/gatepath-netns-helper
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - validate_interface_name
+          - validate_portal_url
+          - validate_wayland_display
+          - validate_display
+          - validate_xauthority
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@nightly
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: desktop/gatepath-netns-helper/fuzz
+      - name: Install cargo-fuzz
+        run: cargo install cargo-fuzz --locked
+
+      # Persist each target's corpus across nights so coverage compounds. The key
+      # rolls per run (always saves a fresh entry); restore-keys falls back to the
+      # newest prior corpus for this target.
+      - name: Restore corpus
+        uses: actions/cache@v4
+        with:
+          path: desktop/gatepath-netns-helper/fuzz/corpus/${{ matrix.target }}
+          key: fuzz-corpus-${{ matrix.target }}-${{ github.run_id }}
+          restore-keys: |
+            fuzz-corpus-${{ matrix.target }}-
+
+      - name: Fuzz ${{ matrix.target }}
+        env:
+          # workflow_dispatch input, or the nightly default.
+          DURATION: ${{ github.event.inputs.max_total_time || '600' }}
+        run: |
+          cargo +nightly fuzz run "${{ matrix.target }}" -- \
+            -max_total_time="$DURATION" -print_final_stats=1
+
+      # A crash makes `cargo fuzz run` exit non-zero → the run fails (surfacing via
+      # the scheduled-run notification); upload the reproducer for triage.
+      - name: Upload crash reproducer
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: fuzz-crash-${{ matrix.target }}
+          path: desktop/gatepath-netns-helper/fuzz/artifacts/${{ matrix.target }}/
+          if-no-files-found: ignore
