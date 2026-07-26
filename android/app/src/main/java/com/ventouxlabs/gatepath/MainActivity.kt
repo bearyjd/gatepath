@@ -55,6 +55,7 @@ class MainActivity : ComponentActivity() {
                                 onDismiss = viewModel::onDismiss,
                                 onBlockedNavigation = viewModel::onBlockedNavigation,
                                 onBlockedResource = viewModel::onBlockedResource,
+                                onTlsCertErrorBypassed = viewModel::onTlsCertErrorBypassed,
                             )
                         } else {
                             MainScreen(

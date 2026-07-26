@@ -34,6 +34,7 @@ sealed class PortalSession {
         val openedUtc: String,
         val blockedNavigationAttempts: Int = 0,
         val blockedResourceRequests: Int = 0,
+        val tlsCertErrorsBypassed: Int = 0,
     ) : PortalSession()
 
     /**
@@ -52,6 +53,7 @@ sealed class PortalSession {
         val portalUrl: String,
         val blockedNavigationAttempts: Int = 0,
         val blockedResourceRequests: Int = 0,
+        val tlsCertErrorsBypassed: Int = 0,
     ) : PortalSession()
 
     /** Something went wrong; details in [message]. */

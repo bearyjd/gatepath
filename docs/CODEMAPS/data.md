@@ -21,6 +21,8 @@ close_reason: "portal_completed" | "user_dismissed" | "timeout" | "error" | "abo
 duration_seconds: int
 blocked_navigation_attempts: int   (observed + counted, NOT blocked — legacy field name)
 blocked_resource_requests: int    (observed + counted, NOT blocked — legacy field name)
+tls_cert_errors_bypassed: int    (optional field; android: cert errors proceeded past on
+                                  the portal host only. desktop: always 0, no TLS handler)
 ```
 
 ## Writers / readers

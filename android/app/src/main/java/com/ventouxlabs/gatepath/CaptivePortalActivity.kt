@@ -98,6 +98,7 @@ class CaptivePortalActivity : ComponentActivity() {
                     onDismiss = ::reportSignedIn,
                     onBlockedNavigation = {},
                     onBlockedResource = {},
+                    onTlsCertErrorBypassed = {},
                 )
             }
         }

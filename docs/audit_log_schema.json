@@ -17,6 +17,10 @@
     "blocked_navigation_attempts",
     "blocked_resource_requests"
   ],
+  "optional_fields_comment": "Fields added after schema_version 1 was already in the wild. Writers on both platforms MUST emit them; readers MUST tolerate their absence, because log lines written before the field existed are still valid v1. Adding a field here is NOT a breaking change and does NOT bump schema_version — removing one, or changing a required field, would.",
+  "optional_fields": [
+    "tls_cert_errors_bypassed"
+  ],
   "nullable_fields": [
     "ssid",
     "gateway_ip",
@@ -36,7 +40,8 @@
     "close_reason": "string",
     "duration_seconds": "int",
     "blocked_navigation_attempts": "int",
-    "blocked_resource_requests": "int"
+    "blocked_resource_requests": "int",
+    "tls_cert_errors_bypassed": "int"
   },
   "portal_domain_may_be_empty_when_close_reason_is": ["aborted_pre_active"],
   "platform_enum": ["android", "desktop"],
@@ -55,6 +60,10 @@
     "blocked_navigation_attempts": {
       "android": "Count of off-domain navigations the WebView observed (not in the portal host's same-origin set). Counted, allowed to load. Field name retained for schema-version compatibility. See SECURITY_MODEL.md.",
       "desktop": "Count of off-domain navigations the WebView observed. Counted, allowed to load. Field name retained for schema-version compatibility. See SECURITY_MODEL.md."
+    },
+    "tls_cert_errors_bypassed": {
+      "android": "Count of TLS certificate errors the WebView was told to proceed past (WebViewClient.onReceivedSslError -> handler.proceed()). Only ever incremented for the portal host and its subdomains; cert errors on any other host are cancelled and NOT counted here. A non-zero value means the session rendered a page whose certificate did not validate. See SECURITY_MODEL.md.",
+      "desktop": "Always 0. The desktop WebKitGTK view does not handle load-failed-with-tls-errors at all, so it neither bypasses nor counts certificate errors — WebKit's default policy fails the load. The field is emitted as 0 for schema parity, not because a bypass was declined."
     }
   }
 }

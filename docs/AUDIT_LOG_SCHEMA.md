@@ -12,6 +12,12 @@ so this Markdown is for humans; the JSON is the source of truth.
 Every entry **must** validate against the schema below. `schema_version: 1` is the only
 currently defined version. Increment it for any breaking change.
 
+**Adding** a field is not a breaking change and does not bump the version: new
+fields go in the JSON contract's `optional_fields` list. Writers on both
+platforms must emit every optional field; readers must tolerate its absence,
+because lines written before the field existed are still valid `v1`. Removing
+a field, or changing an existing one, *is* breaking and does require a bump.
+
 ```json
 {
   "schema_version": 1,
@@ -27,7 +33,8 @@ currently defined version. Increment it for any breaking change.
   "close_reason": "portal_completed",
   "duration_seconds": 162,
   "blocked_navigation_attempts": 2,
-  "blocked_resource_requests": 11
+  "blocked_resource_requests": 11,
+  "tls_cert_errors_bypassed": 0
 }
 ```
 
@@ -49,6 +56,7 @@ currently defined version. Increment it for any breaking change.
 | `duration_seconds` | `int` | Whole seconds between open and close. `0` is valid for `aborted_pre_active`. |
 | `blocked_navigation_attempts` | `int` | Off-domain navigations the WebView observed. **Same meaning on both platforms.** Field name retained for schema-version compatibility — see "Field-name caveat" below. |
 | `blocked_resource_requests` | `int` | Tracker-domain subresource requests the WebView observed. **Same meaning on both platforms** as of the cookie/DOM-storage rework — see "Field-name caveat" below. |
+| `tls_cert_errors_bypassed` | `int` | *Optional field (added after v1 shipped).* Certificate errors the WebView was told to proceed past. **Platform-specific:** on Android, the count of `onReceivedSslError` → `handler.proceed()` calls, which only ever happen for the portal host and its subdomains; cert errors on any other host are cancelled and not counted. Non-zero means the session rendered a page whose certificate did not validate. On desktop this is **always `0`** — the WebKitGTK view has no TLS-error handler, so it never bypasses and has nothing to count. |
 
 ## `close_reason` enum
 
