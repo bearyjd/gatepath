@@ -32,6 +32,15 @@ session**.
   the captive intercept redirects to; both are unreachable over HTTPS in
   practice. Application code that touches sensitive endpoints stays HTTPS at
   the call site; it does not fall back to cleartext silently.
+- TLS certificate errors on the portal page itself are **proceeded past**
+  (`WebViewClient.onReceivedSslError` calls `handler.proceed()`), matching
+  stock Android's `CaptivePortalLoginActivity`. Gateway login pages routinely
+  present self-signed certs, expired certs, or certs whose CN is the
+  gateway's RFC1918 IP — none of which chain to a trusted root. The
+  unoverridden WebView default (`handler.cancel()`) aborts the load with no
+  visible error, which silently white-screens the portal instead of showing
+  it. This is scoped to the time-boxed, isolated captive session described
+  above; it does not affect certificate validation anywhere else in the app.
 - Session is time-bounded: auto-closes after 10 minutes.
 - Every session is written to an append-only audit log
   (see [AUDIT_LOG_SCHEMA.md](AUDIT_LOG_SCHEMA.md)).

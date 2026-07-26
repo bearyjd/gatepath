@@ -4,9 +4,11 @@ import android.graphics.Bitmap
 import android.net.ConnectivityManager
 import android.net.Network
 import android.net.Uri
+import android.net.http.SslError
 import android.util.Log
 import android.webkit.ConsoleMessage
 import android.webkit.CookieManager
+import android.webkit.SslErrorHandler
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
@@ -52,6 +54,10 @@ private fun String.urlForLog(): String =
  * - No persistent cache (LOAD_NO_CACHE); file/content access disabled.
  * - Off-domain navigations refused and counted via [onBlockedNavigation].
  * - Tracker/analytics sub-requests blocked via [BlockedDomains] and counted via [onBlockedResource].
+ * - TLS certificate errors on the portal page are proceeded past rather than
+ *   aborting the load silently (see `onReceivedSslError` below) — matching
+ *   stock Android's captive-portal handler, since gateways' local login pages
+ *   routinely fail chain/hostname validation.
  */
 @Composable
 fun GatepathWebView(
@@ -205,6 +211,32 @@ private fun buildWebViewClient(
             "onReceivedHttpError ${request.url.forLog()}: status=${errorResponse.statusCode} " +
                 "reason=${errorResponse.reasonPhrase} isMainFrame=${request.isForMainFrame}",
         )
+    }
+
+    // Captive-portal gateways routinely terminate their local login page with
+    // a self-signed cert, an expired cert, or a cert whose CN is the gateway's
+    // RFC1918 IP rather than a real hostname — none of which chain to a
+    // trusted root. The unoverridden WebViewClient default is
+    // handler.cancel(), which aborts the load with NO onReceivedError
+    // callback and no visible message: the WebView is just left blank. That
+    // silent-white-screen failure mode is what this override exists to close.
+    //
+    // AOSP's own CaptivePortalLoginActivity (what GrapheneOS's built-in
+    // handler is based on) proceeds past these errors for the same reason —
+    // the portal session is time-boxed, isolated, and carries no sensitive
+    // credentials of the user's own, so trusting the gateway's page is no
+    // worse than trusting stock Android's handler already does.
+    override fun onReceivedSslError(
+        view: WebView,
+        handler: SslErrorHandler,
+        error: SslError,
+    ) {
+        Log.w(
+            TAG,
+            "onReceivedSslError ${error.url.urlForLog()}: primaryError=${error.primaryError} " +
+                "— proceeding (captive portal pages routinely fail cert validation)",
+        )
+        handler.proceed()
     }
 
     override fun shouldOverrideUrlLoading(
