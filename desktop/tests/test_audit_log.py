@@ -25,6 +25,11 @@ with _SCHEMA_PATH.open("r", encoding="utf-8") as _fh:
     _SCHEMA: dict = json.load(_fh)
 
 _REQUIRED_FIELDS: set[str] = set(_SCHEMA["required_fields"])
+# Fields added after schema_version 1 shipped. Writers must emit them; readers
+# must tolerate their absence in older log lines. See `optional_fields_comment`
+# in docs/audit_log_schema.json.
+_OPTIONAL_FIELDS: set[str] = set(_SCHEMA.get("optional_fields", []))
+_ALLOWED_FIELDS: set[str] = _REQUIRED_FIELDS | _OPTIONAL_FIELDS
 _NULLABLE_FIELDS: set[str] = set(_SCHEMA["nullable_fields"])
 _CLOSE_REASON_ENUM: set[str] = set(_SCHEMA["close_reason_enum"])
 _PLATFORM_ENUM: set[str] = set(_SCHEMA["platform_enum"])
@@ -208,7 +213,7 @@ class TestSchemaConformance:
         log = tmp_path / "audit.jsonl"
         write_session(_make_completed_session(), log_path=log)
         entry = read_all(log_path=log)[0]
-        extras = set(entry.keys()) - _REQUIRED_FIELDS
+        extras = set(entry.keys()) - _ALLOWED_FIELDS
         assert not extras, f"Writer emitted keys not in schema: {extras}"
 
     def test_writer_emits_all_required_keys(self, tmp_path: Path) -> None:
@@ -217,6 +222,34 @@ class TestSchemaConformance:
         entry = read_all(log_path=log)[0]
         missing = _REQUIRED_FIELDS - set(entry.keys())
         assert not missing, f"Writer omitted required keys: {missing}"
+
+    def test_writer_emits_every_optional_key(self, tmp_path: Path) -> None:
+        """Optional means 'readers tolerate absence', NOT 'writers may skip it'.
+
+        Both platforms emit every optional field; the allowance exists only so
+        log lines written before the field was introduced still validate.
+        """
+        log = tmp_path / "audit.jsonl"
+        write_session(_make_completed_session(), log_path=log)
+        entry = read_all(log_path=log)[0]
+        missing = _OPTIONAL_FIELDS - set(entry.keys())
+        assert not missing, f"Writer omitted optional keys: {missing}"
+
+    def test_tls_cert_errors_bypassed_is_always_zero_on_desktop(
+        self, tmp_path: Path
+    ) -> None:
+        """Pins the documented desktop semantic.
+
+        The desktop WebKitGTK view never connects `load-failed-with-tls-errors`,
+        so it cannot bypass a certificate error and the count is structurally 0.
+        If desktop ever grows a TLS-error handler, this test should fail and be
+        replaced by real counting — the field must not silently stay 0 while the
+        app actually bypasses certs.
+        """
+        log = tmp_path / "audit.jsonl"
+        write_session(_make_completed_session(), log_path=log)
+        entry = read_all(log_path=log)[0]
+        assert entry["tls_cert_errors_bypassed"] == 0
 
     def test_close_reason_value_is_in_schema_enum(self, tmp_path: Path) -> None:
         log = tmp_path / "audit.jsonl"

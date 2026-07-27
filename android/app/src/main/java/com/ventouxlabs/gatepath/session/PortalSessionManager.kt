@@ -68,6 +68,21 @@ class PortalSessionManager {
         return current.copy(blockedResourceRequests = current.blockedResourceRequests + 1)
     }
 
+    /**
+     * Active → Active: record one TLS certificate error that was proceeded past
+     * on the portal host. Unlike the counters above this one records a *trust
+     * grant*, not an observation — a non-zero value in the audit log means the
+     * session rendered a page whose certificate did not validate.
+     * Attempting this on a non-Active state is rejected.
+     */
+    fun recordTlsCertErrorBypassed(current: PortalSession): PortalSession {
+        if (current !is PortalSession.Active) {
+            rejectedTransitions.incrementAndGet()
+            return current
+        }
+        return current.copy(tlsCertErrorsBypassed = current.tlsCertErrorsBypassed + 1)
+    }
+
     /** Active → Completed(PORTAL_COMPLETED). [closedUtc] supplied by caller. */
     fun completePortal(current: PortalSession, closedUtc: String): PortalSession {
         if (current !is PortalSession.Active) {
@@ -81,6 +96,7 @@ class PortalSessionManager {
             portalUrl = current.portalUrl,
             blockedNavigationAttempts = current.blockedNavigationAttempts,
             blockedResourceRequests = current.blockedResourceRequests,
+            tlsCertErrorsBypassed = current.tlsCertErrorsBypassed,
         )
     }
 
@@ -104,6 +120,7 @@ class PortalSessionManager {
                 portalUrl = current.portalUrl,
                 blockedNavigationAttempts = current.blockedNavigationAttempts,
                 blockedResourceRequests = current.blockedResourceRequests,
+                tlsCertErrorsBypassed = current.tlsCertErrorsBypassed,
             )
             is PortalSession.Detected -> PortalSession.Completed(
                 closeReason = CloseReason.ABORTED_PRE_ACTIVE,
@@ -137,6 +154,7 @@ class PortalSessionManager {
             portalUrl = current.portalUrl,
             blockedNavigationAttempts = current.blockedNavigationAttempts,
             blockedResourceRequests = current.blockedResourceRequests,
+            tlsCertErrorsBypassed = current.tlsCertErrorsBypassed,
         )
     }
 
@@ -155,6 +173,7 @@ class PortalSessionManager {
                 portalUrl = current.portalUrl,
                 blockedNavigationAttempts = current.blockedNavigationAttempts,
                 blockedResourceRequests = current.blockedResourceRequests,
+                tlsCertErrorsBypassed = current.tlsCertErrorsBypassed,
             )
             is PortalSession.Detected -> PortalSession.Completed(
                 closeReason = CloseReason.ABORTED_PRE_ACTIVE,

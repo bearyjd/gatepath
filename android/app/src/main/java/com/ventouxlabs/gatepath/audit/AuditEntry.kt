@@ -24,4 +24,11 @@ data class AuditEntry(
     @SerialName("duration_seconds") val durationSeconds: Int,
     @SerialName("blocked_navigation_attempts") val blockedNavigationAttempts: Int,
     @SerialName("blocked_resource_requests") val blockedResourceRequests: Int,
+    /**
+     * Certificate errors proceeded past on the portal host (see
+     * `ui/SslErrorPolicy`). Added after schema_version 1 shipped, so it is an
+     * `optional_fields` entry in docs/audit_log_schema.json: always written,
+     * tolerated as absent when reading older lines.
+     */
+    @SerialName("tls_cert_errors_bypassed") val tlsCertErrorsBypassed: Int = 0,
 )

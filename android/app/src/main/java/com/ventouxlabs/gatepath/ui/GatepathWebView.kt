@@ -68,6 +68,7 @@ fun GatepathWebView(
     connectivityManager: ConnectivityManager,
     onBlockedNavigation: () -> Unit,
     onBlockedResource: () -> Unit,
+    onTlsCertErrorBypassed: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
@@ -123,7 +124,12 @@ fun GatepathWebView(
             val cookieManager = CookieManager.getInstance()
             cookieManager.setAcceptCookie(true)
             cookieManager.setAcceptThirdPartyCookies(this, true)
-            webViewClient = buildWebViewClient(portalHost, onBlockedNavigation, onBlockedResource)
+            webViewClient = buildWebViewClient(
+                portalHost,
+                onBlockedNavigation,
+                onBlockedResource,
+                onTlsCertErrorBypassed,
+            )
             // Diagnostic-only WebChromeClient: forward console.log / console.error
             // from the captive portal page into logcat. Captive portal sign-in
             // pages frequently break in unexpected ways (CSP, missing JS frameworks,
@@ -178,6 +184,7 @@ private fun buildWebViewClient(
     portalHost: String,
     onBlockedNavigation: () -> Unit,
     onBlockedResource: () -> Unit,
+    onTlsCertErrorBypassed: () -> Unit,
 ): WebViewClient = object : WebViewClient() {
 
     override fun onPageStarted(view: WebView, url: String, favicon: Bitmap?) {
@@ -240,7 +247,12 @@ private fun buildWebViewClient(
             "onReceivedSslError ${error.url.urlForLog()}: primaryError=${error.primaryError} " +
                 "— ${if (proceed) "proceeding (portal host, cert errors expected)" else "cancelling (off-domain host=$errorHost, portal host=$portalHost)"}",
         )
-        if (proceed) handler.proceed() else handler.cancel()
+        if (proceed) {
+            onTlsCertErrorBypassed()
+            handler.proceed()
+        } else {
+            handler.cancel()
+        }
     }
 
     override fun shouldOverrideUrlLoading(

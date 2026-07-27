@@ -311,6 +311,10 @@ class MainViewModel @Inject constructor(
         _session.value = sessionManager.recordBlockedResource(_session.value)
     }
 
+    fun onTlsCertErrorBypassed() {
+        _session.value = sessionManager.recordTlsCertErrorBypassed(_session.value)
+    }
+
     /**
      * Debug-only: jump straight to PortalSession.Active with [portalUrl] and
      * [network], bypassing the captive-portal detection pipeline. Lets the
@@ -395,6 +399,7 @@ class MainViewModel @Inject constructor(
             durationSeconds = durationSeconds,
             blockedNavigationAttempts = finalState.blockedNavigationAttempts,
             blockedResourceRequests = finalState.blockedResourceRequests,
+            tlsCertErrorsBypassed = finalState.tlsCertErrorsBypassed,
         )
 
         viewModelScope.launch {

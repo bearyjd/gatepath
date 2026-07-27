@@ -29,6 +29,7 @@ fun PortalScreen(
     onDismiss: () -> Unit,
     onBlockedNavigation: () -> Unit,
     onBlockedResource: () -> Unit,
+    onTlsCertErrorBypassed: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Scaffold(
@@ -59,6 +60,7 @@ fun PortalScreen(
                 connectivityManager = connectivityManager,
                 onBlockedNavigation = onBlockedNavigation,
                 onBlockedResource = onBlockedResource,
+                onTlsCertErrorBypassed = onTlsCertErrorBypassed,
                 modifier = Modifier.fillMaxSize(),
             )
         }

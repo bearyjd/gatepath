@@ -65,6 +65,7 @@ class AuditSchemaParityTest {
         durationSeconds = 162,
         blockedNavigationAttempts = 2,
         blockedResourceRequests = 11,
+        tlsCertErrorsBypassed = 1,
     )
 
     private fun readWrittenJson(): JsonObject {
@@ -89,11 +90,28 @@ class AuditSchemaParityTest {
     fun `writer emits no fields outside the schema`() = runBlocking {
         writer.append(sampleEntry())
         val obj = readWrittenJson()
-        val required = schema["required_fields"]!!.jsonArray
-            .map { it.jsonPrimitive.content }
-            .toSet()
-        val extras = obj.keys - required
+        val extras = obj.keys - allowedFields()
         assertTrue("Writer emitted unknown fields: $extras", extras.isEmpty())
+    }
+
+    @Test
+    fun `writer emits every optional field`() = runBlocking {
+        // "Optional" means readers tolerate absence in log lines written before
+        // the field existed — NOT that writers may skip it. Both platforms emit
+        // every optional field on every entry.
+        writer.append(sampleEntry())
+        val obj = readWrittenJson()
+        val missing = optionalFields() - obj.keys
+        assertTrue("Writer omitted optional fields: $missing", missing.isEmpty())
+    }
+
+    @Test
+    fun `tls_cert_errors_bypassed round-trips the session counter`() = runBlocking {
+        // A non-zero value is the audit record of a trust grant: the session
+        // rendered a page whose certificate did not validate.
+        writer.append(sampleEntry().copy(tlsCertErrorsBypassed = 3))
+        val obj = readWrittenJson()
+        assertEquals(3, obj["tls_cert_errors_bypassed"]!!.jsonPrimitive.int)
     }
 
     // ── Enum parity ─────────────────────────────────────────────────────────
@@ -184,6 +202,17 @@ class AuditSchemaParityTest {
             else -> false
         }
     }
+
+    private fun optionalFields(): Set<String> =
+        schema["optional_fields"]?.jsonArray
+            ?.map { it.jsonPrimitive.content }
+            ?.toSet()
+            ?: emptySet()
+
+    private fun allowedFields(): Set<String> =
+        schema["required_fields"]!!.jsonArray
+            .map { it.jsonPrimitive.content }
+            .toSet() + optionalFields()
 
     // ── Schema location ─────────────────────────────────────────────────────
 

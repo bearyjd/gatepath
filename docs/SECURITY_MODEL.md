@@ -49,6 +49,12 @@ session**.
   portal host keeps the trust grant on the party the captive session already
   has to trust — the gateway's own login page — and nothing else. Certificate
   validation elsewhere in the app is unaffected.
+
+  Each bypass is counted into the audit log as `tls_cert_errors_bypassed`, so a
+  session that rendered a page with an invalid certificate leaves a record
+  rather than only a logcat line. Refusals (cert errors on non-portal hosts)
+  are logged but not counted — the field records trust granted, not trust
+  withheld.
 - Session is time-bounded: auto-closes after 10 minutes.
 - Every session is written to an append-only audit log
   (see [AUDIT_LOG_SCHEMA.md](AUDIT_LOG_SCHEMA.md)).

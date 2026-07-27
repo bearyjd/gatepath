@@ -63,6 +63,10 @@ release has been cut yet**, so everything below is unreleased, heading toward
   context in an artifact-only job); pass `GH_REPO`. Caught by a live test-tag run. (#102)
 - `nightly-fuzz` pinned to a known-good nightly after the always-latest nightly
   `rustc` hit an internal compiler error under cargo-fuzz's sanitizer flags. (#109)
+- **Android:** captive portals served over HTTPS with a self-signed, expired, or
+  IP-CN certificate rendered as a blank white screen. The WebView had no
+  `onReceivedSslError` override, so the Android default (`handler.cancel()`)
+  aborted the load with no error callback and nothing logged. (#111)
 
 - **Desktop:** off-domain navigations were refused outright, which cancels the
   cross-host sign-in POST that Meraki, Cisco ISE and UniFi portals rely on —
@@ -80,6 +84,16 @@ release has been cut yet**, so everything below is unreleased, heading toward
   every privileged D-Bus call; its input validators are proptest- and fuzz-covered.
 - Release artifacts carry cosign provenance independent of the (optional) Android
   keystore app signature.
+- **Android:** the captive-portal TLS-error bypass is scoped to the portal host
+  and its subdomains (`SslErrorPolicy`); certificate errors on any other host are
+  cancelled, so a hostile gateway cannot redirect the session to an arbitrary
+  host and MITM it with an untrusted certificate. Fails closed when either host
+  cannot be parsed. (#111)
+- Bypassed certificate errors are recorded in the audit log as
+  `tls_cert_errors_bypassed`, so a session that rendered a page with an invalid
+  certificate leaves evidence. Added as an `optional_fields` entry in the shared
+  schema — no `schema_version` bump, and pre-existing log lines stay valid.
+  Always `0` on desktop, which has no TLS-error handler.
 
 ### Known limitations
 
