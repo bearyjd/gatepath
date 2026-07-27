@@ -25,7 +25,7 @@ FROM fedora:42
 # per category if any single thing churns.
 RUN dnf install -y --setopt=install_weak_deps=False \
         # GTK4 / WebKit / libadwaita stack
-        gtk4 libadwaita webkit2gtk4.1 \
+        gtk4 libadwaita webkitgtk6.0 \
         # Python runtime + bindings (PyGObject, dasbus) + dbusmock + the
         # original `python3-dbus` low-level binding the dbusmock seed
         # script also touches
