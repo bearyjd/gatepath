@@ -17,6 +17,13 @@ from typing import Callable, Optional
 from gatepath import portal_load_error
 from gatepath.portal_load_error import PortalLoadError
 
+#: Icon for the panel. Must exist in the freedesktop icon-naming spec, not
+#: just in GNOME's Adwaita set — the Flatpak ships the GNOME runtime, but a
+#: native install inherits the user's theme. `network-error-symbolic` was the
+#: obvious-sounding name and is absent from at least Breeze, where it renders
+#: as a broken-image placeholder.
+ICON_NAME = "dialog-error-symbolic"
+
 # ── GTK widget (guarded, mirroring diagnosis_panel.py / window.py) ─────
 
 try:
@@ -37,12 +44,19 @@ try:
         rejection is the case that matters: retrying re-rejects, and offering
         the button would nudge the user past a possible tampering signal.
         """
-        # Adw labels render Pango markup, and `error.host` comes off the
-        # network — escape it, or a crafted hostname breaks the panel or
-        # injects markup into it.
+        # The two properties are NOT alike, and treating them alike renders
+        # visible garbage:
+        #
+        #   description IS Pango markup -> must be escaped. It carries
+        #     `error.host`, which comes off the network, so an unescaped
+        #     crafted hostname would break the panel or inject markup.
+        #   title is PLAIN TEXT -> must NOT be escaped. Escaping it puts a
+        #     literal "Couldn&apos;t reach the sign-in page" on screen.
+        #     Nothing network-derived reaches the title anyway: it is one of
+        #     a handful of fixed strings from portal_load_error.title().
         page = Adw.StatusPage(
-            icon_name="network-error-symbolic",
-            title=GLib.markup_escape_text(portal_load_error.title(error.kind)),
+            icon_name=ICON_NAME,
+            title=portal_load_error.title(error.kind),
             description=GLib.markup_escape_text(portal_load_error.body(error)),
         )
 

@@ -73,6 +73,45 @@ def test_retry_button_invokes_the_callback() -> None:
     assert calls == [1], "clicking Try again must reach the caller's retry handler"
 
 
+def test_title_is_not_markup_escaped() -> None:
+    """`Adw.StatusPage:title` is plain text, unlike `:description`.
+
+    Escaping it renders a literal "Couldn&apos;t reach the sign-in page" on
+    screen. Caught only by looking at the thing — construction succeeded
+    either way — so it is pinned here now.
+    """
+    from gatepath import portal_load_error
+
+    for kind in PortalLoadErrorKind:
+        page = build_error_panel(_error(kind), on_retry=lambda: None)
+        assert page.get_title() == portal_load_error.title(kind)
+        assert "&apos;" not in page.get_title()
+        assert "&amp;" not in page.get_title()
+
+
+def test_icon_name_actually_resolves_in_the_icon_theme() -> None:
+    """A non-existent icon name renders as a broken-image placeholder.
+
+    `network-error-symbolic` sounds right and is absent from at least Breeze,
+    which is how this was found. Construction can't catch it — GTK accepts any
+    string — so resolve it against the live theme instead.
+    """
+    from gi.repository import Gdk, Gtk
+
+    from gatepath.ui.portal_error_panel import ICON_NAME
+
+    display = Gdk.Display.get_default()
+    if display is None:  # pragma: no cover - no display in this environment
+        pytest.skip("no display; icon theme unavailable")
+    theme = Gtk.IconTheme.get_for_display(display)
+    if not theme.has_icon("dialog-information-symbolic"):  # pragma: no cover
+        pytest.skip("icon theme has no standard icons; nothing meaningful to assert")
+    assert theme.has_icon(ICON_NAME), (
+        f"{ICON_NAME!r} does not resolve in theme {theme.get_theme_name()!r}; "
+        "it would render as a broken-image placeholder"
+    )
+
+
 def test_hostile_hostname_is_escaped_not_interpreted() -> None:
     """`host` comes off the network and Adw labels render Pango markup.
 
