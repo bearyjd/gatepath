@@ -56,12 +56,18 @@ class PortalLoadError:
 
 
 def is_deliberate_cancel(domain: str, code: int) -> bool:
-    """True when *we* stopped the load, so no error should be shown.
+    """True when the load was cancelled rather than failed — show no error.
 
-    `_on_decide_policy` calls `decision.ignore()` for off-domain navigation.
-    WebKit reports that as a load failure like any other — without this guard,
-    every deliberately-refused navigation would pop an error panel at the user
-    as though something had gone wrong.
+    A cancelled load is not a fault, and reporting one blames the network for
+    something that did not go wrong. WebKit surfaces cancellations through the
+    same `load-failed` signal as real failures, so they have to be told apart
+    here.
+
+    Gatepath no longer cancels navigations itself — `_on_decide_policy` allows
+    off-domain navigation and only counts it (see `webview_host_matching`) —
+    but WebKit still interrupts frame loads on its own (a redirect superseding
+    an in-flight load, a policy decision it makes internally). Those must not
+    surface as errors either, so the guard stays.
     """
     if domain == DOMAIN_POLICY and code == _POLICY_FRAME_LOAD_INTERRUPTED:
         return True

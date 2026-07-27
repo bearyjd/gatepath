@@ -175,9 +175,9 @@ def make_webview(
             code = 0
 
         if is_deliberate_cancel(domain, code):
-            # We stopped this load ourselves (off-domain policy refusal).
-            # Reporting it as a failure would blame the network for our own
-            # decision.
+            # Cancelled, not failed — e.g. a redirect superseding an in-flight
+            # load. Reporting it as a failure would blame the network for
+            # something that did not go wrong.
             logger.debug("Load cancelled by policy: %s (%s:%d)", failing_uri, domain, code)
             return False
 
