@@ -67,6 +67,12 @@ release has been cut yet**, so everything below is unreleased, heading toward
   IP-CN certificate rendered as a blank white screen. The WebView had no
   `onReceivedSslError` override, so the Android default (`handler.cancel()`)
   aborted the load with no error callback and nothing logged. (#111)
+- **Android:** a failed portal load no longer renders as a blank white screen.
+  Main-frame load failures and refused certificates now show what went wrong
+  and offer a retry, instead of only writing a `Log.w` line the user can't see.
+  This covers the whole class — DNS failure, unreachable gateway, redirect
+  loop, TLS handshake failure, sandboxed-WebView `EPERM` — not just the
+  certificate case fixed in #111. (#113)
 
 - **Desktop:** off-domain navigations were refused outright, which cancels the
   cross-host sign-in POST that Meraki, Cisco ISE and UniFi portals rely on —
