@@ -18,10 +18,12 @@ Three buckets of checks, all hard-fail:
      No unexplained refusals.
 
   C. Gateway log — the captive client hit /portal (WebView actually
-     loaded the portal page) AND no request bore a Host header for an
-     off-domain hostname (evil-tracker.example.com, external-site.example.com).
-     The off-domain block is the most-load-bearing security claim
-     Gatepath makes; if it leaks, the test must fail hard.
+     loaded the portal page) AND the off-domain traffic it generated
+     (evil-tracker.example.com, external-site.example.com) was served by
+     the CAPTIVE GATEWAY. Off-domain requests are allowed and counted by
+     design on both platforms; the security claim is that they stay
+     confined to the netns, not that they never happen. The trusted-side
+     half of that claim is section D's sentinel probe.
 
 Exit 0 only if every check passes. Exit 1 otherwise, with the failure
 list printed to stderr.
@@ -159,20 +161,45 @@ def check_gateway_log(entries: list[dict[str, Any]], scenario_report: dict[str, 
            "WebView subprocess exited before dwell (likely GTK/WebKit "
            "unavailable in the stripped container); skipping /portal check")
 
-    # The off-domain block is the security-load-bearing assertion.
-    leaks = []
+    # Off-domain traffic is ALLOWED and COUNTED, not refused — on both
+    # platforms and by design. Android stopped refusing off-domain navigation
+    # because it cancelled the cross-host sign-in POST that Meraki / Cisco ISE
+    # / UniFi depend on; desktop followed. Subresources were never blocked on
+    # either platform: returning an empty 200 for GA/GTM made the portal's own
+    # inline script throw and killed the Continue button.
+    #
+    # So the invariant is NOT "these hostnames never appear". It is that this
+    # traffic stays CONFINED: it is served by the captive gateway, inside the
+    # netns, and never reaches the trusted network. Appearing in THIS log is
+    # the evidence of confinement — the gateway is the captive side. The
+    # trusted-side half is check_confinement()'s sentinel probe.
+    #
+    # The failure this can still catch is a regression back to refusing: a
+    # live WebView that loaded /portal, whose page references both off-domain
+    # hosts, yet produced no off-domain contact at all.
+    off_domain_seen = []
     for e in entries:
         host = (e.get("headers") or {}).get("Host", "")
         # Host header may carry a port suffix; normalise.
         host_only = host.split(":", 1)[0].strip().lower()
         if host_only in OFF_DOMAIN_HOSTNAMES:
-            leaks.append({"path": e.get("path"), "host": host})
-    if leaks:
-        fail("gateway.off_domain_blocked",
-             f"off-domain hostnames leaked into the gateway: {leaks}",
-             failures)
+            off_domain_seen.append({"path": e.get("path"), "host": host})
+
+    portal_loaded = webview_alive and any(e.get("path") == "/portal" for e in entries)
+    if not portal_loaded:
+        ok("gateway.off_domain_confined",
+           "WebView never loaded /portal; no off-domain traffic to judge")
+    elif off_domain_seen:
+        ok("gateway.off_domain_confined",
+           f"{len(off_domain_seen)} off-domain request(s) served by the captive "
+           f"gateway (allowed + confined, as designed): {off_domain_seen}")
     else:
-        ok("gateway.off_domain_blocked", "no off-domain requests observed")
+        fail("gateway.off_domain_confined",
+             "the portal page loaded and references evil-tracker.example.com and "
+             "external-site.example.com, but NO off-domain request reached the "
+             "gateway — something is refusing them again, which breaks cross-host "
+             "sign-in on real captive vendors",
+             failures)
 
 
 def check_confinement(report: dict[str, Any], artifacts_root: Path,
