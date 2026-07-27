@@ -15,6 +15,7 @@ from typing import Callable, Optional
 from urllib.parse import urlparse
 
 from gatepath.blocked_domains import is_blocked
+from gatepath.webview_host_matching import is_same_origin_host
 
 logger = logging.getLogger(__name__)
 
@@ -62,7 +63,7 @@ def make_webview(
             f"WebKitGTK is required for portal_webview.make_webview(): {exc}"
         ) from exc
 
-    portal_domain = urlparse(initial_url).netloc
+    portal_domain = urlparse(initial_url).hostname or ""
 
     # Dedicated ephemeral data directory per session.
     temp_dir = Path(tempfile.mkdtemp(prefix="gatepath-webkit-"))
@@ -96,7 +97,21 @@ def make_webview(
     webview._portal_domain = portal_domain  # type: ignore[attr-defined]
 
     def _on_decide_policy(webview_obj, decision, decision_type):  # type: ignore[misc]
-        """Block navigations to off-portal domains."""
+        """Observe off-domain navigations; let them load.
+
+        Captive vendors (Meraki, Cisco ISE, UniFi, Aruba) POST the sign-in
+        form to a backend on a DIFFERENT host than the splash page — splash on
+        the AP's IP, grant POST to e.g. n143.network-auth.com. Refusing that
+        navigation cancels the form submit, so the user presses Continue and
+        nothing happens. Android hit exactly this and stopped refusing; the
+        desktop kept refusing, which is what this restores parity on.
+
+        The navigation is counted either way, so the audit log still records
+        every off-domain hop. Protection against a hostile gateway steering
+        the session somewhere else is certificate enforcement on the new host,
+        not refusing to go there — refusing only breaks the legitimate case,
+        since a hostile portal can redirect before we ever see a decision.
+        """
         try:
             NavigationType = WebKit.PolicyDecisionType
             if decision_type != NavigationType.NAVIGATION_ACTION:
@@ -105,12 +120,14 @@ def make_webview(
             nav = decision.get_navigation_action()
             req = nav.get_request()
             nav_url = req.get_uri()
-            nav_domain = urlparse(nav_url).netloc
-            if nav_domain and nav_domain != portal_domain:
-                logger.info("Blocking off-domain navigation to %s", nav_url)
+            nav_host = urlparse(nav_url).hostname or ""
+            if nav_host and not is_same_origin_host(nav_host, portal_domain):
+                logger.info(
+                    "Off-domain navigation to %s (portal host=%s) — allowing for captive flow",
+                    nav_url,
+                    portal_domain,
+                )
                 on_blocked_nav(nav_url)
-                decision.ignore()
-                return
         except Exception as exc:  # noqa: BLE001
             logger.warning("Policy decision error: %s", exc)
         decision.use()
