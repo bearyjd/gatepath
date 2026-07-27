@@ -73,16 +73,19 @@ jobs:
       - name: Install GTK4 + libadwaita runtime and a virtual display
         # gir1.2-gtk-4.0 / gir1.2-adw-1 are the typelibs the tests
         # require_version() against; xvfb because GTK4 needs a display to
-        # instantiate widgets, not merely the typelibs. The rest is what pip
-        # needs to build PyGObject.
+        # instantiate widgets, not merely the typelibs. gir1.2-webkit-6.0 is
+        # the API the Flatpak actually ships (org.gnome.Platform 49) — the
+        # docker e2e installs webkit2gtk4.1 and so exercises the OTHER branch,
+        # which is how a total WebView-construction failure on 6.0 went
+        # unnoticed (#118). The rest is what pip needs to build PyGObject.
         run: |
           sudo apt-get update
           sudo apt-get install -y \
-            gir1.2-gtk-4.0 gir1.2-adw-1 xvfb \
+            gir1.2-gtk-4.0 gir1.2-adw-1 gir1.2-webkit-6.0 xvfb \
             libgirepository1.0-dev libgirepository-2.0-dev libcairo2-dev \
             pkg-config python3-dev || \
           sudo apt-get install -y \
-            gir1.2-gtk-4.0 gir1.2-adw-1 xvfb \
+            gir1.2-gtk-4.0 gir1.2-adw-1 gir1.2-webkit-6.0 xvfb \
             libgirepository1.0-dev libcairo2-dev pkg-config python3-dev
       - name: Install test deps
         run: |
@@ -97,10 +100,12 @@ jobs:
           import gi
           gi.require_version('Gtk', '4.0')
           gi.require_version('Adw', '1')
-          from gi.repository import Adw, Gtk
+          gi.require_version('WebKit', '6.0')
+          from gi.repository import Adw, Gtk, WebKit
           assert Gtk.init_check(), 'GTK could not init even under xvfb'
           Adw.init()
-          print('GTK4 + libadwaita available; widgets are constructible')
+          assert hasattr(WebKit, 'NetworkSession'), 'WebKit 6.0 API missing'
+          print('GTK4 + libadwaita + WebKit 6.0 available; widgets are constructible')
           "
       - name: Construct the GTK widgets
         # -rs lists anything still skipped, so a silently-disabled test is
