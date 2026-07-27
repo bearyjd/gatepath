@@ -64,6 +64,14 @@ release has been cut yet**, so everything below is unreleased, heading toward
 - `nightly-fuzz` pinned to a known-good nightly after the always-latest nightly
   `rustc` hit an internal compiler error under cargo-fuzz's sanitizer flags. (#109)
 
+- **Desktop:** off-domain navigations were refused outright, which cancels the
+  cross-host sign-in POST that Meraki, Cisco ISE and UniFi portals rely on —
+  the user presses Continue and nothing happens. They are now observed and
+  counted but allowed to load, matching Android and the behaviour the shared
+  docs already described. Host matching is also subdomain-aware and no longer
+  compares ports, so a sub-host of the portal is no longer treated as
+  off-domain. (#115)
+
 ### Security
 
 - Confinement (netns on desktop, `VpnService` on Android) is the product's core
