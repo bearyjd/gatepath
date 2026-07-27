@@ -30,8 +30,8 @@ from urllib.parse import urlparse
 
 # Pure (stdlib-only) module — safe at top level, keeps the no-GTK import
 # contract above intact.
-from gatepath import portal_load_error
 from gatepath.portal_load_error import PortalLoadError
+from gatepath.ui.portal_error_panel import build_error_panel
 
 logger = logging.getLogger(__name__)
 
@@ -91,7 +91,7 @@ def run_window(portal_url: str) -> int:
 
         gi.require_version("Gtk", "4.0")
         gi.require_version("Adw", "1")
-        from gi.repository import Adw, GLib, Gtk  # noqa: PLC0415
+        from gi.repository import Adw, Gtk  # noqa: PLC0415
     except (ImportError, ValueError) as exc:
         logger.error("GTK/Adw unavailable: %s", exc)
         return 2
@@ -119,24 +119,12 @@ def run_window(portal_url: str) -> int:
     ui_state: dict = {"toolbar": None, "pending": None}
 
     def render_error(toolbar_view: object, err: PortalLoadError) -> None:
-        # Adw labels render Pango markup, and `host` comes off the network —
-        # escape it or a crafted hostname breaks (or injects into) the panel.
-        page = Adw.StatusPage(
-            icon_name="network-error-symbolic",
-            title=GLib.markup_escape_text(portal_load_error.title(err.kind)),
-            description=GLib.markup_escape_text(portal_load_error.body(err)),
-        )
-        if portal_load_error.is_retryable(err.kind):
-            retry = Gtk.Button(label="Try again")
-            retry.set_halign(Gtk.Align.CENTER)
+        def _retry() -> None:
+            ui_state["pending"] = None
+            toolbar_view.set_content(webview)  # type: ignore[attr-defined]
+            webview.load_uri(portal_url)  # type: ignore[attr-defined]
 
-            def _on_retry(_button: object) -> None:
-                ui_state["pending"] = None
-                toolbar_view.set_content(webview)  # type: ignore[attr-defined]
-                webview.load_uri(portal_url)  # type: ignore[attr-defined]
-
-            retry.connect("clicked", _on_retry)
-            page.set_child(retry)
+        page = build_error_panel(err, on_retry=_retry)
         toolbar_view.set_content(page)  # type: ignore[attr-defined]
 
     def on_load_error(err: PortalLoadError) -> None:
