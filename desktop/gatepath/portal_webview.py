@@ -67,13 +67,22 @@ def make_webview(
     # Dedicated ephemeral data directory per session.
     temp_dir = Path(tempfile.mkdtemp(prefix="gatepath-webkit-"))
 
-    try:
-        # WebKit 6.0 API
+    # Branch on the version we actually resolved above, NOT on catching
+    # AttributeError. The previous try/except conflated "this 6.0 call is
+    # wrong" with "we are on 4.1": under WebKit 6.0 the first branch raised
+    # AttributeError, fell into the 4.1 fallback, and that raised
+    # AttributeError too — so no WebView could be created at all on the very
+    # runtime the Flatpak ships (org.gnome.Platform 49 → WebKitGTK 6.0).
+    if _webkit_version == "6.0":
+        # 6.0 removed the webkit_web_view_new_with_* constructors; the session
+        # is a construct-time GObject property instead. Ephemeral means the
+        # session keeps nothing on disk at all, which is stronger than the
+        # temp-directory approach the 4.1 path has to use.
         network_session = WebKit.NetworkSession.new_ephemeral()
         data_manager = network_session.get_website_data_manager()
-        webview = WebKit.WebView.new_with_network_session(network_session)
-    except AttributeError:
-        # WebKit2 4.1 fallback
+        webview = WebKit.WebView(network_session=network_session)
+    else:
+        # WebKit2 4.1
         data_manager = WebKit.WebsiteDataManager(
             base_data_directory=str(temp_dir),
             base_cache_directory=str(temp_dir),
