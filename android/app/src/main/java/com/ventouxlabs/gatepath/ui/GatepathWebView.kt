@@ -4,9 +4,11 @@ import android.graphics.Bitmap
 import android.net.ConnectivityManager
 import android.net.Network
 import android.net.Uri
+import android.net.http.SslError
 import android.util.Log
 import android.webkit.ConsoleMessage
 import android.webkit.CookieManager
+import android.webkit.SslErrorHandler
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
@@ -50,8 +52,14 @@ private fun String.urlForLog(): String =
  * - Cookies and DOM storage ENABLED for the session (portals require them for
  *   sign-in), but session-scoped: wiped on dispose along with cache and history.
  * - No persistent cache (LOAD_NO_CACHE); file/content access disabled.
- * - Off-domain navigations refused and counted via [onBlockedNavigation].
- * - Tracker/analytics sub-requests blocked via [BlockedDomains] and counted via [onBlockedResource].
+ * - Off-domain navigations allowed (captive vendors POST sign-in forms
+ *   cross-host) but observed and counted via [onBlockedNavigation].
+ * - Tracker/analytics sub-requests observed and counted via [BlockedDomains] /
+ *   [onBlockedResource].
+ * - TLS certificate errors are proceeded past **on the portal host only**
+ *   (see [SslErrorPolicy] and `onReceivedSslError` below), since gateways'
+ *   local login pages routinely fail chain/hostname validation. Off-domain
+ *   hosts keep normal certificate enforcement.
  */
 @Composable
 fun GatepathWebView(
@@ -205,6 +213,34 @@ private fun buildWebViewClient(
             "onReceivedHttpError ${request.url.forLog()}: status=${errorResponse.statusCode} " +
                 "reason=${errorResponse.reasonPhrase} isMainFrame=${request.isForMainFrame}",
         )
+    }
+
+    // Captive-portal gateways routinely terminate their local login page with
+    // a self-signed cert, an expired cert, or a cert whose CN is the gateway's
+    // RFC1918 IP rather than a real hostname — none of which chain to a
+    // trusted root. The unoverridden WebViewClient default is
+    // handler.cancel(), which aborts the load with NO onReceivedError
+    // callback and no visible message: the WebView is just left blank. That
+    // silent-white-screen failure mode is what this override exists to close.
+    //
+    // The bypass is scoped to the portal host (and its subdomains) — see
+    // [SslErrorPolicy] for why proceeding unconditionally would be unsafe
+    // here: off-domain navigation is deliberately unblocked below, so a
+    // hostile gateway could otherwise steer the page to any host and MITM it
+    // with an untrusted cert.
+    override fun onReceivedSslError(
+        view: WebView,
+        handler: SslErrorHandler,
+        error: SslError,
+    ) {
+        val errorHost = runCatching { Uri.parse(error.url).host ?: "" }.getOrDefault("")
+        val proceed = SslErrorPolicy.shouldProceed(errorHost, portalHost)
+        Log.w(
+            TAG,
+            "onReceivedSslError ${error.url.urlForLog()}: primaryError=${error.primaryError} " +
+                "— ${if (proceed) "proceeding (portal host, cert errors expected)" else "cancelling (off-domain host=$errorHost, portal host=$portalHost)"}",
+        )
+        if (proceed) handler.proceed() else handler.cancel()
     }
 
     override fun shouldOverrideUrlLoading(

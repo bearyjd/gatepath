@@ -32,6 +32,23 @@ session**.
   the captive intercept redirects to; both are unreachable over HTTPS in
   practice. Application code that touches sensitive endpoints stays HTTPS at
   the call site; it does not fall back to cleartext silently.
+- TLS certificate errors are **proceeded past on the portal host (and its
+  subdomains) only** — `WebViewClient.onReceivedSslError` calls
+  `handler.proceed()` there and `handler.cancel()` for every other host, gated
+  by `SslErrorPolicy.shouldProceed` (unit-tested; fails closed when either host
+  can't be parsed). Gateway login pages routinely present self-signed certs,
+  expired certs, or certs whose CN is the gateway's RFC1918 IP — none of which
+  chain to a trusted root — and the unoverridden WebView default
+  (`handler.cancel()`) aborts the load with no visible error, silently
+  white-screening the portal instead of showing it.
+
+  The scope matters: because off-domain navigation is deliberately allowed
+  (bullet above), an unconditional `proceed()` would disable certificate
+  validation for **any** host the gateway redirects to, on precisely the
+  network where an on-path attacker is assumed. Restricting the bypass to the
+  portal host keeps the trust grant on the party the captive session already
+  has to trust — the gateway's own login page — and nothing else. Certificate
+  validation elsewhere in the app is unaffected.
 - Session is time-bounded: auto-closes after 10 minutes.
 - Every session is written to an append-only audit log
   (see [AUDIT_LOG_SCHEMA.md](AUDIT_LOG_SCHEMA.md)).
