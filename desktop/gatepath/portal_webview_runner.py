@@ -28,6 +28,11 @@ import sys
 from typing import Optional
 from urllib.parse import urlparse
 
+# Pure (stdlib-only) module — safe at top level, keeps the no-GTK import
+# contract above intact.
+from gatepath import portal_load_error
+from gatepath.portal_load_error import PortalLoadError
+
 logger = logging.getLogger(__name__)
 
 
@@ -86,7 +91,7 @@ def run_window(portal_url: str) -> int:
 
         gi.require_version("Gtk", "4.0")
         gi.require_version("Adw", "1")
-        from gi.repository import Adw, Gtk  # noqa: PLC0415
+        from gi.repository import Adw, GLib, Gtk  # noqa: PLC0415
     except (ImportError, ValueError) as exc:
         logger.error("GTK/Adw unavailable: %s", exc)
         return 2
@@ -107,11 +112,47 @@ def run_window(portal_url: str) -> int:
         blocked_count["resource"] += 1
         logger.info("blocked tracker resource: %s", url)
 
+    # The window doesn't exist yet when make_webview() is called, so a failure
+    # during the very first load has to be held until do_activate() builds the
+    # toolbar. Without this the earliest (and most likely) failure would be the
+    # one the user never sees.
+    ui_state: dict = {"toolbar": None, "pending": None}
+
+    def render_error(toolbar_view: object, err: PortalLoadError) -> None:
+        # Adw labels render Pango markup, and `host` comes off the network —
+        # escape it or a crafted hostname breaks (or injects into) the panel.
+        page = Adw.StatusPage(
+            icon_name="network-error-symbolic",
+            title=GLib.markup_escape_text(portal_load_error.title(err.kind)),
+            description=GLib.markup_escape_text(portal_load_error.body(err)),
+        )
+        if portal_load_error.is_retryable(err.kind):
+            retry = Gtk.Button(label="Try again")
+            retry.set_halign(Gtk.Align.CENTER)
+
+            def _on_retry(_button: object) -> None:
+                ui_state["pending"] = None
+                toolbar_view.set_content(webview)  # type: ignore[attr-defined]
+                webview.load_uri(portal_url)  # type: ignore[attr-defined]
+
+            retry.connect("clicked", _on_retry)
+            page.set_child(retry)
+        toolbar_view.set_content(page)  # type: ignore[attr-defined]
+
+    def on_load_error(err: PortalLoadError) -> None:
+        logger.warning("portal load error: %s (%s)", err.kind.value, err.technical_detail)
+        toolbar_view = ui_state["toolbar"]
+        if toolbar_view is None:
+            ui_state["pending"] = err
+            return
+        render_error(toolbar_view, err)
+
     try:
         webview = make_webview(
             initial_url=portal_url,
             on_blocked_nav=on_blocked_nav,
             on_blocked_resource=on_blocked_resource,
+            on_load_error=on_load_error,
         )
     except ImportError as exc:
         logger.error("WebKit unavailable: %s", exc)
@@ -130,6 +171,11 @@ def run_window(portal_url: str) -> int:
             toolbar = Adw.ToolbarView()
             toolbar.add_top_bar(Adw.HeaderBar())
             toolbar.set_content(webview)
+            ui_state["toolbar"] = toolbar
+            pending = ui_state["pending"]
+            if pending is not None:
+                # The first load already failed before this window existed.
+                render_error(toolbar, pending)
             window.set_content(toolbar)
             window.connect("close-request", self._on_close)
             window.present()

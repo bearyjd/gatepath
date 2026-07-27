@@ -71,6 +71,11 @@ release has been cut yet**, so everything below is unreleased, heading toward
   docs already described. Host matching is also subdomain-aware and no longer
   compares ports, so a sub-host of the portal is no longer treated as
   off-domain. (#115)
+- **Desktop:** a failed captive-portal load fell through to WebKit's generic
+  browser error page, with no captive-portal context, no retry, and no route
+  into the diagnostics battery. The portal window now explains the failure in
+  Gatepath's own terms and offers a retry where one makes sense. Loads that
+  WebKit itself cancels are correctly not reported as failures. (#114)
 
 ### Security
 

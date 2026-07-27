@@ -15,6 +15,11 @@ from typing import Callable, Optional
 from urllib.parse import urlparse
 
 from gatepath.blocked_domains import is_blocked
+from gatepath.portal_load_error import (
+    PortalLoadError,
+    classify,
+    is_deliberate_cancel,
+)
 from gatepath.webview_host_matching import is_same_origin_host
 
 logger = logging.getLogger(__name__)
@@ -30,6 +35,7 @@ def make_webview(
     initial_url: str,
     on_blocked_nav: Callable[[str], None],
     on_blocked_resource: Callable[[str], None],
+    on_load_error: Optional[Callable[[PortalLoadError], None]] = None,
 ) -> object:
     """Create and return a configured WebKitWebView.
 
@@ -45,6 +51,9 @@ def make_webview(
             is refused.
         on_blocked_resource: Called with the blocked URL when a sub-resource
             from a tracked domain is blocked.
+        on_load_error: Called when a page load fails for a reason the user
+            should see. When omitted, WebKit's own generic error page is left
+            in place, which is the pre-existing behaviour.
     """
     try:
         import gi  # noqa: PLC0415
@@ -152,8 +161,48 @@ def make_webview(
         except Exception as exc:  # noqa: BLE001
             logger.warning("Resource load check error: %s", exc)
 
+    def _on_load_failed(webview_obj, load_event, failing_uri, error):  # type: ignore[misc]
+        """Surface a load failure instead of leaving WebKit's generic page.
+
+        Returns True only when we've handed the caller something to render;
+        returning False lets WebKit fall back to its own error page, which is
+        what happens when no on_load_error was supplied.
+        """
+        domain = str(getattr(error, "domain", "") or "")
+        try:
+            code = int(getattr(error, "code", 0) or 0)
+        except (TypeError, ValueError):
+            code = 0
+
+        if is_deliberate_cancel(domain, code):
+            # We stopped this load ourselves (off-domain policy refusal).
+            # Reporting it as a failure would blame the network for our own
+            # decision.
+            logger.debug("Load cancelled by policy: %s (%s:%d)", failing_uri, domain, code)
+            return False
+
+        logger.warning(
+            "Portal load failed: %s (%s:%d) %s",
+            urlparse(failing_uri).hostname or "(no host)",
+            domain,
+            code,
+            getattr(error, "message", ""),
+        )
+        if on_load_error is None:
+            return False
+
+        on_load_error(
+            PortalLoadError(
+                kind=classify(domain, code),
+                host=urlparse(failing_uri).hostname or "",
+                technical_detail=f"{domain}:{code} {getattr(error, 'message', '')}".strip(),
+            )
+        )
+        return True
+
     webview.connect("decide-policy", _on_decide_policy)
     webview.connect("resource-load-started", _on_resource_load)
+    webview.connect("load-failed", _on_load_failed)
 
     # Load the initial portal URL.
     webview.load_uri(initial_url)
