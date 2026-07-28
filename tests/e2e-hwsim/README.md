@@ -186,6 +186,22 @@ box this harness is validated on).
 It is **`workflow_dispatch` only** — it runs privileged repo code as root on your
 box, so it is deliberately not auto-triggered by PRs.
 
+**If a dispatch fails inside `actions/checkout` with `EACCES ... unlink`:**
+
+The workspace has root-owned files from a harness run that predates the
+`PYTHONDONTWRITEBYTECODE=1` export in `run.sh`. `run.sh` executes as root with
+the checkout as cwd, so CPython used to leave `__pycache__/*.pyc` owned by root
+inside it; the unprivileged runner then cannot clean the workspace and the job
+dies before any step executes. This is not self-healing — a cleanup step cannot
+run before `actions/checkout`, which is the step that fails — so clear it once
+by hand on the runner box:
+
+```bash
+sudo rm -rf ~/actions-runner/_work/gatepath
+```
+
+The next dispatch re-clones. Runs from the fix onward don't recreate it.
+
 **Set up the runner (one-time):**
 1. On GitHub: repo → **Settings → Actions → Runners → New self-hosted runner**;
    follow the install steps on the target box.
