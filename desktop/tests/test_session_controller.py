@@ -214,3 +214,46 @@ class TestSetActiveValidation:
         controller = SessionController(scheduler=sched)
         with pytest.raises(ValueError, match="phase=ACTIVE"):
             controller.set_active(PortalSession())  # IDLE
+
+
+class TestApplyObservations:
+    """The subprocess counts must survive the trip into the audit entry (#123)."""
+
+    def test_observations_reach_the_written_audit_entry(self, tmp_path: Path) -> None:
+        from gatepath.audit_log import read_all
+        from gatepath.portal_observations import PortalObservations
+
+        controller, _sched, log = _make_controller(tmp_path)
+        controller.set_active(_make_active_session())
+
+        controller.apply_observations(
+            PortalObservations(
+                off_domain_navigations=4,
+                tracker_resources=9,
+                tls_cert_errors_bypassed=1,
+            )
+        )
+        controller.close(CloseReason.PORTAL_COMPLETED)
+
+        entry = read_all(log_path=log)[0]
+        assert entry["blocked_navigation_attempts"] == 4
+        assert entry["blocked_resource_requests"] == 9
+        assert entry["tls_cert_errors_bypassed"] == 1
+
+    def test_observations_replace_rather_than_add(self, tmp_path: Path) -> None:
+        """They are session totals, not deltas — applying twice is not cumulative."""
+        from gatepath.portal_observations import PortalObservations
+
+        controller, _sched, _log = _make_controller(tmp_path)
+        controller.set_active(_make_active_session())
+        controller.apply_observations(PortalObservations(tracker_resources=3))
+        controller.apply_observations(PortalObservations(tracker_resources=5))
+        assert controller.session.blocked_resource_requests == 5
+
+    def test_apply_without_an_active_session_is_a_no_op(self, tmp_path: Path) -> None:
+        from gatepath.portal_observations import PortalObservations
+
+        controller, _sched, _log = _make_controller(tmp_path)
+        controller.apply_observations(PortalObservations(tls_cert_errors_bypassed=1))
+        assert controller.session is None
+

@@ -21,6 +21,7 @@ from gatepath.diag.engine import DiagnosisResult
 from gatepath.diag.report import Cause
 from gatepath.diagnosis_runner import run_diagnostics_async
 from gatepath.portal_monitor import CaptiveInterfaceLookup
+from gatepath.portal_observations import collect_observations
 from gatepath.portal_session import CloseReason, PortalPhase, PortalSession
 from gatepath.session_controller import SessionController
 from gatepath.ui.diagnosis_panel import DiagnosisPanel
@@ -378,6 +379,9 @@ try:
             logger.info(
                 "helper engaged: pid=%d netns=%s", result.pid, result.netns_path
             )
+            # Remember the PID so we can collect what the WebView observed
+            # once it exits — the counts live in that process (#123).
+            self._portal_pid = result.pid
             self._controller.set_active(active_session)
             self.set_visible(False)
             threading.Thread(
@@ -403,10 +407,38 @@ try:
             """
             logger.info("portal subprocess exited (close_reason=%s)", close_reason)
             assert self._isolation is not None
+            self._collect_portal_observations()
             self._controller.close(close_reason)
             self._isolation.disengage()
             self.set_visible(True)
             return False
+
+        def _collect_portal_observations(self) -> None:
+            """Fold the exited subprocess's counts into the session.
+
+            Must run BEFORE close(), which writes the audit entry. Failure here
+            is survivable — the counters stay 0, exactly as they were before
+            this channel existed — so it never blocks the close path.
+            """
+            pid = getattr(self, "_portal_pid", None)
+            if pid is None:
+                return
+            observations = collect_observations(
+                os.environ.get("XDG_RUNTIME_DIR"), pid
+            )
+            if observations is None:
+                logger.info("no portal observations for pid=%s; counters stay 0", pid)
+            else:
+                logger.info(
+                    "portal observations pid=%s: off-domain nav=%d, trackers=%d, "
+                    "tls bypasses=%d",
+                    pid,
+                    observations.off_domain_navigations,
+                    observations.tracker_resources,
+                    observations.tls_cert_errors_bypassed,
+                )
+                self._controller.apply_observations(observations)
+            self._portal_pid = None
 
         def dismiss_session(self) -> None:
             """User-facing dismiss: route through controller (cancels timer + writes audit)."""

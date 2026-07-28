@@ -92,6 +92,10 @@ class PortalSession:
     # Counters (incremented during ACTIVE via replace).
     blocked_navigation_attempts: int = 0
     blocked_resource_requests: int = 0
+    # Certificate errors proceeded past on the portal host. A TRUST GRANT, not
+    # an observation: a non-zero value means the session rendered a page whose
+    # certificate did not validate.
+    tls_cert_errors_bypassed: int = 0
 
     @property
     def duration_seconds(self) -> Optional[int]:
@@ -153,6 +157,7 @@ def to_completed(
     reason: CloseReason,
     blocked_nav: int,
     blocked_resources: int,
+    tls_cert_errors_bypassed: int = 0,
 ) -> Optional[PortalSession]:
     """Advance ACTIVE -> COMPLETED or ACTIVE -> ERROR, recording close metadata."""
     target = (
@@ -169,6 +174,7 @@ def to_completed(
         session_closed_utc=_utcnow(),
         blocked_navigation_attempts=blocked_nav,
         blocked_resource_requests=blocked_resources,
+        tls_cert_errors_bypassed=tls_cert_errors_bypassed,
     )
 
 

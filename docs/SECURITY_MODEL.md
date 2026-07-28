@@ -80,12 +80,18 @@ Both fail closed: if either host cannot be parsed, the certificate is enforced,
 never bypassed. A refused certificate is surfaced to the user as a warning
 rather than a blank page.
 
-**Audit-recording asymmetry.** Android records each bypass in
-`tls_cert_errors_bypassed`. Desktop cannot yet: the portal WebView runs in a
-subprocess spawned by the netns helper and no channel carries its counters back
-to the audit writer, so a desktop bypass appears only in the runner's log. The
-same gap zeroes `blocked_navigation_attempts` and `blocked_resource_requests` on
-desktop. This is a known limitation, not a claim that desktop grants no trust.
+**Audit recording.** Both platforms record each bypass in
+`tls_cert_errors_bypassed`. Android counts it in-process. On desktop the portal
+WebView runs in a subprocess spawned by the netns helper, so its counters travel
+back through a PID-keyed file under `XDG_RUNTIME_DIR` (`portal_observations`),
+which the app folds into the session immediately before writing the audit entry.
+That directory is `0700` and user-owned, and the helper derives it from the
+authenticated caller UID rather than accepting it from the client; if it is
+absent, Gatepath declines to write the file rather than falling back to a
+world-writable location where the counts could be forged. A missing or
+unreadable file leaves the counters at 0 — losing a count must not cost the
+session record. The same channel carries `blocked_navigation_attempts` and
+`blocked_resource_requests`, which were previously always 0 on desktop.
 
 ## What Gatepath itself sends
 
