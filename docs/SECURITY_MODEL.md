@@ -59,6 +59,34 @@ session**.
 - Every session is written to an append-only audit log
   (see [AUDIT_LOG_SCHEMA.md](AUDIT_LOG_SCHEMA.md)).
 
+### Certificate errors during the captive session (both platforms)
+
+TLS certificate errors are **proceeded past on the portal host (and its
+subdomains) only**; every other host keeps normal enforcement. Gateway login
+pages routinely present self-signed certificates, expired certificates, or
+certificates whose CN is the gateway's RFC1918 IP, and refusing those makes the
+portal unusable — but the WebView is not confined to the portal host, since
+off-domain navigation is deliberately allowed for captive-vendor compatibility.
+An unconditional bypass would therefore disable certificate validation for
+anywhere the gateway chooses to send the session, on precisely the network
+where an on-path attacker is assumed.
+
+- **Android** — `WebViewClient.onReceivedSslError` gated by `SslErrorPolicy`.
+- **Desktop** — `load-failed-with-tls-errors` gated by `ssl_error_policy`; the
+  grant is made with `allow_tls_certificate_for_host`, so it is scoped to that
+  host and lasts only for the ephemeral session.
+
+Both fail closed: if either host cannot be parsed, the certificate is enforced,
+never bypassed. A refused certificate is surfaced to the user as a warning
+rather than a blank page.
+
+**Audit-recording asymmetry.** Android records each bypass in
+`tls_cert_errors_bypassed`. Desktop cannot yet: the portal WebView runs in a
+subprocess spawned by the netns helper and no channel carries its counters back
+to the audit writer, so a desktop bypass appears only in the runner's log. The
+same gap zeroes `blocked_navigation_attempts` and `blocked_resource_requests` on
+desktop. This is a known limitation, not a claim that desktop grants no trust.
+
 ## What Gatepath itself sends
 
 Everything above describes traffic Gatepath *prevents*. This section is the converse:

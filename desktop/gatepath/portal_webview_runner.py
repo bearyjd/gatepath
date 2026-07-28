@@ -102,7 +102,7 @@ def run_window(portal_url: str) -> int:
         logger.error("portal_webview unavailable: %s", exc)
         return 2
 
-    blocked_count = {"nav": 0, "resource": 0}
+    blocked_count = {"nav": 0, "resource": 0, "tls_bypass": 0}
 
     def on_blocked_nav(url: str) -> None:
         blocked_count["nav"] += 1
@@ -111,6 +111,13 @@ def run_window(portal_url: str) -> int:
     def on_blocked_resource(url: str) -> None:
         blocked_count["resource"] += 1
         logger.info("blocked tracker resource: %s", url)
+
+    def on_tls_cert_bypassed(host: str) -> None:
+        # A trust grant, not an observation: the session is about to render a
+        # page whose certificate did not validate. Logged at warning level so
+        # it stands out in a support bundle.
+        blocked_count["tls_bypass"] += 1
+        logger.warning("TLS certificate error bypassed for portal host %s", host)
 
     # The window doesn't exist yet when make_webview() is called, so a failure
     # during the very first load has to be held until do_activate() builds the
@@ -141,6 +148,7 @@ def run_window(portal_url: str) -> int:
             on_blocked_nav=on_blocked_nav,
             on_blocked_resource=on_blocked_resource,
             on_load_error=on_load_error,
+            on_tls_cert_bypassed=on_tls_cert_bypassed,
         )
     except ImportError as exc:
         logger.error("WebKit unavailable: %s", exc)
@@ -178,10 +186,12 @@ def run_window(portal_url: str) -> int:
         logger.error("GTK app exited with rc=%d", rc)
         exit_code_holder["code"] = 1
     logger.info(
-        "runner exiting code=%d (blocked nav=%d, resources=%d)",
+        "runner exiting code=%d (off-domain nav=%d, tracker resources=%d, "
+        "tls cert bypasses=%d)",
         exit_code_holder["code"],
         blocked_count["nav"],
         blocked_count["resource"],
+        blocked_count["tls_bypass"],
     )
     return exit_code_holder["code"]
 

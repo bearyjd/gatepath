@@ -87,6 +87,13 @@ release has been cut yet**, so everything below is unreleased, heading toward
   Gatepath's own terms and offers a retry where one makes sense. Loads that
   WebKit itself cancels are correctly not reported as failures. (#114)
 
+- **Desktop:** captive portals served over HTTPS with a self-signed, expired or
+  IP-CN certificate could not be signed into at all — WebKitGTK's default policy
+  fails the load and nothing handled `load-failed-with-tls-errors`. The portal
+  host's certificate errors are now proceeded past, scoped to that host and its
+  subdomains; every other host keeps normal enforcement and a refusal is shown
+  as a warning rather than a blank page. (#114)
+
 ### Security
 
 - Confinement (netns on desktop, `VpnService` on Android) is the product's core
