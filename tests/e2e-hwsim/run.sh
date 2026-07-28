@@ -55,6 +55,19 @@ case "$DHCP_MODE" in
   *) die "--dhcp must be 'static' or 'real', got '$DHCP_MODE'" ;;
 esac
 
+# This whole script runs as root, and several steps invoke python3 with the
+# repo checkout as cwd (mockportal, drive.py). Without this, CPython writes
+# __pycache__/*.pyc owned by root INTO THE CHECKOUT. On a self-hosted runner
+# that workspace is reused, so the next actions/checkout cannot delete them and
+# the job dies before it starts:
+#
+#   EACCES: permission denied, unlink '.../mockportal/__pycache__/*.pyc'
+#
+# That is not hypothetical — root-owned .pyc from the 2026-06-30 run blocked
+# every subsequent dispatch of this workflow. Bytecode caching buys nothing for
+# a one-shot harness, so turn it off rather than clean up after it.
+export PYTHONDONTWRITEBYTECODE=1
+
 # ── Run state (consumed by cleanup) ──────────────────────────────────────
 WORKDIR=""
 LOADED_HWSIM=0          # did WE modprobe it? only then do we unload
