@@ -238,13 +238,23 @@ class TestSchemaConformance:
     def test_tls_cert_errors_bypassed_is_always_zero_on_desktop(
         self, tmp_path: Path
     ) -> None:
-        """Pins the documented desktop semantic.
+        """Pins the documented desktop semantic — for a reason that CHANGED.
 
-        The desktop WebKitGTK view never connects `load-failed-with-tls-errors`,
-        so it cannot bypass a certificate error and the count is structurally 0.
-        If desktop ever grows a TLS-error handler, this test should fail and be
-        replaced by real counting — the field must not silently stay 0 while the
-        app actually bypasses certs.
+        This used to hold because desktop had no TLS-error handler at all. It
+        now does: the WebView proceeds past certificate errors on the portal
+        host, host-scoped, same rule as Android.
+
+        The field stays 0 because the count cannot get here. The portal WebView
+        runs in a separate subprocess (`portal_webview_runner`, spawned by the
+        netns helper) and no channel carries its counters back to the audit
+        writer. The same gap makes `blocked_navigation_attempts` and
+        `blocked_resource_requests` always 0 —
+        `session_controller.record_blocked_*` is called only by tests.
+
+        So this assertion no longer means "desktop grants no trust". It means
+        "desktop's audit log cannot yet record the trust it grants", which is a
+        weaker and less comfortable claim. When the subprocess->audit channel
+        lands, this test should fail and be replaced by real counting.
         """
         log = tmp_path / "audit.jsonl"
         write_session(_make_completed_session(), log_path=log)

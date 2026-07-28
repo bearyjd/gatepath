@@ -43,8 +43,13 @@
     "blocked_resource_requests": "int",
     "tls_cert_errors_bypassed": "int"
   },
-  "portal_domain_may_be_empty_when_close_reason_is": ["aborted_pre_active"],
-  "platform_enum": ["android", "desktop"],
+  "portal_domain_may_be_empty_when_close_reason_is": [
+    "aborted_pre_active"
+  ],
+  "platform_enum": [
+    "android",
+    "desktop"
+  ],
   "close_reason_enum": [
     "portal_completed",
     "user_dismissed",
@@ -55,15 +60,15 @@
   "platform_specific_semantics": {
     "blocked_resource_requests": {
       "android": "Count of resource sub-requests that matched a tracker domain. Observed via WebViewClient.shouldInterceptRequest; counted, allowed to load. Field name retained for schema-version compatibility. See SECURITY_MODEL.md.",
-      "desktop": "Count of resource sub-requests that matched a tracker domain. Observed via WebKitGTK's resource-load-started signal; counted, allowed to load. Field name retained for schema-version compatibility. See SECURITY_MODEL.md."
+      "desktop": "Count of resource sub-requests that matched a tracker domain. Observed via WebKitGTK's resource-load-started signal; counted, allowed to load. Field name retained for schema-version compatibility. See SECURITY_MODEL.md. KNOWN GAP: always 0 in practice — the counters live in the portal_webview_runner subprocess and never reach the audit writer (session_controller.record_blocked_* is called only by tests)."
     },
     "blocked_navigation_attempts": {
       "android": "Count of off-domain navigations the WebView observed (not in the portal host's same-origin set). Counted, allowed to load. Field name retained for schema-version compatibility. See SECURITY_MODEL.md.",
-      "desktop": "Count of off-domain navigations the WebView observed. Counted, allowed to load. Field name retained for schema-version compatibility. See SECURITY_MODEL.md."
+      "desktop": "Count of off-domain navigations the WebView observed. Counted, allowed to load. Field name retained for schema-version compatibility. See SECURITY_MODEL.md. KNOWN GAP: always 0 in practice — the counters live in the portal_webview_runner subprocess and never reach the audit writer (session_controller.record_blocked_* is called only by tests)."
     },
     "tls_cert_errors_bypassed": {
       "android": "Count of TLS certificate errors the WebView was told to proceed past (WebViewClient.onReceivedSslError -> handler.proceed()). Only ever incremented for the portal host and its subdomains; cert errors on any other host are cancelled and NOT counted here. A non-zero value means the session rendered a page whose certificate did not validate. See SECURITY_MODEL.md.",
-      "desktop": "Always 0. The desktop WebKitGTK view does not handle load-failed-with-tls-errors at all, so it neither bypasses nor counts certificate errors — WebKit's default policy fails the load. The field is emitted as 0 for schema parity, not because a bypass was declined."
+      "desktop": "Always 0 — but NOT because no bypass happens. As of the desktop TLS scoping work the WebView does proceed past certificate errors on the portal host (host-scoped, same rule as Android). The count cannot reach this field: the portal WebView runs in a separate subprocess (portal_webview_runner, spawned by the netns helper) and no channel carries its counters back to the audit writer. The same gap makes blocked_navigation_attempts and blocked_resource_requests always 0 on desktop — session_controller.record_blocked_* is never called in production. Until that channel exists, a desktop bypass is recorded only in the runner's log, not here."
     }
   }
 }

@@ -17,9 +17,11 @@ from urllib.parse import urlparse
 from gatepath.blocked_domains import is_blocked
 from gatepath.portal_load_error import (
     PortalLoadError,
+    PortalLoadErrorKind,
     classify,
     is_deliberate_cancel,
 )
+from gatepath.ssl_error_policy import should_proceed
 from gatepath.webview_host_matching import is_same_origin_host
 
 logger = logging.getLogger(__name__)
@@ -36,6 +38,7 @@ def make_webview(
     on_blocked_nav: Callable[[str], None],
     on_blocked_resource: Callable[[str], None],
     on_load_error: Optional[Callable[[PortalLoadError], None]] = None,
+    on_tls_cert_bypassed: Optional[Callable[[str], None]] = None,
 ) -> object:
     """Create and return a configured WebKitWebView.
 
@@ -54,6 +57,10 @@ def make_webview(
         on_load_error: Called when a page load fails for a reason the user
             should see. When omitted, WebKit's own generic error page is left
             in place, which is the pre-existing behaviour.
+        on_tls_cert_bypassed: Called with the host when a certificate error is
+            proceeded past on the portal host. This is a TRUST GRANT — the
+            session renders a page whose certificate did not validate — so it
+            is reported separately from ordinary load failures.
     """
     try:
         import gi  # noqa: PLC0415
@@ -71,6 +78,8 @@ def make_webview(
         raise ImportError(
             f"WebKitGTK is required for portal_webview.make_webview(): {exc}"
         ) from exc
+
+    from gi.repository import GLib  # noqa: PLC0415
 
     portal_domain = urlparse(initial_url).hostname or ""
 
@@ -91,6 +100,7 @@ def make_webview(
         network_session = WebKit.NetworkSession.new_ephemeral()
         data_manager = network_session.get_website_data_manager()
         webview = WebKit.WebView(network_session=network_session)
+        tls_exception_target = network_session
     else:
         # WebKit2 4.1
         data_manager = WebKit.WebsiteDataManager(
@@ -99,6 +109,7 @@ def make_webview(
         )
         ctx = WebKit.WebContext.new_with_website_data_manager(data_manager)
         webview = WebKit.WebView.new_with_context(ctx)
+        tls_exception_target = ctx
 
     # Harden WebView settings.
     settings = webview.get_settings()
@@ -200,9 +211,69 @@ def make_webview(
         )
         return True
 
+    # Hosts we've already granted a certificate exception for. Without this a
+    # grant that fails to take effect would re-drive the same load forever.
+    tls_allowed_hosts: set[str] = set()
+
+    def _on_tls_errors(webview_obj, failing_uri, certificate, errors):  # type: ignore[misc]
+        """Decide whether to trust a certificate the gateway presented.
+
+        Scoped by `should_proceed`: the portal host and its subdomains only.
+        Off-domain hosts keep normal enforcement — off-domain navigation is
+        allowed here, so an unconditional bypass would disable certificate
+        validation for anywhere the gateway chooses to send us.
+
+        Returns True in both branches: on bypass we re-drive the load
+        ourselves, and on refusal we render our own panel, so WebKit's generic
+        error page is unwanted either way.
+        """
+        host = urlparse(failing_uri).hostname or ""
+
+        if not should_proceed(host, portal_domain):
+            logger.warning(
+                "TLS error on off-domain host %s (portal host=%s) — refusing: %s",
+                host or "(unparseable)",
+                portal_domain,
+                errors,
+            )
+            if on_load_error is not None:
+                on_load_error(
+                    PortalLoadError(
+                        kind=PortalLoadErrorKind.CERT_REJECTED,
+                        host=host,
+                        technical_detail=f"tls_errors={errors}",
+                    )
+                )
+            return True
+
+        if host in tls_allowed_hosts:
+            # Already granted and still failing — stop rather than loop.
+            logger.error("TLS error persists for %s after granting an exception", host)
+            return False
+
+        try:
+            tls_exception_target.allow_tls_certificate_for_host(certificate, host)
+        except Exception as exc:  # noqa: BLE001 - never abort the portal flow
+            logger.warning("could not grant certificate exception for %s: %s", host, exc)
+            return False
+
+        tls_allowed_hosts.add(host)
+        logger.warning(
+            "proceeding past TLS error on portal host %s (%s) — captive gateways "
+            "routinely present certificates that cannot chain",
+            host,
+            errors,
+        )
+        if on_tls_cert_bypassed is not None:
+            on_tls_cert_bypassed(host)
+        # The failed load is finished; re-drive it now the exception is in place.
+        GLib.idle_add(lambda: (webview_obj.load_uri(failing_uri), False)[1])
+        return True
+
     webview.connect("decide-policy", _on_decide_policy)
     webview.connect("resource-load-started", _on_resource_load)
     webview.connect("load-failed", _on_load_failed)
+    webview.connect("load-failed-with-tls-errors", _on_tls_errors)
 
     # Load the initial portal URL.
     webview.load_uri(initial_url)
