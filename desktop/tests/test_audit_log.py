@@ -235,27 +235,29 @@ class TestSchemaConformance:
         missing = _OPTIONAL_FIELDS - set(entry.keys())
         assert not missing, f"Writer omitted optional keys: {missing}"
 
-    def test_tls_cert_errors_bypassed_is_always_zero_on_desktop(
+    def test_tls_cert_errors_bypassed_reflects_the_session(self, tmp_path: Path) -> None:
+        """The desktop count is real now — #123 gave it a way here.
+
+        This replaces an assertion that the field is ALWAYS 0. That held while
+        the portal subprocess's counters died with it; the observation channel
+        folds them into the session before the entry is written, so a bypass
+        that happened is a bypass that is recorded. A cert bypass is a trust
+        grant, and silently logging 0 for one was the worst version of this.
+        """
+        import dataclasses
+
+        log = tmp_path / "audit.jsonl"
+        session = dataclasses.replace(
+            _make_completed_session(), tls_cert_errors_bypassed=2
+        )
+        write_session(session, log_path=log)
+        entry = read_all(log_path=log)[0]
+        assert entry["tls_cert_errors_bypassed"] == 2
+
+    def test_counters_default_to_zero_when_observations_are_missing(
         self, tmp_path: Path
     ) -> None:
-        """Pins the documented desktop semantic — for a reason that CHANGED.
-
-        This used to hold because desktop had no TLS-error handler at all. It
-        now does: the WebView proceeds past certificate errors on the portal
-        host, host-scoped, same rule as Android.
-
-        The field stays 0 because the count cannot get here. The portal WebView
-        runs in a separate subprocess (`portal_webview_runner`, spawned by the
-        netns helper) and no channel carries its counters back to the audit
-        writer. The same gap makes `blocked_navigation_attempts` and
-        `blocked_resource_requests` always 0 —
-        `session_controller.record_blocked_*` is called only by tests.
-
-        So this assertion no longer means "desktop grants no trust". It means
-        "desktop's audit log cannot yet record the trust it grants", which is a
-        weaker and less comfortable claim. When the subprocess->audit channel
-        lands, this test should fail and be replaced by real counting.
-        """
+        """A lost observation file must cost the counts, not the session record."""
         log = tmp_path / "audit.jsonl"
         write_session(_make_completed_session(), log_path=log)
         entry = read_all(log_path=log)[0]

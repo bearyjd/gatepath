@@ -24,6 +24,7 @@ Invocation contract: ``portal-webview-runner <portal_url>``.
 from __future__ import annotations
 
 import logging
+import os
 import sys
 from typing import Optional
 from urllib.parse import urlparse
@@ -31,6 +32,11 @@ from urllib.parse import urlparse
 # Pure (stdlib-only) module — safe at top level, keeps the no-GTK import
 # contract above intact.
 from gatepath.portal_load_error import PortalLoadError
+from gatepath.portal_observations import (
+    PortalObservations,
+    observations_path,
+    write_observations,
+)
 from gatepath.ui.portal_error_panel import build_error_panel
 
 logger = logging.getLogger(__name__)
@@ -192,6 +198,16 @@ def run_window(portal_url: str) -> int:
         blocked_count["nav"],
         blocked_count["resource"],
         blocked_count["tls_bypass"],
+    )
+    # Hand the counts to the app so they reach the audit log — without this
+    # they die with this process and every counter is written as 0 (#123).
+    write_observations(
+        observations_path(os.environ.get("XDG_RUNTIME_DIR"), os.getpid()),
+        PortalObservations(
+            off_domain_navigations=blocked_count["nav"],
+            tracker_resources=blocked_count["resource"],
+            tls_cert_errors_bypassed=blocked_count["tls_bypass"],
+        ),
     )
     return exit_code_holder["code"]
 

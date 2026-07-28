@@ -92,13 +92,12 @@ def write_session(
         "duration_seconds": session.duration_seconds if session.duration_seconds is not None else 0,
         "blocked_navigation_attempts": session.blocked_navigation_attempts,
         "blocked_resource_requests": session.blocked_resource_requests,
-        # Always 0 on desktop: portal_webview.py does not connect
-        # WebKitGTK's `load-failed-with-tls-errors`, so the desktop never
-        # bypasses a certificate error and has nothing to count. Emitted for
-        # schema parity with Android — see `platform_specific_semantics` in
-        # docs/audit_log_schema.json. If desktop ever gains a TLS-error
-        # handler, this must start reflecting real bypasses.
-        "tls_cert_errors_bypassed": 0,
+        # Real count as of the observation channel (#123): the portal WebView
+        # runs in a subprocess and its counters are folded into the session via
+        # SessionController.apply_observations before this entry is written.
+        # Still 0 when that file is missing or unreadable — a lost count must
+        # not cost us the whole session record.
+        "tls_cert_errors_bypassed": session.tls_cert_errors_bypassed,
     }
 
     line = json.dumps(entry, ensure_ascii=False) + "\n"

@@ -94,6 +94,14 @@ release has been cut yet**, so everything below is unreleased, heading toward
   subdomains; every other host keeps normal enforcement and a refusal is shown
   as a warning rather than a blank page. (#114)
 
+- **Desktop:** the audit log's counters were always `0`. The portal WebView runs
+  in a subprocess and its observation counts died with it —
+  `blocked_navigation_attempts` and `blocked_resource_requests` were never
+  populated despite the schema documenting them as real counts, and neither was
+  the new `tls_cert_errors_bypassed`. Counts now travel back through a PID-keyed
+  file under `XDG_RUNTIME_DIR` and are folded into the session before the entry
+  is written. (#123)
+
 ### Security
 
 - Confinement (netns on desktop, `VpnService` on Android) is the product's core

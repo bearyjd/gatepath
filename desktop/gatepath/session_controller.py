@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from gatepath.audit_log import write_session
+from gatepath.portal_observations import PortalObservations
 from gatepath.portal_session import (
     CloseReason,
     PortalPhase,
@@ -100,6 +101,7 @@ class SessionController:
             reason=reason,
             blocked_nav=current.blocked_navigation_attempts,
             blocked_resources=current.blocked_resource_requests,
+            tls_cert_errors_bypassed=current.tls_cert_errors_bypassed,
         )
         if completed is None:
             logger.warning(
@@ -132,6 +134,25 @@ class SessionController:
 
     def on_portal_completed(self) -> Optional[PortalSession]:
         return self.close(CloseReason.PORTAL_COMPLETED)
+
+    def apply_observations(self, observations: "PortalObservations") -> None:
+        """Fold the portal subprocess's counts into the Active session.
+
+        Called once, just before close(), with what the WebView actually
+        observed. Replaces rather than increments: these are totals for the
+        whole session, not deltas, and the in-app record_* counters are not
+        used on the subprocess path.
+        """
+        current = self._session
+        if current is None or current.phase != PortalPhase.ACTIVE:
+            logger.debug("apply_observations with no Active session; ignoring")
+            return
+        self._session = dataclasses.replace(
+            current,
+            blocked_navigation_attempts=observations.off_domain_navigations,
+            blocked_resource_requests=observations.tracker_resources,
+            tls_cert_errors_bypassed=observations.tls_cert_errors_bypassed,
+        )
 
     def record_blocked_navigation(self) -> None:
         """Increment the blocked-nav counter on the Active session."""
