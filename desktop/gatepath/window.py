@@ -21,10 +21,12 @@ from gatepath.diag.engine import DiagnosisResult
 from gatepath.diag.report import Cause
 from gatepath.diagnosis_runner import run_diagnostics_async
 from gatepath.portal_monitor import CaptiveInterfaceLookup
+from gatepath.portal_load_error import PortalLoadError
 from gatepath.portal_observations import collect_observations
 from gatepath.portal_session import CloseReason, PortalPhase, PortalSession
 from gatepath.session_controller import SessionController
 from gatepath.ui.diagnosis_panel import DiagnosisPanel
+from gatepath.ui.portal_error_panel import build_error_panel
 
 logger = logging.getLogger(__name__)
 
@@ -221,6 +223,8 @@ try:
             self._content_box = content_box
 
             toolbar_view.set_content(content_box)
+            # Retained so the portal view can hand the window back on close.
+            self._monitoring_content = toolbar_view
             self.set_content(toolbar_view)
 
         def _ensure_diagnosis_panel(self) -> DiagnosisPanel:
@@ -330,7 +334,13 @@ try:
             logger.info("Opening portal: %s", portal_url)
             if self._try_open_portal_isolated(portal_url, active_session):
                 return
+            # Unconfined in-process fallback. SECURITY_MODEL.md specifies this
+            # for deployments without helper access — notably the Flatpak,
+            # whose sandbox cannot reach the helper's system-bus name — and
+            # accepts that WebKitGTK traffic is not route-confined there. The
+            # VPN warning shown before this point is the documented mitigation.
             self._controller.set_active(active_session)
+            self._open_portal_in_process(portal_url)
 
         def _try_open_portal_isolated(
             self, portal_url: str, active_session: PortalSession
@@ -440,6 +450,104 @@ try:
                 self._controller.apply_observations(observations)
             self._portal_pid = None
 
+        def _open_portal_in_process(self, portal_url: str) -> None:
+            """Render the portal in this process and show it.
+
+            The window previously had no portal view at all: this branch armed
+            the 10-minute timer and left the monitoring page up, so a user
+            whose deployment lacks helper access saw nothing happen and got a
+            `timeout` audit entry ten minutes later.
+            """
+            try:
+                from gatepath.portal_webview import make_webview  # noqa: PLC0415
+            except ImportError as exc:
+                logger.error("WebKitGTK unavailable; cannot show portal: %s", exc)
+                self._show_portal_failure(
+                    "Can't open the sign-in page",
+                    "Gatepath needs WebKitGTK to display this network's sign-in "
+                    "page, and it isn't available in this installation.",
+                )
+                return
+
+            try:
+                webview = make_webview(
+                    initial_url=portal_url,
+                    on_blocked_nav=lambda _url: self._controller.record_blocked_navigation(),
+                    on_blocked_resource=lambda _url: self._controller.record_blocked_resource(),
+                    on_load_error=self._on_portal_load_error,
+                    on_tls_cert_bypassed=lambda _host: self._controller.record_tls_cert_bypassed(),
+                )
+            except Exception as exc:  # noqa: BLE001 — never leave the user on a blank window
+                logger.exception("could not build the portal WebView: %s", exc)
+                self._show_portal_failure(
+                    "Can't open the sign-in page",
+                    f"Gatepath couldn't start the browser view for this network. ({exc})",
+                )
+                return
+
+            self._portal_webview = webview
+            self._portal_url = portal_url
+            self.set_content(self._build_portal_shell(webview))
+
+        def _build_portal_shell(self, child: object) -> "Adw.ToolbarView":
+            """Chrome around the portal: a header with the dismiss action."""
+            shell = Adw.ToolbarView()
+            header = Adw.HeaderBar()
+            header.set_show_end_title_buttons(True)
+            dismiss = Gtk.Button(label="Dismiss")
+            dismiss.connect("clicked", lambda _b: self.dismiss_session())
+            header.pack_start(dismiss)
+            shell.add_top_bar(header)
+            shell.set_content(child)  # type: ignore[arg-type]
+            return shell
+
+        def _on_portal_load_error(self, error: "PortalLoadError") -> None:
+            """Show why the page didn't load instead of a blank WebView."""
+            logger.warning(
+                "portal load error: %s (%s)", error.kind.value, error.technical_detail
+            )
+
+            def _retry() -> None:
+                webview = getattr(self, "_portal_webview", None)
+                url = getattr(self, "_portal_url", None)
+                if webview is None or url is None:
+                    return
+                self.set_content(self._build_portal_shell(webview))
+                webview.load_uri(url)  # type: ignore[attr-defined]
+
+            panel = build_error_panel(error, on_retry=_retry)
+            self.set_content(self._build_portal_shell(panel))
+
+        def _show_portal_failure(self, title: str, description: str) -> None:
+            """Terminal failure before a WebView exists — say so, don't hang.
+
+            Closes the session too: leaving it Active would run the 10-minute
+            timer against a window that will never show a portal, which is the
+            behaviour this whole path exists to remove.
+            """
+            page = Adw.StatusPage(
+                icon_name="dialog-error-symbolic",
+                title=GLib.markup_escape_text(title),
+                description=GLib.markup_escape_text(description),
+            )
+            self.set_content(self._build_portal_shell(page))
+            self._controller.close(CloseReason.ERROR)
+
+        def _teardown_portal_view(self) -> None:
+            """Drop the WebView and hand the window back to monitoring."""
+            webview = getattr(self, "_portal_webview", None)
+            if webview is not None:
+                try:
+                    from gatepath.portal_webview import cleanup  # noqa: PLC0415
+
+                    cleanup(webview)
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("portal WebView cleanup failed: %s", exc)
+                self._portal_webview = None
+                self._portal_url = None
+            if getattr(self, "_monitoring_content", None) is not None:
+                self.set_content(self._monitoring_content)
+
         def dismiss_session(self) -> None:
             """User-facing dismiss: route through controller (cancels timer + writes audit)."""
             self._controller.on_user_dismiss()
@@ -455,6 +563,7 @@ try:
                 completed_session.close_reason.value if completed_session.close_reason else "?",
                 completed_session.duration_seconds,
             )
+            self._teardown_portal_view()
 
 except (ImportError, ValueError, AttributeError):
     # PyGObject not installed — define a stub so the module is importable

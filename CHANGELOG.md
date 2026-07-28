@@ -102,6 +102,17 @@ release has been cut yet**, so everything below is unreleased, heading toward
   file under `XDG_RUNTIME_DIR` and are folded into the session before the entry
   is written. (#123)
 
+- **Desktop:** the app never rendered a captive portal unless the privileged
+  netns helper was reachable. `window.open_portal` armed the 10-minute session
+  timer and left the monitoring page up, because the "in-process WebView"
+  fallback its comments described was never implemented —
+  `portal_webview_runner` was the only caller of `make_webview` in the tree.
+  Every Flatpak install hit this: the sandbox has no `--system-talk-name` for
+  the helper, so the user saw nothing happen and got a `timeout` audit entry
+  ten minutes later. The window now renders the portal in-process for those
+  deployments, as `SECURITY_MODEL.md` already specified, and reports the
+  failure instead of hanging when WebKit can't start. (#125)
+
 ### Security
 
 - Confinement (netns on desktop, `VpnService` on Android) is the product's core

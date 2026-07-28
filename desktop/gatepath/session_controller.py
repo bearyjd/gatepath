@@ -164,6 +164,21 @@ class SessionController:
             blocked_navigation_attempts=current.blocked_navigation_attempts + 1,
         )
 
+    def record_tls_cert_bypassed(self) -> None:
+        """Count a certificate error proceeded past on the portal host.
+
+        A trust grant, not an observation: the session is rendering a page
+        whose certificate did not validate. Used by the in-process portal view;
+        the subprocess path carries its count via portal_observations instead.
+        """
+        current = self._session
+        if current is None or current.phase != PortalPhase.ACTIVE:
+            return
+        self._session = dataclasses.replace(
+            current,
+            tls_cert_errors_bypassed=current.tls_cert_errors_bypassed + 1,
+        )
+
     def record_blocked_resource(self) -> None:
         """Increment the observed-tracker counter on the Active session.
         See SECURITY_MODEL.md for why this is logged not blocked on desktop.
