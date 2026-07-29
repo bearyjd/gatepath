@@ -40,6 +40,18 @@ DEAD_URL = "http://127.0.0.1:9"
 #: present first, so a stub can't silently mask its removal.
 EXEC_LINE = "exec /usr/bin/python3 -m gatepath.portal_webview_runner"
 
+#: The runner's own words when the import probe fails.
+#:
+#: Match on THIS, never on the bare `import gatepath.portal_webview_runner`
+#: command: the template runs under `set -x`, so the probe's command line is
+#: traced into the log whether it succeeds or fails. Asserting on the command
+#: therefore passes in both cases and pins nothing — the same vacuous-assertion
+#: shape this file was rewritten to remove. test_a_successful_probe_does_not_
+#: log_the_failure_message is the negative control that keeps it that way.
+PROBE_FAILURE_MESSAGE = (
+    "webview requested but 'import gatepath.portal_webview_runner' failed"
+)
+
 
 def _render(tmp_path: Path, *, marker: Path, pythonpath: str | None = None) -> Path:
     """Substitute the @TOKEN@ placeholders exactly as run.sh's sed does."""
@@ -223,6 +235,29 @@ def test_webview_ok_is_true_when_the_package_is_importable(tmp_path: Path) -> No
     )
 
 
+def test_a_successful_probe_does_not_log_the_failure_message(tmp_path: Path) -> None:
+    """Negative control for PROBE_FAILURE_MESSAGE.
+
+    Without this, the degradation test could go back to matching a needle that
+    is present on BOTH paths and nobody would notice. The template runs under
+    `set -x`, so the probe's own command line IS traced into the log on success
+    — which is exactly how the first version of that assertion managed to pass
+    while pinning nothing. Anything the degradation test matches on must be
+    absent here.
+    """
+    marker = tmp_path / "webview.enabled"
+    marker.touch()
+    rendered = _render(tmp_path, marker=marker)  # importable: the probe succeeds
+    _run(rendered)
+
+    verdict = json.loads((tmp_path / "verdict.json").read_text(encoding="utf-8"))
+    assert verdict["webview_ok"] is True, "precondition: this probe must succeed"
+    assert PROBE_FAILURE_MESSAGE not in _log(rendered), (
+        "the failure message appears in the log of a SUCCESSFUL probe, so the "
+        "degradation test's assertion cannot distinguish success from failure"
+    )
+
+
 def test_a_broken_probe_cannot_cost_us_the_verdict(tmp_path: Path) -> None:
     """Pins the hoist, which is the actual fix.
 
@@ -301,7 +336,7 @@ def test_unimportable_package_degrades_instead_of_claiming_success(
     assert verdict["webview_ok"] is False, (
         "import failed but the runner still claimed the WebView was ready"
     )
-    assert "import gatepath.portal_webview_runner" in _log(rendered), (
+    assert PROBE_FAILURE_MESSAGE in _log(rendered), (
         "the failure was not recorded anywhere an operator would look — the "
         "runner log is the only surviving diagnostic for a broken --webview"
     )
