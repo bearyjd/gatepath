@@ -49,6 +49,7 @@ GATEWAY="@GATEWAY@"
 SENTINEL_URL="@SENTINEL_URL@"
 VERDICT="@VERDICT@"
 WEBVIEW_MARKER="@WEBVIEW_MARKER@"
+GATEPATH_PYTHONPATH="@GATEPATH_PYTHONPATH@"
 
 # `ip` lives in /usr/sbin on Fedora; the transient unit's default PATH may not
 # include it depending on systemd version. Resolve robustly.
@@ -91,9 +92,26 @@ echo "--- end network state ---"
         || portal_rc=$?
     [ -n "${portal_code:-}" ] || portal_code=0
 
-    printf '{"sentinel_url":"%s","sentinel_reachable":%s,"sentinel_curl_rc":%d,"portal_url":"%s","portal_http_code":%s,"portal_curl_rc":%d,"runner_uid":%d}\n' \
+    # (3) WebView readiness. Recorded in the verdict so run.sh can FAIL when
+    # --webview was asked for and the WebView could not actually start. The
+    # exec below replaces this process, so nothing after it can report back —
+    # without this field a broken --webview looks identical to a good one.
+    webview_requested=false
+    webview_ok=false
+    if [ -e "$WEBVIEW_MARKER" ]; then
+        webview_requested=true
+        if PYTHONPATH="$GATEPATH_PYTHONPATH" /usr/bin/python3 \
+             -c 'import gatepath.portal_webview_runner' 2>>"$LOG"; then
+            webview_ok=true
+        else
+            echo "webview requested but 'import gatepath.portal_webview_runner' failed" >> "$LOG"
+        fi
+    fi
+
+    printf '{"sentinel_url":"%s","sentinel_reachable":%s,"sentinel_curl_rc":%d,"portal_url":"%s","portal_http_code":%s,"portal_curl_rc":%d,"runner_uid":%d,"webview_requested":%s,"webview_ok":%s}\n' \
         "$SENTINEL_URL" "$sentinel_reachable" "$sentinel_rc" \
         "$PORTAL_URL" "$portal_code" "$portal_rc" "$(id -u)" \
+        "$webview_requested" "$webview_ok" \
         > "$VERDICT"
 } || true
 
@@ -102,7 +120,11 @@ echo "--- end network state ---"
 # marker only under --webview; that path needs a graphical session + the
 # gatepath package importable, so it is best-effort. We have already written
 # the verdict above either way.
-if [ -e "$WEBVIEW_MARKER" ]; then
+# The helper spawns us in a clean unit env, and the package is typically a
+# user-scoped editable install, so root's system python cannot import it
+# without this. Rendered from REPO_ROOT/desktop at install time.
+if [ "$webview_ok" = "true" ]; then
+    export PYTHONPATH="$GATEPATH_PYTHONPATH"
     exec /usr/bin/python3 -m gatepath.portal_webview_runner "$PORTAL_URL"
 fi
 
