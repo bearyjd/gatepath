@@ -30,7 +30,7 @@ set -u
 # Log everything to a host-visible file (the transient unit shares /tmp) so a
 # failure BEFORE the verdict write is still diagnosable. The verdict itself is
 # written with an explicit redirect below, so this doesn't swallow it.
-exec >>/tmp/gatepath-hwsim-runner.log 2>&1
+exec >>"@RUNNER_LOG@" 2>&1
 echo "=== runner start: $(id) pwd=$(pwd) argv=[$*] ==="
 set -x
 
@@ -48,6 +48,11 @@ CLIENT_CIDR="@CLIENT_CIDR@"
 GATEWAY="@GATEWAY@"
 SENTINEL_URL="@SENTINEL_URL@"
 VERDICT="@VERDICT@"
+# Rendered values are authoritative — deliberately NOT ${VAR:-...}, which would
+# let an inherited environment variable override what run.sh rendered. This
+# process runs as root and imports Python from GATEPATH_PYTHONPATH, so env
+# precedence there is a code-execution vector. run.sh already dies on any
+# unsubstituted placeholder, so these cannot arrive unset.
 WEBVIEW_MARKER="@WEBVIEW_MARKER@"
 GATEPATH_PYTHONPATH="@GATEPATH_PYTHONPATH@"
 
@@ -75,6 +80,40 @@ command -v iw >/dev/null 2>&1 && iw dev "$IFACE" link 2>&1 || true
 command -v ping >/dev/null 2>&1 && ping -c1 -W2 "$GATEWAY" 2>&1 || true
 echo "--- end network state ---"
 
+# ── WebView readiness ────────────────────────────────────────────────────
+# Deliberately computed BEFORE the probe block below, not inside it. `set -u`
+# is fatal: any unbound variable in that block aborts the script before the
+# verdict `printf`, and the `|| true` on it does NOT catch that — a $LOG typo
+# here once cost the harness its verdict entirely, so the no-leak gate could
+# not be evaluated at all. An optional diagnostic must never be able to
+# destroy the mandatory one.
+#
+# Recorded in the verdict so run.sh can FAIL when --webview was asked for and
+# the WebView could not start. `exec` below replaces this process, so nothing
+# after it can report back; without this field a broken --webview is
+# indistinguishable from a working one.
+# `set -u` is DISABLED for this probe only. Hoisting it above the verdict
+# block was not enough: an unbound variable is fatal at top level too, so a
+# typo here still killed the script before the verdict was written — proved by
+# test_a_broken_probe_cannot_cost_us_the_verdict. With -u off, a mistake here
+# degrades to the empty string, webview_ok stays false, and run.sh FAILS the
+# run loudly at the assertion layer instead of losing the artifact entirely.
+set +u
+webview_requested=false
+webview_ok=false
+if [ -e "$WEBVIEW_MARKER" ]; then
+    webview_requested=true
+    # Probe output goes to stderr (captured in the runner log). It must never
+    # reach stdout, which carries verdict data.
+    if PYTHONPATH="$GATEPATH_PYTHONPATH" /usr/bin/python3 \
+         -c 'import gatepath.portal_webview_runner' >&2; then
+        webview_ok=true
+    else
+        echo "webview requested but 'import gatepath.portal_webview_runner' failed" >&2
+    fi
+fi
+set -u
+
 # ── No-leak + portal probes ──────────────────────────────────────────────
 {
     # (1) Sentinel — MUST fail (confined).
@@ -90,25 +129,9 @@ echo "--- end network state ---"
     portal_rc=0
     portal_code="$("$CURL_BIN" -sS -m 6 -o /dev/null -w '%{http_code}' "$PORTAL_URL" 2>/dev/null)" \
         || portal_rc=$?
-    [ -n "${portal_code:-}" ] || portal_code=0
+    [ -n "${portal_code:-}" ] || portal_code=000
 
-    # (3) WebView readiness. Recorded in the verdict so run.sh can FAIL when
-    # --webview was asked for and the WebView could not actually start. The
-    # exec below replaces this process, so nothing after it can report back —
-    # without this field a broken --webview looks identical to a good one.
-    webview_requested=false
-    webview_ok=false
-    if [ -e "$WEBVIEW_MARKER" ]; then
-        webview_requested=true
-        if PYTHONPATH="$GATEPATH_PYTHONPATH" /usr/bin/python3 \
-             -c 'import gatepath.portal_webview_runner' 2>>"$LOG"; then
-            webview_ok=true
-        else
-            echo "webview requested but 'import gatepath.portal_webview_runner' failed" >> "$LOG"
-        fi
-    fi
-
-    printf '{"sentinel_url":"%s","sentinel_reachable":%s,"sentinel_curl_rc":%d,"portal_url":"%s","portal_http_code":%s,"portal_curl_rc":%d,"runner_uid":%d,"webview_requested":%s,"webview_ok":%s}\n' \
+    printf '{"sentinel_url":"%s","sentinel_reachable":%s,"sentinel_curl_rc":%d,"portal_url":"%s","portal_http_code":"%s","portal_curl_rc":%d,"runner_uid":%d,"webview_requested":%s,"webview_ok":%s}\n' \
         "$SENTINEL_URL" "$sentinel_reachable" "$sentinel_rc" \
         "$PORTAL_URL" "$portal_code" "$portal_rc" "$(id -u)" \
         "$webview_requested" "$webview_ok" \
