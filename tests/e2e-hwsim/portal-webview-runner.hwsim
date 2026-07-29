@@ -101,14 +101,14 @@ echo "--- end network state ---"
     if [ -e "$WEBVIEW_MARKER" ]; then
         webview_requested=true
         if PYTHONPATH="$GATEPATH_PYTHONPATH" /usr/bin/python3 \
-             -c 'import gatepath.portal_webview_runner' 2>>"$LOG"; then
+             -c 'import gatepath.portal_webview_runner' >&2; then
             webview_ok=true
         else
-            echo "webview requested but 'import gatepath.portal_webview_runner' failed" >> "$LOG"
+            echo "webview requested but 'import gatepath.portal_webview_runner' failed" >&2
         fi
     fi
 
-    printf '{"sentinel_url":"%s","sentinel_reachable":%s,"sentinel_curl_rc":%d,"portal_url":"%s","portal_http_code":%s,"portal_curl_rc":%d,"runner_uid":%d,"webview_requested":%s,"webview_ok":%s}\n' \
+    printf '{"sentinel_url":"%s","sentinel_reachable":%s,"sentinel_curl_rc":%d,"portal_url":"%s","portal_http_code":"%s","portal_curl_rc":%d,"runner_uid":%d,"webview_requested":%s,"webview_ok":%s}\n' \
         "$SENTINEL_URL" "$sentinel_reachable" "$sentinel_rc" \
         "$PORTAL_URL" "$portal_code" "$portal_rc" "$(id -u)" \
         "$webview_requested" "$webview_ok" \
