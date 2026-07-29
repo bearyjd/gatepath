@@ -622,6 +622,7 @@ sed -e "s#@IFACE@#$CL_IFACE#g" \
     -e "s#@SENTINEL_URL@#$SENTINEL_URL#g" \
     -e "s#@VERDICT@#$RUNNER_VERDICT#g" \
     -e "s#@WEBVIEW_MARKER@#$WEBVIEW_MARKER#g" \
+    -e "s#@GATEPATH_PYTHONPATH@#$REPO_ROOT/desktop#g" \
     "$HWSIM_DIR/portal-webview-runner.hwsim" > "$WORKDIR/portal-webview-runner.rendered" \
   || die "could not render the runner template"
 # Fail loud if any token went unsubstituted (typo'd placeholder / new var) so we
@@ -858,6 +859,20 @@ if [ -s "$RUNNER_VERDICT" ]; then
     ok "NO-LEAK: sentinel UNREACHABLE from inside the netns (confined)"
   else
     note_fail "LEAK: netns reached the trusted-net sentinel (sentinel_reachable=$s_reach)"
+  fi
+  # --webview must not pass while doing nothing. The runner records whether it
+  # could actually start the WebView; before this, an exec that died on
+  # ModuleNotFoundError was indistinguishable from a working WebView, because
+  # the verdict is written before the exec and the exec replaces the process.
+  # A real run hit exactly that: root's system python had no `gatepath`, the
+  # WebView never started, and the harness still printed PASS.
+  if [ "$WEBVIEW" -eq 1 ]; then
+    w_ok="$(jq -r '.webview_ok' "$RUNNER_VERDICT" 2>/dev/null)"
+    if [ "$w_ok" = "true" ]; then
+      ok "WEBVIEW: real WebKit runner started (portal rendered in-netns)"
+    else
+      note_fail "WEBVIEW: --webview was requested but the WebView never started (webview_ok=$w_ok); see /tmp/gatepath-hwsim-runner.log"
+    fi
   fi
   if [ "$p_rc" = "0" ]; then
     ok "portal reachable from inside the netns (http $p_code)"
