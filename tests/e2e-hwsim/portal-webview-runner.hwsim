@@ -48,11 +48,13 @@ CLIENT_CIDR="@CLIENT_CIDR@"
 GATEWAY="@GATEWAY@"
 SENTINEL_URL="@SENTINEL_URL@"
 VERDICT="@VERDICT@"
-# Defaulted so a stale rendered runner (placeholder never substituted, or a
-# field added to run.sh but not here) degrades to "no webview" instead of
-# tripping `set -u` and killing the script before it writes the verdict.
-WEBVIEW_MARKER="${WEBVIEW_MARKER:-@WEBVIEW_MARKER@}"
-GATEPATH_PYTHONPATH="${GATEPATH_PYTHONPATH:-@GATEPATH_PYTHONPATH@}"
+# Rendered values are authoritative — deliberately NOT ${VAR:-...}, which would
+# let an inherited environment variable override what run.sh rendered. This
+# process runs as root and imports Python from GATEPATH_PYTHONPATH, so env
+# precedence there is a code-execution vector. run.sh already dies on any
+# unsubstituted placeholder, so these cannot arrive unset.
+WEBVIEW_MARKER="@WEBVIEW_MARKER@"
+GATEPATH_PYTHONPATH="@GATEPATH_PYTHONPATH@"
 
 # `ip` lives in /usr/sbin on Fedora; the transient unit's default PATH may not
 # include it depending on systemd version. Resolve robustly.
@@ -90,6 +92,13 @@ echo "--- end network state ---"
 # the WebView could not start. `exec` below replaces this process, so nothing
 # after it can report back; without this field a broken --webview is
 # indistinguishable from a working one.
+# `set -u` is DISABLED for this probe only. Hoisting it above the verdict
+# block was not enough: an unbound variable is fatal at top level too, so a
+# typo here still killed the script before the verdict was written — proved by
+# test_a_broken_probe_cannot_cost_us_the_verdict. With -u off, a mistake here
+# degrades to the empty string, webview_ok stays false, and run.sh FAILS the
+# run loudly at the assertion layer instead of losing the artifact entirely.
+set +u
 webview_requested=false
 webview_ok=false
 if [ -e "$WEBVIEW_MARKER" ]; then
@@ -103,6 +112,7 @@ if [ -e "$WEBVIEW_MARKER" ]; then
         echo "webview requested but 'import gatepath.portal_webview_runner' failed" >&2
     fi
 fi
+set -u
 
 # ── No-leak + portal probes ──────────────────────────────────────────────
 {

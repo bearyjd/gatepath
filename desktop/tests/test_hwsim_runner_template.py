@@ -19,8 +19,11 @@ reads the sibling `android/` tree.
 from __future__ import annotations
 
 import json
+import os
+import re
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -39,7 +42,7 @@ DEAD_URL = "http://127.0.0.1:9"
 EXEC_LINE = "exec /usr/bin/python3 -m gatepath.portal_webview_runner"
 
 
-def _render(tmp_path: Path, *, marker: Path) -> Path:
+def _render(tmp_path: Path, *, marker: Path, pythonpath: str | None = None) -> Path:
     """Substitute the @TOKEN@ placeholders exactly as run.sh's sed does."""
     text = TEMPLATE.read_text(encoding="utf-8")
     subs = {
@@ -49,20 +52,28 @@ def _render(tmp_path: Path, *, marker: Path) -> Path:
         "@SENTINEL_URL@": f"{DEAD_URL}/health",
         "@VERDICT@": str(tmp_path / "verdict.json"),
         "@WEBVIEW_MARKER@": str(marker),
-        "@GATEPATH_PYTHONPATH@": str(REPO_ROOT / "desktop"),
+        "@GATEPATH_PYTHONPATH@": pythonpath if pythonpath is not None else str(REPO_ROOT / "desktop"),
     }
     for token, value in subs.items():
         text = text.replace(token, value)
-    # run.sh refuses to install a runner with a leftover placeholder; hold the
-    # test to the same bar so a newly-added token can't slip through unnoticed.
-    assert "@" not in "".join(
-        line for line in text.splitlines() if line.strip().startswith(("VERDICT=", "WEBVIEW_", "GATEPATH_"))
-    ), "unsubstituted placeholder in the rendered runner"
+    # Exactly the check run.sh makes before installing the runner — a token
+    # added anywhere in the file must not slip through unsubstituted.
+    leftover = re.findall(r"@[A-Z_][A-Z_]*@", text)
+    assert not leftover, (
+        f"unsubstituted placeholder(s) in the rendered runner: {sorted(set(leftover))}"
+    )
     assert EXEC_LINE in text, (
         "the runner no longer execs the real WebView — these tests stub that "
         "line, so its removal would otherwise go unnoticed"
     )
-    text = text.replace(EXEC_LINE, 'echo "STUBBED EXEC" >&2; exit 0  #')
+    # Replace the WHOLE line: a substring swap plus a trailing `#` would
+    # comment out something unintended if the exec is ever reformatted.
+    text = re.sub(
+        rf"^\s*{re.escape(EXEC_LINE)}.*$",
+        '    echo "STUBBED EXEC" >&2; exit 0',
+        text,
+        flags=re.M,
+    )
 
     rendered = tmp_path / "runner.sh"
     rendered.write_text(text, encoding="utf-8")
@@ -172,3 +183,98 @@ def test_verdict_carries_every_field_run_sh_reads(tmp_path: Path) -> None:
         "webview_ok",
     ):
         assert field in verdict, f"run.sh reads .{field}; the runner stopped emitting it"
+
+
+def test_webview_ok_is_true_when_the_package_is_importable(tmp_path: Path) -> None:
+    """The #131 regression, pinned.
+
+    GATEPATH_PYTHONPATH was never rendered, so root's python could not import
+    the package, the exec died on ModuleNotFoundError, and the harness still
+    reported PASS. Every other test here passes with that bug present — they
+    check `webview_requested`, which is true either way — so this is the one
+    that would catch it coming back.
+    """
+    marker = tmp_path / "webview.enabled"
+    marker.touch()
+    _run(_render(tmp_path, marker=marker))
+    verdict = json.loads((tmp_path / "verdict.json").read_text(encoding="utf-8"))
+    assert verdict["webview_ok"] is True, (
+        "import probe failed with GATEPATH_PYTHONPATH rendered — #131 has regressed"
+    )
+
+
+def test_a_broken_probe_cannot_cost_us_the_verdict(tmp_path: Path) -> None:
+    """Pins the hoist, which is the actual fix.
+
+    `|| true` does NOT catch a `set -u` violation — the shell exits outright —
+    so while the probe lived inside the verdict block, any unbound variable in
+    it destroyed the harness's only oracle. Injecting that exact shape fails
+    if the probe is ever moved back inside.
+    """
+    marker = tmp_path / "webview.enabled"
+    marker.touch()
+    rendered = _render(tmp_path, marker=marker)
+    text = rendered.read_text(encoding="utf-8")
+    injected = text.replace(
+        "webview_requested=true",
+        'webview_requested=true; : "$DEFINITELY_UNBOUND_VAR"',
+        1,
+    )
+    assert injected != text, "probe shape changed; this injection no longer applies"
+    rendered.write_text(injected, encoding="utf-8")
+
+    _run(rendered)
+
+    # The property, not the mechanism. With `set +u` scoped to the probe the
+    # injection is a silent no-op by design — that IS the containment. Remove
+    # the `set +u` (or otherwise let a probe fault escape) and the script dies
+    # before the printf, so the verdict vanishes and this fails.
+    verdict_path = tmp_path / "verdict.json"
+    assert verdict_path.exists(), (
+        "a fault in the optional probe destroyed the verdict — the harness's "
+        "only oracle. The probe must not be able to abort the script."
+    )
+    # Degradation is covered separately, by forcing a real import failure —
+    # under `set +u` this injection is inert by design, which is the whole
+    # point of the containment.
+    json.loads(verdict_path.read_text(encoding="utf-8"))
+
+
+def test_unimportable_package_degrades_instead_of_claiming_success(
+    tmp_path: Path,
+) -> None:
+    """A probe that genuinely fails must say so, not pass silently.
+
+    This is the shape of the original bug: the import failed, nothing recorded
+    it, and run.sh reported PASS. Now webview_ok goes false and run.sh fails
+    the run under --webview.
+    """
+    # Only meaningful where PYTHONPATH actually decides importability. If the
+    # package is pip-installed for this interpreter it is importable no matter
+    # what we set, and the probe correctly reports true. That is exactly the
+    # difference between this box and the hwsim box's root user, where the
+    # package is NOT installed and the original failure occurred.
+    probe = subprocess.run(
+        [sys.executable, "-c", "import gatepath.portal_webview_runner"],
+        capture_output=True,
+        env={"PATH": os.environ.get("PATH", ""), "PYTHONPATH": ""},
+    )
+    if probe.returncode == 0:
+        pytest.skip(
+            "gatepath is importable without PYTHONPATH here (pip-installed), "
+            "so a bogus PYTHONPATH cannot force the failure this pins"
+        )
+
+    marker = tmp_path / "webview.enabled"
+    marker.touch()
+    empty = tmp_path / "no-package-here"
+    empty.mkdir()
+    rendered = _render(tmp_path, marker=marker, pythonpath=str(empty))
+    result = _run(rendered)
+
+    verdict = json.loads((tmp_path / "verdict.json").read_text(encoding="utf-8"))
+    assert verdict["webview_requested"] is True
+    assert verdict["webview_ok"] is False, (
+        "import failed but the runner still claimed the WebView was ready"
+    )
+    assert "import gatepath.portal_webview_runner" in result.stderr
