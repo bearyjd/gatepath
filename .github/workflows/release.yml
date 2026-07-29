@@ -223,6 +223,32 @@ jobs:
         uses: actions/download-artifact@v8
         with:
           name: gatepath-flatpak-bundle
+      # download-artifact has no `if-no-files-found: error` counterpart to the
+      # upload step's, so assert the shape ourselves. This job only ever runs on
+      # a real v* tag — no PR can exercise it — so anything that silently
+      # changes where the bundle lands would first be discovered by shipping a
+      # release with a missing or unsigned artifact.
+      #
+      # Not hypothetical: download-artifact v8 stopped unconditionally
+      # decompressing and now decides from the Content-Type, so "the file is
+      # simply there in cwd" is a v7 assumption this pins rather than trusts.
+      - name: Verify the bundle actually landed
+        run: |
+          set -euo pipefail
+          if [ ! -f gatepath.flatpak ]; then
+            echo "::error::gatepath.flatpak is not in the working directory after download-artifact." >&2
+            echo "The artifact was uploaded as a single file named gatepath.flatpak; if this fails," >&2
+            echo "the action changed where or how it extracts. Contents were:" >&2
+            ls -laR >&2
+            exit 1
+          fi
+          # A truncated or empty download would still satisfy -f.
+          bytes=$(stat -c%s gatepath.flatpak)
+          if [ "$bytes" -lt 1024 ]; then
+            echo "::error::gatepath.flatpak is only ${bytes} bytes — truncated or a placeholder." >&2
+            exit 1
+          fi
+          echo "gatepath.flatpak present, ${bytes} bytes"
       - name: Install cosign
         uses: sigstore/cosign-installer@v3
       - name: Sign flatpak with keyless cosign
