@@ -23,7 +23,6 @@ import os
 import re
 import shutil
 import subprocess
-import sys
 from pathlib import Path
 
 import pytest
@@ -53,6 +52,10 @@ def _render(tmp_path: Path, *, marker: Path, pythonpath: str | None = None) -> P
         "@VERDICT@": str(tmp_path / "verdict.json"),
         "@WEBVIEW_MARKER@": str(marker),
         "@GATEPATH_PYTHONPATH@": pythonpath if pythonpath is not None else str(REPO_ROOT / "desktop"),
+        # Per-test, NOT the real /tmp/gatepath-hwsim-runner.log: the runner
+        # appends, so a shared path would both accumulate across tests and
+        # clobber the artifact a real hardware run left behind.
+        "@RUNNER_LOG@": str(tmp_path / "runner.log"),
     }
     for token, value in subs.items():
         text = text.replace(token, value)
@@ -90,6 +93,18 @@ def _run(rendered: Path) -> subprocess.CompletedProcess:
     )
 
 
+def _log(rendered: Path) -> str:
+    """Everything the runner prints, read from its self-log.
+
+    The runner's first act is `exec >>"$RUNNER_LOG" 2>&1`, so the subprocess's
+    own stdout/stderr are ALWAYS empty — asserting on `result.stderr` here is
+    vacuously true and pins nothing. `@RUNNER_LOG@` is rendered per-test, so
+    this is the only place the runner's output can be observed.
+    """
+    log = rendered.parent / "runner.log"
+    return log.read_text(encoding="utf-8") if log.exists() else ""
+
+
 @pytest.fixture(autouse=True)
 def _needs_bash():
     if shutil.which("bash") is None:  # pragma: no cover
@@ -121,12 +136,12 @@ def test_verdict_is_written_WITH_the_webview_marker(tmp_path: Path) -> None:
     marker = tmp_path / "webview.enabled"
     marker.touch()
     rendered = _render(tmp_path, marker=marker)
-    result = _run(rendered)
+    _run(rendered)
 
     verdict_path = tmp_path / "verdict.json"
     assert verdict_path.exists(), (
         "no verdict written with the webview marker set — the optional probe "
-        f"aborted the runner again. stderr tail:\n{result.stderr[-2000:]}"
+        f"aborted the runner again. runner log tail:\n{_log(rendered)[-2000:]}"
     )
     verdict = json.loads(verdict_path.read_text(encoding="utf-8"))
     assert verdict["webview_requested"] is True
@@ -141,10 +156,15 @@ def test_no_unbound_variable_errors_on_either_path(tmp_path: Path) -> None:
         sub = tmp_path / f"case{int(marker_present)}"
         sub.mkdir()
         rendered = _render(sub, marker=marker)
-        result = _run(rendered)
-        assert "unbound variable" not in result.stderr, (
+        _run(rendered)
+        log = _log(rendered)
+        assert log, (
+            "the runner produced no self-log at all — it died before its "
+            "`exec >>` redirect, or the log is no longer rendered here"
+        )
+        assert "unbound variable" not in log, (
             f"unbound variable with marker_present={marker_present}:\n"
-            f"{result.stderr[-1000:]}"
+            f"{log[-1000:]}"
         )
 
 
@@ -254,8 +274,12 @@ def test_unimportable_package_degrades_instead_of_claiming_success(
     # what we set, and the probe correctly reports true. That is exactly the
     # difference between this box and the hwsim box's root user, where the
     # package is NOT installed and the original failure occurred.
+    # /usr/bin/python3, NOT sys.executable: that is the interpreter the
+    # template hardcodes, and under pytest the two are routinely different
+    # (a venv or hostedtoolcache python vs. the system one), so probing
+    # sys.executable can skip a case the runner would have failed.
     probe = subprocess.run(
-        [sys.executable, "-c", "import gatepath.portal_webview_runner"],
+        ["/usr/bin/python3", "-c", "import gatepath.portal_webview_runner"],
         capture_output=True,
         env={"PATH": os.environ.get("PATH", ""), "PYTHONPATH": ""},
     )
@@ -270,11 +294,14 @@ def test_unimportable_package_degrades_instead_of_claiming_success(
     empty = tmp_path / "no-package-here"
     empty.mkdir()
     rendered = _render(tmp_path, marker=marker, pythonpath=str(empty))
-    result = _run(rendered)
+    _run(rendered)
 
     verdict = json.loads((tmp_path / "verdict.json").read_text(encoding="utf-8"))
     assert verdict["webview_requested"] is True
     assert verdict["webview_ok"] is False, (
         "import failed but the runner still claimed the WebView was ready"
     )
-    assert "import gatepath.portal_webview_runner" in result.stderr
+    assert "import gatepath.portal_webview_runner" in _log(rendered), (
+        "the failure was not recorded anywhere an operator would look — the "
+        "runner log is the only surviving diagnostic for a broken --webview"
+    )

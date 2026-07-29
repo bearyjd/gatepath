@@ -623,6 +623,7 @@ sed -e "s#@IFACE@#$CL_IFACE#g" \
     -e "s#@VERDICT@#$RUNNER_VERDICT#g" \
     -e "s#@WEBVIEW_MARKER@#$WEBVIEW_MARKER#g" \
     -e "s#@GATEPATH_PYTHONPATH@#$REPO_ROOT/desktop#g" \
+    -e "s#@RUNNER_LOG@#$RUNNER_LOG#g" \
     "$HWSIM_DIR/portal-webview-runner.hwsim" > "$WORKDIR/portal-webview-runner.rendered" \
   || die "could not render the runner template"
 # Fail loud if any token went unsubstituted (typo'd placeholder / new var) so we
@@ -814,7 +815,7 @@ fi
 # wait-for-verdict → TeardownCaptive, exactly like the real GUI.
 have python3 && python3 -c 'import dbus' 2>/dev/null \
   || die "drive.py needs python3 + python-dbus (import dbus failed)"
-rm -f "$RUNNER_VERDICT" /tmp/gatepath-hwsim-runner.log
+rm -f "$RUNNER_VERDICT" "$RUNNER_LOG"
 log "driving SetupCaptive → LaunchPortal → TeardownCaptive (single connection)"
 drive_out="$(python3 "$HWSIM_DIR/drive.py" "$CL_IFACE" "$PORTAL_URL" "$RUNNER_VERDICT" 25 2>"$WORKDIR/drive.err")"
 [ -s "$WORKDIR/drive.err" ] && cat "$WORKDIR/drive.err" >&2
@@ -871,7 +872,7 @@ if [ -s "$RUNNER_VERDICT" ]; then
     if [ "$w_ok" = "true" ]; then
       ok "WEBVIEW: real WebKit runner started (portal rendered in-netns)"
     else
-      note_fail "WEBVIEW: --webview was requested but the WebView never started (webview_ok=$w_ok); see /tmp/gatepath-hwsim-runner.log"
+      note_fail "WEBVIEW: --webview was requested but the WebView never started (webview_ok=$w_ok); see $RUNNER_LOG"
     fi
   fi
   if [ "$p_rc" = "0" ]; then
@@ -879,14 +880,14 @@ if [ -s "$RUNNER_VERDICT" ]; then
   else
     note_fail "portal NOT reachable from inside the netns (curl rc=$p_rc, http $p_code)"
     err "runner self-log (in-netns network state):"
-    sed 's/^/      /' /tmp/gatepath-hwsim-runner.log 2>/dev/null >&2 || true
+    sed 's/^/      /' "$RUNNER_LOG" 2>/dev/null >&2 || true
   fi
 else
   note_fail "runner never wrote a verdict"
   err "helper log tail:"; tail -n 18 "$WORKDIR/helper.log" 2>/dev/null | sed 's/^/      /' >&2
-  err "runner self-log (/tmp/gatepath-hwsim-runner.log):"
-  if [ -s /tmp/gatepath-hwsim-runner.log ]; then
-    sed 's/^/      /' /tmp/gatepath-hwsim-runner.log >&2
+  err "runner self-log ($RUNNER_LOG):"
+  if [ -s "$RUNNER_LOG" ]; then
+    sed 's/^/      /' "$RUNNER_LOG" >&2
   else
     err "      (empty/absent — the runner never executed; likely a systemd-run/SELinux issue)"
   fi

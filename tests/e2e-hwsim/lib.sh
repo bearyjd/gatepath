@@ -85,6 +85,11 @@ DBUS_IFACE="com.ventouxlabs.Gatepath.NetNsHelper1"
 # Where the runner drops its no-leak verdict (host /tmp; the WebView transient
 # unit does NOT set PrivateTmp, so this is visible to run.sh as root).
 RUNNER_VERDICT="/tmp/gatepath-hwsim-runner.json"
+# The runner's own stdout+stderr, same rationale. Templated into the runner so
+# the unit tests can point it at a tmpdir instead of clobbering the artifact a
+# real hardware run leaves behind — this file is where a silent --webview
+# failure shows up, so a test overwriting it would destroy the evidence.
+RUNNER_LOG="/tmp/gatepath-hwsim-runner.log"
 
 # ── Logging ──────────────────────────────────────────────────────────────
 if [ -t 1 ]; then
