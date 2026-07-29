@@ -67,7 +67,7 @@ jobs:
       # rolls per run (always saves a fresh entry); restore-keys falls back to the
       # newest prior corpus for this target.
       - name: Restore corpus
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: desktop/gatepath-netns-helper/fuzz/corpus/${{ matrix.target }}
           key: fuzz-corpus-${{ matrix.target }}-${{ github.run_id }}
