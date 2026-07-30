@@ -170,20 +170,51 @@ def check_gateway_log(
     # could not fail. See that function for the full story.
 
 
-def _webview_attempted_off_domain(logcat: str) -> bool:
-    """Positive control: did the portal WebView actually try an off-domain host?
+# Chromium error codes that mean "something short-circuited this request before
+# the network stack got it" rather than "the network stack tried and failed".
+# An app-side refusal produces one of these or no error line at all; it can
+# never produce a DNS/TCP/TLS error, because it never gets that far.
+APP_SIDE_NET_ERRORS = frozenset({"ERR_BLOCKED_BY_CLIENT", "ERR_ABORTED"})
 
-    True iff a GatepathWebView line names one. Only that tag counts — another
-    component echoing the hostname (the harness printing its own config, say)
-    is not evidence the WebView tried to load it. Same rule as
-    [_webview_attempted_sentinel].
+# Markers that a GatepathWebView line describes a real network-stack outcome for
+# the URL it names.
+_NETWORK_OUTCOME_MARKERS = ("Page started:", "Page finished:")
+
+
+def _webview_off_domain_evidence(logcat: str) -> tuple[bool, bool]:
+    """Positive control: what did the portal WebView do with an off-domain host?
+
+    Returns ``(attempted, reached_network)``.
+
+    ``attempted`` is True iff a GatepathWebView line names an off-domain host.
+    Only that tag counts — another component echoing the hostname (the harness
+    printing its own config, say) is not evidence the WebView tried to load it.
+    Same rule as [_webview_attempted_sentinel].
+
+    ``reached_network`` is True iff one of those lines shows the request being
+    handed to the network stack: a page load for the host, or a ``net::`` error
+    that only the network stack can raise (DNS, TCP, TLS). This is the signal
+    that distinguishes ALLOWED from REFUSED, and the harness needs it because
+    neither off-domain hostname resolves in the emulator and neither is in
+    BlockedDomains — so a correctly-allowed request produces no gateway hit and
+    no audit counter. ``ERR_NAME_NOT_RESOLVED`` on such a host is a *pass*: the
+    app let it out and DNS is what stopped it. See [check_off_domain].
     """
+    attempted = False
+    reached_network = False
     for line in logcat.splitlines():
         if "GatepathWebView" not in line:
             continue
-        if any(host in line for host in OFF_DOMAIN_HOSTNAMES):
-            return True
-    return False
+        if not any(host in line for host in OFF_DOMAIN_HOSTNAMES):
+            continue
+        attempted = True
+        if any(marker in line for marker in _NETWORK_OUTCOME_MARKERS):
+            reached_network = True
+        elif "net::" in line:
+            code = line.split("net::", 1)[1].split()[0].strip()
+            if code not in APP_SIDE_NET_ERRORS:
+                reached_network = True
+    return attempted, reached_network
 
 
 def check_off_domain(
@@ -233,6 +264,16 @@ def check_off_domain(
 
     No signal at all ⇒ `off_domain.not_exercised`, hard fail: the claim is
     unproven, which is not the same as satisfied.
+
+    ALLOWED vs REFUSED is then decided on the network-stack outcome, NOT on the
+    absence of a counter. Reason #3 above cuts both ways: because neither
+    hostname resolves and neither is in BlockedDomains, a *correctly allowed*
+    request reaches no gateway and increments no counter. Its only trace is the
+    WebView's own `net::ERR_NAME_NOT_RESOLVED` — which is positive proof of
+    allow, since a refusal short-circuits in shouldOverrideUrlLoading /
+    shouldInterceptRequest and never reaches DNS. Keying the failure off
+    "attempted and not counted" instead flagged that exact line as a refusal;
+    see [_webview_off_domain_evidence] for the discriminator that replaces it.
     """
     print("E. Off-domain traffic (allowed + counted)")
 
@@ -249,7 +290,7 @@ def check_off_domain(
             if isinstance(value, int) and value > 0:
                 counted += value
 
-    attempted = _webview_attempted_off_domain(logcat)
+    attempted, reached_network = _webview_off_domain_evidence(logcat)
 
     if not (seen_at_gateway or counted or attempted):
         fail(
@@ -264,19 +305,23 @@ def check_off_domain(
 
     ok(
         "off_domain.exercised",
-        f"gateway={len(seen_at_gateway)} counted={counted} webview_logged={attempted}",
+        f"gateway={len(seen_at_gateway)} counted={counted} "
+        f"webview_logged={attempted} reached_network={reached_network}",
     )
 
     # The #119 regression guard: having attempted off-domain traffic, the app
-    # must not have refused it. A refusal shows up as an attempt that produced
-    # neither a counted event nor a gateway hit.
-    if attempted and not counted and not seen_at_gateway:
+    # must not have refused it. Allow leaves one of three traces — the request
+    # reached the gateway, an audit counter fired, or the network stack itself
+    # reported the outcome. A refusal leaves none of the three, because it
+    # short-circuits before any of them can happen.
+    if attempted and not (reached_network or counted or seen_at_gateway):
         fail(
             "off_domain.allowed",
-            "the WebView attempted an off-domain host but nothing was counted "
-            "and nothing reached the gateway — the signature of refusing "
-            "off-domain traffic again, which breaks cross-host sign-in on "
-            "Meraki / Cisco ISE / UniFi (see #119)",
+            "the WebView named an off-domain host but the request never "
+            "reached the network stack, nothing was counted and nothing "
+            "reached the gateway — the signature of refusing off-domain "
+            "traffic again, which breaks cross-host sign-in on Meraki / "
+            "Cisco ISE / UniFi (see #119)",
             failures,
         )
     else:
