@@ -8,16 +8,19 @@ directory passed on argv:
     audit_log.jsonl        — pulled from /data/data/com.ventouxlabs.gatepath/files/
     gateway-log.json       — fetched from mockportal's /log endpoint
 
-Three buckets, all hard-fail:
+Buckets, all hard-fail:
 
   A. Scenario report  — every step ok, rc=0, key step outputs sane.
   B. App audit log    — at least one Completed entry with reason
                         'portal_completed' (PR #33 close reason).
-  C. Gateway log      — /portal was requested from an Android UA AND no
-                        off-domain hostnames appeared in any Host header.
-                        The off-domain block is the most-load-bearing
-                        security claim Gatepath makes; if it leaks, the
-                        test must fail hard.
+  C. Gateway log      — /portal was requested from an Android UA.
+  D. VPN sink         — the no-leak confinement proof (ROADMAP P0.1),
+                        gated on its own positive control.
+  E. Off-domain       — off-domain traffic is ALLOWED and COUNTED, which is
+                        what the design claims since #119; and it must
+                        actually have been exercised. "Nothing happened" is
+                        a failure here, not a pass — see check_off_domain
+                        for why the previous version of this could not fail.
 
 Exit 0 only if every check passes. Mirrors tests/e2e-docker/driver/assertions.py
 in tone, layout, and exit semantics.
@@ -162,21 +165,167 @@ def check_gateway_log(
             failures,
         )
 
-    # The off-domain block is the security-load-bearing assertion.
-    leaks = []
-    for e in entries:
+    # Off-domain traffic is asserted separately, in check_off_domain — it needs
+    # the audit log and logcat as well as this one, and the old version here
+    # could not fail. See that function for the full story.
+
+
+# Chromium error codes that mean "something short-circuited this request before
+# the network stack got it" rather than "the network stack tried and failed".
+# An app-side refusal produces one of these or no error line at all; it can
+# never produce a DNS/TCP/TLS error, because it never gets that far.
+APP_SIDE_NET_ERRORS = frozenset({"ERR_BLOCKED_BY_CLIENT", "ERR_ABORTED"})
+
+# Markers that a GatepathWebView line describes a real network-stack outcome for
+# the URL it names.
+_NETWORK_OUTCOME_MARKERS = ("Page started:", "Page finished:")
+
+
+def _webview_off_domain_evidence(logcat: str) -> tuple[bool, bool]:
+    """Positive control: what did the portal WebView do with an off-domain host?
+
+    Returns ``(attempted, reached_network)``.
+
+    ``attempted`` is True iff a GatepathWebView line names an off-domain host.
+    Only that tag counts — another component echoing the hostname (the harness
+    printing its own config, say) is not evidence the WebView tried to load it.
+    Same rule as [_webview_attempted_sentinel].
+
+    ``reached_network`` is True iff one of those lines shows the request being
+    handed to the network stack: a page load for the host, or a ``net::`` error
+    that only the network stack can raise (DNS, TCP, TLS). This is the signal
+    that distinguishes ALLOWED from REFUSED, and the harness needs it because
+    neither off-domain hostname resolves in the emulator and neither is in
+    BlockedDomains — so a correctly-allowed request produces no gateway hit and
+    no audit counter. ``ERR_NAME_NOT_RESOLVED`` on such a host is a *pass*: the
+    app let it out and DNS is what stopped it. See [check_off_domain].
+    """
+    attempted = False
+    reached_network = False
+    for line in logcat.splitlines():
+        if "GatepathWebView" not in line:
+            continue
+        if not any(host in line for host in OFF_DOMAIN_HOSTNAMES):
+            continue
+        attempted = True
+        if any(marker in line for marker in _NETWORK_OUTCOME_MARKERS):
+            reached_network = True
+        elif "net::" in line:
+            code = line.split("net::", 1)[1].split()[0].strip()
+            if code not in APP_SIDE_NET_ERRORS:
+                reached_network = True
+    return attempted, reached_network
+
+
+def check_off_domain(
+    gateway_entries: list[dict[str, Any]],
+    audit_entries: list[dict[str, Any]],
+    logcat: str,
+    failures: list[str],
+) -> None:
+    """E. Off-domain traffic: allowed and COUNTED, never refused.
+
+    What this replaces, and why it had to go:
+
+        if leaks: fail(...)
+        else:     ok("gateway.off_domain_blocked", "no off-domain requests observed")
+
+    That assertion could not fail, for three independent reasons at once —
+    confirmed against the artifacts of the last green run, not inferred:
+
+      1. It encoded PREVENTION. Since #119 (navigations) and by original design
+         (subresources), both platforms ALLOW off-domain traffic and merely
+         count it — blocking cancelled the cross-host sign-in POST that Meraki
+         / Cisco ISE / UniFi require, and empty-200'ing GA/GTM broke the portal
+         page's own Continue button. So the `leaks` branch would fail on
+         CORRECT behaviour, and only the vacuous branch could ever pass.
+      2. Its pass branch fires precisely when nothing happened. A WebView that
+         never attempted any off-domain request produces an empty `leaks` and
+         reads as ✓.
+      3. Nothing in the harness makes off-domain traffic happen. Neither
+         hostname resolves in the emulator, `evil-tracker.example.com` is not
+         in BlockedDomains so no counter fires for it, and the default
+         `host-post` login mode submits the form from the host rather than
+         navigating the WebView anywhere.
+
+    Last green run's artifacts: `blocked_navigation_attempts` 0,
+    `blocked_resource_requests` 0, zero off-domain hosts in the gateway log,
+    zero mentions in logcat. Three signals, all silent, reported as a pass.
+
+    So this asserts on EVIDENCE, and treats the absence of evidence as a
+    failure rather than a pass:
+
+      * gateway hit  — the request reached the CAPTIVE gateway, which is what
+        confinement looks like (the trusted-side half is section D's sentinel)
+      * audit counter — onBlockedNavigation() fires in shouldOverrideUrlLoading
+        BEFORE the request goes out, so a non-zero counter is real evidence
+        even when the host does not resolve
+      * logcat        — the WebView's own log naming the host
+
+    No signal at all ⇒ `off_domain.not_exercised`, hard fail: the claim is
+    unproven, which is not the same as satisfied.
+
+    ALLOWED vs REFUSED is then decided on the network-stack outcome, NOT on the
+    absence of a counter. Reason #3 above cuts both ways: because neither
+    hostname resolves and neither is in BlockedDomains, a *correctly allowed*
+    request reaches no gateway and increments no counter. Its only trace is the
+    WebView's own `net::ERR_NAME_NOT_RESOLVED` — which is positive proof of
+    allow, since a refusal short-circuits in shouldOverrideUrlLoading /
+    shouldInterceptRequest and never reaches DNS. Keying the failure off
+    "attempted and not counted" instead flagged that exact line as a refusal;
+    see [_webview_off_domain_evidence] for the discriminator that replaces it.
+    """
+    print("E. Off-domain traffic (allowed + counted)")
+
+    seen_at_gateway = []
+    for e in gateway_entries:
         host = (e.get("headers") or {}).get("Host", "")
-        host_only = host.split(":", 1)[0].strip().lower()
-        if host_only in OFF_DOMAIN_HOSTNAMES:
-            leaks.append({"path": e.get("path"), "host": host})
-    if leaks:
+        if host.split(":", 1)[0].strip().lower() in OFF_DOMAIN_HOSTNAMES:
+            seen_at_gateway.append({"path": e.get("path"), "host": host})
+
+    counted = 0
+    for e in audit_entries:
+        for field in ("blocked_navigation_attempts", "blocked_resource_requests"):
+            value = e.get(field)
+            if isinstance(value, int) and value > 0:
+                counted += value
+
+    attempted, reached_network = _webview_off_domain_evidence(logcat)
+
+    if not (seen_at_gateway or counted or attempted):
         fail(
-            "gateway.off_domain_blocked",
-            f"off-domain hostnames leaked into the gateway: {leaks}",
+            "off_domain.not_exercised",
+            "no evidence of ANY off-domain activity: nothing reached the "
+            "gateway, both audit counters are 0, and the WebView never logged "
+            "an off-domain host. The off-domain claim is UNPROVEN by this run "
+            "— it is not passing, it simply never happened. See issue #120.",
+            failures,
+        )
+        return
+
+    ok(
+        "off_domain.exercised",
+        f"gateway={len(seen_at_gateway)} counted={counted} "
+        f"webview_logged={attempted} reached_network={reached_network}",
+    )
+
+    # The #119 regression guard: having attempted off-domain traffic, the app
+    # must not have refused it. Allow leaves one of three traces — the request
+    # reached the gateway, an audit counter fired, or the network stack itself
+    # reported the outcome. A refusal leaves none of the three, because it
+    # short-circuits before any of them can happen.
+    if attempted and not (reached_network or counted or seen_at_gateway):
+        fail(
+            "off_domain.allowed",
+            "the WebView named an off-domain host but the request never "
+            "reached the network stack, nothing was counted and nothing "
+            "reached the gateway — the signature of refusing off-domain "
+            "traffic again, which breaks cross-host sign-in on Meraki / "
+            "Cisco ISE / UniFi (see #119)",
             failures,
         )
     else:
-        ok("gateway.off_domain_blocked", "no off-domain requests observed")
+        ok("off_domain.allowed", "off-domain traffic was allowed, not refused")
 
 
 def _webview_attempted_sentinel(logcat: str) -> bool:
@@ -285,6 +434,14 @@ def main(argv: list[str]) -> int:
 
     root = Path(argv[1])
     failures: list[str] = []
+    # Read once, up front: sections D and E both need logcat, and E needs the
+    # audit and gateway entries the sections below parse for their own use.
+    logcat_path = root / "logcat.txt"
+    logcat_text = (
+        logcat_path.read_text(errors="replace") if logcat_path.exists() else ""
+    )
+    audit_entries: list[dict[str, Any]] = []
+    gateway_entries: list[dict[str, Any]] = []
 
     scenario_path = root / "scenario-report.json"
     if not scenario_path.exists():
@@ -298,20 +455,26 @@ def main(argv: list[str]) -> int:
         failures.append("audit.file: audit_log.jsonl missing or empty")
         print(f"  ✗ audit_log.jsonl missing or empty in {root}", file=sys.stderr)
     else:
-        entries = [
+        audit_entries = [
             json.loads(line)
             for line in audit_path.read_text().splitlines()
             if line.strip()
         ]
-        check_app_audit(entries, failures)
+        check_app_audit(audit_entries, failures)
 
     gateway_path = root / "gateway-log.json"
     if not gateway_path.exists():
         failures.append("gateway.file: gateway-log.json missing")
         print(f"  ✗ gateway-log.json missing in {root}", file=sys.stderr)
     else:
-        entries = json.loads(gateway_path.read_text())
-        check_gateway_log(entries, report, failures)
+        gateway_entries = json.loads(gateway_path.read_text())
+        check_gateway_log(gateway_entries, report, failures)
+
+    # E. Off-domain traffic — needs the gateway log, the audit log AND logcat,
+    # so it runs after both have been read. Missing artifacts leave their lists
+    # empty, which check_off_domain correctly treats as "no evidence" rather
+    # than as a pass.
+    check_off_domain(gateway_entries, audit_entries, logcat_text, failures)
 
     sink_path = root / "vpn-sink.jsonl"
     if not sink_path.exists() or sink_path.stat().st_size == 0:
@@ -324,10 +487,6 @@ def main(argv: list[str]) -> int:
             if line.strip()
         ]
         # D2 positive control: did the WebView actually attempt the sentinel?
-        logcat_path = root / "logcat.txt"
-        logcat_text = (
-            logcat_path.read_text(errors="replace") if logcat_path.exists() else ""
-        )
         sentinel_attempted = _webview_attempted_sentinel(logcat_text)
         check_vpn_confinement(sink_lines, failures, sentinel_attempted)
 
