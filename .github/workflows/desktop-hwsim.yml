@@ -46,26 +46,68 @@ jobs:
       #
       # Scoped to the runner's own scratch workspace, which actions/checkout
       # recreates from scratch on the next line.
+      # This step must be able to explain its own failure. The first version
+      # could not: it ran `sudo find … 2>/dev/null` under `set -euo pipefail`,
+      # so any non-zero exit anywhere in that pipeline killed the script before
+      # its first echo, with the explanation discarded down /dev/null. Run
+      # 30660844694 failed with exit 1 and ZERO stdout, which is consistent with
+      # several unrelated causes and distinguishes none of them.
+      #
+      # So: no stderr suppression, no sudo in the detection path (listing needs
+      # no privilege), and sudo probed explicitly before it is relied on.
       - name: Clear foreign-owned residue from the reused workspace
         run: |
-          set -euo pipefail
+          # GitHub invokes this as `bash -e {0}`, so -e is already active and an
+          # inner `set -uo pipefail` does NOT clear it. Turn it off explicitly:
+          # every failure below is handled and reported by name, and inheriting
+          # -e would abort at the first one — which is the exact way the previous
+          # version managed to fail with no output at all.
+          set +e
+          set -uo pipefail
           target="${GITHUB_WORKSPACE:?}"
+          me="$(id -un)"
+          echo "workspace : $target"
+          echo "runner user: $me ($(id -u))"
+
           if [ ! -d "$target" ]; then
             echo "workspace does not exist yet — nothing to clear"
             exit 0
           fi
-          stale=$(sudo find "$target" ! -user "$(id -un)" -print 2>/dev/null | wc -l)
+
+          # Detection needs no privilege — listing ownership is readable by all.
+          # Deliberately NOT piped, so find's own exit status is visible.
+          find "$target" ! -user "$me" -print > /tmp/hwsim-stale.txt
+          find_rc=$?
+          stale=$(wc -l < /tmp/hwsim-stale.txt)
+          echo "find exit=$find_rc, foreign-owned entries=$stale"
+
           if [ "$stale" -eq 0 ]; then
-            echo "workspace is clean (no foreign-owned entries)"
+            echo "workspace is clean"
             exit 0
           fi
-          echo "removing $stale foreign-owned entr(y|ies) left by a previous run:"
-          sudo find "$target" ! -user "$(id -un)" -print 2>/dev/null | head -20
-          sudo find "$target" ! -user "$(id -un)" -delete 2>/dev/null || true
-          remaining=$(sudo find "$target" ! -user "$(id -un)" -print 2>/dev/null | wc -l)
+
+          echo "--- entries to remove (first 20) ---"
+          head -20 /tmp/hwsim-stale.txt
+
+          # Removal DOES need real root: the residue is owned by `nobody`
+          # (userns-mapped root), which the runner user cannot unlink.
+          if ! sudo -n true; then
+            echo "::error::passwordless sudo is unavailable, so the $stale" \
+                 "foreign-owned entr(y|ies) above cannot be removed and" \
+                 "actions/checkout will fail on them. The runner user needs" \
+                 "NOPASSWD sudo — the harness step needs it too (see README)."
+            exit 1
+          fi
+
+          sudo find "$target" ! -user "$me" -delete
+          echo "delete exit=$?"
+
+          find "$target" ! -user "$me" -print > /tmp/hwsim-stale.txt
+          remaining=$(wc -l < /tmp/hwsim-stale.txt)
           if [ "$remaining" -ne 0 ]; then
-            echo "::error::could not clear $remaining foreign-owned entr(y|ies); checkout will fail"
-            sudo find "$target" ! -user "$(id -un)" -print 2>/dev/null | head -20
+            echo "::error::$remaining foreign-owned entr(y|ies) survived removal;" \
+                 "checkout will fail on them"
+            head -20 /tmp/hwsim-stale.txt
             exit 1
           fi
           echo "workspace cleared"
