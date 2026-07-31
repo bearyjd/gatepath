@@ -41,7 +41,21 @@ usage() { sed -n '2,40p' "$0" | sed 's/^# \{0,1\}//'; exit 0; }
 
 while [ $# -gt 0 ]; do
   case "$1" in
-    --dhcp) DHCP_MODE="${2:-}"; shift 2 || true ;;
+    # `shift 2 || true` here spun forever when --dhcp was the last argument:
+    # shift fails with only one positional left, || true swallows it, $# never
+    # decreases, and $1 stays --dhcp on every iteration. The value check below
+    # the loop is unreachable because the loop does not end. Easy to hit — a
+    # wrapped `--dhcp static` in a terminal loses the value — and it presents
+    # as a harness that is slowly working rather than one that is stuck.
+    --dhcp)
+      # A following flag is a missing value, not a value. Without this,
+      # `--dhcp --webview` consumes --webview and then complains that
+      # "--dhcp must be 'static' or 'real', got '--webview'" — pointing at
+      # the one flag the user typed correctly.
+      case "${2-}" in
+        ""|-*) die "--dhcp needs a value ('static' or 'real'); use --dhcp=static to avoid line-wrap eating it" ;;
+      esac
+      DHCP_MODE="$2"; shift 2 ;;
     --dhcp=*) DHCP_MODE="${1#*=}"; shift ;;
     --webview) WEBVIEW=1; shift ;;
     --keep) KEEP=1; shift ;;
