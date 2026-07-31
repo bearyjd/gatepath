@@ -12,6 +12,13 @@ finish-args:
   - --share=network
   - --system-talk-name=org.freedesktop.NetworkManager
   - --system-talk-name=org.freedesktop.resolve1
+  # On a host that also has the netns helper installed (RPM / sysext), this
+  # lets the Flatpak reach it and upgrade to the kernel-enforced confined
+  # path instead of rendering the portal unconfined. Without it
+  # NetnsClient.connect() always raises HelperUnavailable inside the sandbox,
+  # so those users silently got the weakest configuration. Deliberate call,
+  # recorded in docs/SECURITY_MODEL.md — see #126 for the trade-off.
+  - --system-talk-name=com.ventouxlabs.Gatepath.NetNsHelper
   - --filesystem=xdg-data/gatepath:create
   - --filesystem=xdg-cache/gatepath:create
   - --talk-name=org.freedesktop.portal.Desktop

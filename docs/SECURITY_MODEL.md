@@ -292,6 +292,59 @@ hwsim-validated, not production-validated. Deployment of the helper on atomic
 distros (e.g. Bazzite) is analysed in
 [`DESKTOP_NETNS_DEPLOYMENT.md`](DESKTOP_NETNS_DEPLOYMENT.md).
 
+### Decision: the Flatpak MAY reach the netns helper (#126)
+
+The Flatpak manifest grants
+`--system-talk-name=com.ventouxlabs.Gatepath.NetNsHelper`. On a host where the
+helper is **also** installed (RPM or sysext), the sandboxed app therefore
+upgrades to the confined netns path rather than rendering the portal on the
+normal route with only a VPN warning.
+
+Before this, `NetnsClient.connect()` always raised `HelperUnavailable` inside
+the sandbox, so a user who had installed both components silently received the
+*weakest* configuration Gatepath ships. The helper never excluded the Flatpak —
+its bus policy allows any caller, and authorisation is polkit, not bus policy —
+so the missing grant was the only thing in the way.
+
+**This is a real trade, not a pure upgrade.** `LaunchPortal` spawns the portal
+runner on the host as the calling user, so the portal page renders **outside**
+Flatpak confinement, inside a netns instead:
+
+| | Flatpak sandbox | netns (helper) |
+|---|---|---|
+| Network isolation | none beyond `--share=network` | kernel-enforced no-leak |
+| Filesystem / syscall isolation | strong | host-level, user UID |
+
+We take the netns side deliberately, because this document is explicit that the
+product's core claim is *network* isolation — preventing captive-portal traffic
+from leaking onto the trusted network or a VPN. A user who installs the helper
+has opted into exactly that.
+
+**Residual risk, stated plainly.** The Flatpak renders attacker-controlled
+HTML/JS from a captive gateway in WebKit, which is a realistic RCE surface. With
+this grant, a sandbox escape also inherits a line to the helper. What that
+actually buys an attacker is bounded:
+
+- `SetupCaptive` / `TeardownCaptive` are polkit `auth_admin_keep` — an admin
+  password, cached thereafter.
+- `LaunchPortal` is **not** polkit-gated. It is gated on an active session
+  already existing, on the caller being the same D-Bus sender that created it,
+  and on a **compile-time-fixed** exec path (`PORTAL_RUNNER_PATH`) with
+  validated URL and display-environment arguments. It is not arbitrary process
+  spawn.
+
+So the escalation requires the app to already hold an authorised session, and
+yields a re-spawn of the fixed runner rather than arbitrary code execution as
+the user. Narrowing it further — a distinct polkit action for `LaunchPortal` —
+was considered and deferred: the helper's throttle exists specifically to avoid
+a prompt per call, and adding one would regress that UX for a bounded gain.
+
+**Untested at the time of writing:** whether a polkit `auth_admin_keep` prompt
+reaches the user cleanly from a Flatpak-confined caller, and what subject
+`polkitd` attributes to it. If it does not, dual-install users fall back to the
+unconfined path exactly as before — the grant cannot make things worse than the
+status quo it replaces.
+
 ### Caveat — desktop tracker-resource requests are logged, not blocked
 
 On Android, `WebViewClient.shouldInterceptRequest` lets Gatepath cancel requests to
