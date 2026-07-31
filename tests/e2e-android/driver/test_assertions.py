@@ -1,4 +1,10 @@
-"""Unit tests for the VPN-sink no-leak assertion."""
+"""Unit tests for the VPN-sink no-leak assertion.
+
+NOTE: this shares a basename with tests/e2e-docker/driver/test_assertions.py,
+and neither dir has an __init__.py. Run them in SEPARATE pytest invocations
+(see .github/workflows/e2e-driver-tests.yml) — one invocation over both errors
+out with "import file mismatch" before running anything.
+"""
 from __future__ import annotations
 
 import assertions

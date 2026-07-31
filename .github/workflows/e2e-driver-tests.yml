@@ -1,0 +1,61 @@
+name: e2e-driver-tests
+
+# The host-side assertion passes for both e2e harnesses have unit tests, and
+# until now nothing ran them: android.yml / desktop.yml are path-filtered to
+# android/** and desktop/**, and the two e2e workflows invoke assertions.py
+# against real artifacts without ever executing its test suite. So the code
+# that decides whether an e2e run PASSED was itself unverified in CI.
+#
+# That matters more here than it usually would. Both harnesses have now shipped
+# an assertion that could not fail (#120 desktop, #134 android) — the failure
+# mode is always the same, a pass branch that fires when nothing happened, and
+# it is only ever caught by tests that exercise the assertion directly rather
+# than by running the harness.
+#
+# These suites are pure-Python and need nothing but pytest, so they gate every
+# PR that touches either driver.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'tests/e2e-android/driver/**'
+      - 'tests/e2e-android/scenario/**'
+      - 'tests/e2e-docker/driver/**'
+      - '.github/workflows/e2e-driver-tests.yml'
+  pull_request:
+    paths:
+      - 'tests/e2e-android/driver/**'
+      - 'tests/e2e-android/scenario/**'
+      - 'tests/e2e-docker/driver/**'
+      - '.github/workflows/e2e-driver-tests.yml'
+
+jobs:
+  driver-assertions:
+    name: e2e assertion unit tests (android + desktop)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - name: Install pytest
+        run: python -m pip install --upgrade pip pytest
+      # Run separately, one rootdir each. Collecting both in a single pytest
+      # invocation errors out: the two suites share the basename
+      # test_assertions.py with no __init__.py, so the second is refused as an
+      # "import file mismatch". (Their `assertions` modules collide the same
+      # way — pytest just rejects the test module first.)
+      - name: Android e2e driver assertions
+        working-directory: tests/e2e-android/driver
+        run: python -m pytest test_assertions.py -v
+      - name: Desktop e2e driver assertions
+        working-directory: tests/e2e-docker/driver
+        run: python -m pytest test_assertions.py -v
+      # The scenario writes the artifacts the assertions read, so a bug there
+      # is indistinguishable from a bug in the app (#136: teardown clobbered
+      # logcat.txt, and the off-domain positive control flipped verdict between
+      # two runs of identical app behaviour). Guarded here for the same reason.
+      - name: Android e2e scenario artifact capture
+        working-directory: tests/e2e-android/scenario
+        run: python -m pytest test_logcat_capture.py -v

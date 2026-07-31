@@ -140,26 +140,61 @@ def check_gateway_log(entries: list[dict[str, Any]], scenario_report: dict[str, 
         return
     ok("gateway.entries", f"{len(entries)} entries")
 
-    # If the WebView actually stayed alive through the dwell, we expect
-    # it to have requested /portal. In the stripped container env (no
-    # session bus, no GNOME services), WebKit's renderer exits 2 on
-    # startup — when that happened we still want the rest of the
-    # assertions to pass since the whole pipeline downstream of the
-    # spawn (audit log, teardown, ...) is what's actually under test.
+    # A dead WebView subprocess used to wave this whole section through, on the
+    # grounds that the stripped container env (no session bus, no GNOME
+    # services) kills WebKit's renderer and that the pipeline downstream of the
+    # spawn is what's under test.
+    #
+    # That excuse is stale, and it was load-bearing in the wrong direction.
+    # check_gateway_log is reached ONLY on the non-skipped path — the
+    # privileged, real-PHY substrate whose entire purpose is to run the portal
+    # (the veth substrate returns at check_scenario_skipped and never gets
+    # here). On that path a dead WebView does not mean "environment couldn't
+    # cope", it means the run proved nothing about the portal, and both checks
+    # below are unevaluated rather than satisfied.
+    #
+    # This is exactly how #118 survived: WebView construction failed on WebKit
+    # 6.0 *completely*, and the harness reported ✓ twice on its way past. Per
+    # CLAUDE.md, a step can succeed without the invariant it was meant to prove
+    # actually holding — so "nothing happened" hard-fails here. See #120.
+    # Absent signal and false signal are different bugs and must not share a
+    # message. `.get(...).get(...)` returns None for a missing step, a renamed
+    # step, or a report that never recorded the key — reading that as "the
+    # WebView died" would send the next engineer to debug WebKit when the real
+    # problem is that the scenario report drifted.
     steps = {s["name"]: s for s in scenario_report.get("steps", [])}
-    webview_alive = (steps.get("dwell_and_screenshot", {})
-                    .get("data", {})
-                    .get("subprocess_alive"))
-    if webview_alive:
-        if any(e.get("path") == "/portal" for e in entries):
-            ok("gateway.portal_hit", "/portal was requested by the live WebView")
-        else:
-            fail("gateway.portal_hit",
-                 "WebView stayed up but never requested /portal", failures)
+    dwell = steps.get("dwell_and_screenshot")
+    if dwell is None or "subprocess_alive" not in (dwell.get("data") or {}):
+        fail("gateway.portal_hit",
+             "the scenario report has no dwell_and_screenshot.subprocess_alive, "
+             "so whether the WebView ran is UNKNOWN and section C cannot be "
+             "evaluated. This is harness/report drift, not a WebView bug — fix "
+             "run-scenario.py before reading anything into the checks below",
+             failures)
+        fail("gateway.off_domain_confined",
+             "not evaluated: WebView liveness unknown (see gateway.portal_hit)",
+             failures)
+        return
+
+    if not dwell["data"]["subprocess_alive"]:
+        fail("gateway.portal_hit",
+             "the WebView subprocess exited before the dwell, so the portal "
+             "was never loaded and NOTHING in section C was evaluated. This is "
+             "not a pass — it is missing coverage. Check the client container's "
+             "WebKit 6.0 startup first (see #118, #120)",
+             failures)
+        fail("gateway.off_domain_confined",
+             "not evaluated: the WebView never ran, so no off-domain traffic "
+             "could be generated to judge. The confinement claim is UNPROVEN "
+             "by this run, which is not the same as satisfied (#120)",
+             failures)
+        return
+
+    if any(e.get("path") == "/portal" for e in entries):
+        ok("gateway.portal_hit", "/portal was requested by the live WebView")
     else:
-        ok("gateway.portal_hit",
-           "WebView subprocess exited before dwell (likely GTK/WebKit "
-           "unavailable in the stripped container); skipping /portal check")
+        fail("gateway.portal_hit",
+             "WebView stayed up but never requested /portal", failures)
 
     # Off-domain traffic is ALLOWED and COUNTED, not refused — on both
     # platforms and by design. Android stopped refusing off-domain navigation
@@ -185,10 +220,15 @@ def check_gateway_log(entries: list[dict[str, Any]], scenario_report: dict[str, 
         if host_only in OFF_DOMAIN_HOSTNAMES:
             off_domain_seen.append({"path": e.get("path"), "host": host})
 
-    portal_loaded = webview_alive and any(e.get("path") == "/portal" for e in entries)
-    if not portal_loaded:
-        ok("gateway.off_domain_confined",
-           "WebView never loaded /portal; no off-domain traffic to judge")
+    # The WebView is known alive here (dead exits above), so the only remaining
+    # question is whether the portal page itself loaded. If it did not, there is
+    # again nothing to judge — and again that is missing coverage, not a pass.
+    if not any(e.get("path") == "/portal" for e in entries):
+        fail("gateway.off_domain_confined",
+             "not evaluated: the WebView was alive but never loaded /portal, "
+             "so the page that references the off-domain hosts never ran. The "
+             "confinement claim is UNPROVEN by this run (#120)",
+             failures)
     elif off_domain_seen:
         ok("gateway.off_domain_confined",
            f"{len(off_domain_seen)} off-domain request(s) served by the captive "
@@ -328,6 +368,10 @@ def main(argv: list[str]) -> int:
             print(f"  ✗ gateway-log.json missing in {root}", file=sys.stderr)
         else:
             entries = json.loads(gateway_path.read_text())
+            # Reached only on the privileged path. check_gateway_log hard-fails
+            # on a dead WebView, which is correct HERE — this substrate exists
+            # to load the portal — and would be wrong on any substrate that
+            # never runs it. Keep this call inside the non-skipped branch.
             check_gateway_log(entries, report, failures)
 
         check_confinement(report, root, failures)
