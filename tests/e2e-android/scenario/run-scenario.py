@@ -486,6 +486,22 @@ def step_wait_validated(state: dict) -> dict:
     raise RuntimeError(f"WIFI network never reached IS_VALIDATED within {window}s")
 
 
+def should_write_fallback_logcat(path: Path) -> bool:
+    """Should the teardown handler write its bounded-tail logcat?
+
+    Only when nothing usable is there already. [step_pull_logcat] captures the
+    FULL post-clear buffer precisely because a `-t` window buries the WebView
+    lines the positive controls grep for; overwriting that with a tail
+    reintroduces the exact problem it exists to avoid.
+
+    The safety net is still needed for the case it was written for — the
+    scenario short-circuits on the first failing step, so on a mid-scenario
+    failure pull_logcat never runs and there would otherwise be no device log
+    to diagnose from.
+    """
+    return not path.exists() or path.stat().st_size == 0
+
+
 def step_pull_logcat(state: dict) -> dict:
     serial = state["serial"]
     # Full post-clear buffer (launch_debug_portal cleared it just before the
@@ -629,11 +645,18 @@ def main() -> int:
                 )
             except Exception:  # noqa: BLE001 — teardown must never mask the rc
                 pass
+            # Only if pull_logcat did not already capture the full buffer —
+            # otherwise this tail CLOBBERS it, and the positive controls that
+            # grep for GatepathWebView lines start passing or failing on where
+            # the 3000-line boundary happens to land. See #134/#135: two runs
+            # of the same app behaviour disagreed for exactly this reason.
             try:
-                log = adb_helper.shell(
-                    serial, "logcat -d -t 3000", timeout=20, check=False
-                )
-                (state["artifacts_dir"] / "logcat.txt").write_text(log)
+                log_path = state["artifacts_dir"] / "logcat.txt"
+                if should_write_fallback_logcat(log_path):
+                    log = adb_helper.shell(
+                        serial, "logcat -d -t 3000", timeout=20, check=False
+                    )
+                    log_path.write_text(log)
             except Exception:  # noqa: BLE001 — diagnostics must never mask the rc
                 pass
         report_path = state["artifacts_dir"] / "scenario-report.json"
