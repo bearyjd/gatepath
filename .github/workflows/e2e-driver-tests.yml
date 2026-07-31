@@ -20,11 +20,13 @@ on:
     branches: [main]
     paths:
       - 'tests/e2e-android/driver/**'
+      - 'tests/e2e-android/scenario/**'
       - 'tests/e2e-docker/driver/**'
       - '.github/workflows/e2e-driver-tests.yml'
   pull_request:
     paths:
       - 'tests/e2e-android/driver/**'
+      - 'tests/e2e-android/scenario/**'
       - 'tests/e2e-docker/driver/**'
       - '.github/workflows/e2e-driver-tests.yml'
 
@@ -50,3 +52,10 @@ jobs:
       - name: Desktop e2e driver assertions
         working-directory: tests/e2e-docker/driver
         run: python -m pytest test_assertions.py -v
+      # The scenario writes the artifacts the assertions read, so a bug there
+      # is indistinguishable from a bug in the app (#136: teardown clobbered
+      # logcat.txt, and the off-domain positive control flipped verdict between
+      # two runs of identical app behaviour). Guarded here for the same reason.
+      - name: Android e2e scenario artifact capture
+        working-directory: tests/e2e-android/scenario
+        run: python -m pytest test_logcat_capture.py -v
