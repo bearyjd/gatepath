@@ -29,6 +29,47 @@ jobs:
     runs-on: [self-hosted, gatepath-hwsim]
     timeout-minutes: 30
     steps:
+      # MUST come before checkout. run.sh already sets PYTHONDONTWRITEBYTECODE=1
+      # so it stops CREATING root-owned .pyc in the reused workspace — but that
+      # prevention can never take effect while residue from an earlier run is
+      # still present, because checkout is step 1 and run.sh is step 3.
+      # actions/checkout dies trying to unlink the leftovers:
+      #
+      #   EACCES: permission denied, unlink '.../mockportal/__pycache__/*.pyc'
+      #
+      # and the job is over in ~4s having proven nothing. Every dispatch since
+      # 2026-06-30 failed exactly here, including 30660617917.
+      #
+      # Note the residue is owned by `nobody`, not by uid 0 — the harness writes
+      # it from inside a user namespace, so a userns-mapped root lands as 65534
+      # outside. Searching for root-owned files finds nothing and looks clean.
+      #
+      # Scoped to the runner's own scratch workspace, which actions/checkout
+      # recreates from scratch on the next line.
+      - name: Clear foreign-owned residue from the reused workspace
+        run: |
+          set -euo pipefail
+          target="${GITHUB_WORKSPACE:?}"
+          if [ ! -d "$target" ]; then
+            echo "workspace does not exist yet — nothing to clear"
+            exit 0
+          fi
+          stale=$(sudo find "$target" ! -user "$(id -un)" -print 2>/dev/null | wc -l)
+          if [ "$stale" -eq 0 ]; then
+            echo "workspace is clean (no foreign-owned entries)"
+            exit 0
+          fi
+          echo "removing $stale foreign-owned entr(y|ies) left by a previous run:"
+          sudo find "$target" ! -user "$(id -un)" -print 2>/dev/null | head -20
+          sudo find "$target" ! -user "$(id -un)" -delete 2>/dev/null || true
+          remaining=$(sudo find "$target" ! -user "$(id -un)" -print 2>/dev/null | wc -l)
+          if [ "$remaining" -ne 0 ]; then
+            echo "::error::could not clear $remaining foreign-owned entr(y|ies); checkout will fail"
+            sudo find "$target" ! -user "$(id -un)" -print 2>/dev/null | head -20
+            exit 1
+          fi
+          echo "workspace cleared"
+
       - uses: actions/checkout@v7
 
       # Builds the helper as the (non-root) runner user; bootstraps rustup into
