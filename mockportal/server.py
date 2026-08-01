@@ -56,6 +56,19 @@ PORTAL_LEAK_SENTINEL = os.environ.get("PORTAL_LEAK_SENTINEL", "")
 PORTAL_DATE_SKEW_SECONDS = int(os.environ.get("PORTAL_DATE_SKEW_SECONDS", "0"))
 
 
+# The two off-domain references below are the fixture's off-domain oracle: the
+# e2e gateways hijack DNS so every hostname resolves to the captive gateway, and
+# the assertions check that these requests DO arrive there — off-domain traffic
+# is allowed and counted by design on both platforms, and the security claim is
+# that it stays confined to the captive side, not that it never happens.
+#
+# They are `http://` deliberately, and it matters. Both gateways serve plain
+# HTTP only (tests/e2e-docker's nginx has one `listen 80 default_server` and no
+# ssl_certificate; the hwsim harness runs this server on PORTAL_PORT=80). While
+# these were `https://`, the request went to port 443 where nothing listens, so
+# it never reached any gateway log and the oracle could not fire on any
+# substrate — which read as the app refusing the request rather than the
+# fixture aiming it at a closed port. See #120.
 PORTAL_HTML = """<!doctype html>
 <html><body>
 <h1>Test Portal</h1>
@@ -63,8 +76,8 @@ PORTAL_HTML = """<!doctype html>
   <input name="user" placeholder="username">
   <button type="submit">Connect</button>
 </form>
-<script src="https://evil-tracker.example.com/track.js"></script>
-<a href="https://external-site.example.com">External link</a>
+<script src="http://evil-tracker.example.com/track.js"></script>
+<a href="http://external-site.example.com">External link</a>
 </body></html>
 """
 

@@ -312,7 +312,7 @@ fi
 [ -x "$HELPER_BIN" ] || die "helper binary not found at $HELPER_BIN — run: bash tests/e2e-hwsim/build-helper.sh"
 ok "helper binary present: $HELPER_BIN"
 
-for t in iw wpa_supplicant dnsmasq nmcli ip python3 busctl modprobe; do
+for t in iw wpa_supplicant dnsmasq nmcli ip python3 busctl modprobe jq curl; do
   have "$t" || die "required tool missing: $t"
 done
 have curl || warn "curl not found — the in-netns runner needs it; install curl"
@@ -889,6 +889,53 @@ if [ -s "$RUNNER_VERDICT" ]; then
       note_fail "WEBVIEW: --webview was requested but the WebView never started (webview_ok=$w_ok); see $RUNNER_LOG"
     fi
   fi
+  # --- Off-domain confinement (#120) ---
+  # Gated on the WebView having actually run: only it loads the portal PAGE and
+  # therefore fetches the page's off-domain subresource. The curl probe above
+  # requests /portal and reads nothing, so without --webview there is no
+  # off-domain traffic to judge and this is not evaluated — reported as such,
+  # never as a pass. That distinction is the whole subject of #120.
+  #
+  # What this proves: dnsmasq answers every name with the AP address, so an
+  # ALLOWED off-domain request lands on the captive gateway and shows up in
+  # mockportal's /log with its original Host header. Arriving there is the
+  # evidence of confinement — the captive side saw it and the trusted side did
+  # not (that half is the sentinel above). Off-domain traffic is allowed and
+  # counted by design on both platforms since #119; the claim was never that it
+  # does not happen.
+  if [ "$WEBVIEW" -eq 1 ] && [ "${w_ok:-}" = "true" ]; then
+    if apx curl -sS -m 6 -o "$WORKDIR/gateway-log.json" "http://$AP_ADDR/log"; then
+      od_hosts="$(python3 - "$WORKDIR/gateway-log.json" <<'PY' 2>/dev/null
+import json, sys
+OFF_DOMAIN = {"evil-tracker.example.com", "external-site.example.com"}
+try:
+    entries = json.load(open(sys.argv[1]))
+except (OSError, ValueError):
+    sys.exit(0)
+seen = set()
+for e in entries:
+    headers = e.get("headers") or {}
+    host = headers.get("Host") or headers.get("host") or ""
+    host = host.split(":", 1)[0].strip().lower()
+    if host in OFF_DOMAIN:
+        seen.add(host)
+print(",".join(sorted(seen)))
+PY
+)"
+      if [ -n "$od_hosts" ]; then
+        ok "OFF-DOMAIN CONFINED: reached the captive gateway, not the trusted net ($od_hosts)"
+      else
+        note_fail "OFF-DOMAIN: the portal page loaded but no off-domain request reached the gateway — either something refused it (the #119 regression) or the fixture is aiming it at a port the gateway does not serve (see #120); gateway log in $WORKDIR/gateway-log.json"
+      fi
+    else
+      note_fail "OFF-DOMAIN: could not fetch the gateway request log from http://$AP_ADDR/log — claim NOT evaluated"
+    fi
+  elif [ "$WEBVIEW" -eq 1 ]; then
+    log "off-domain: not evaluated (WebView did not start; see the WEBVIEW failure above)"
+  else
+    log "off-domain: not evaluated — needs --webview, since only the WebView loads the portal page and its subresources"
+  fi
+
   if [ "$p_rc" = "0" ]; then
     ok "portal reachable from inside the netns (http $p_code)"
   else

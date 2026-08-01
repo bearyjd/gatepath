@@ -98,6 +98,30 @@ def test_portal_page_contains_login_form(portal: str) -> None:
     assert "external-site.example.com" in body
 
 
+def test_off_domain_subresource_is_reachable_at_the_captive_gateway(
+    portal: str,
+) -> None:
+    """The off-domain subresource must be http, or the oracle cannot fire.
+
+    Both e2e gateways hijack DNS so every hostname resolves to the captive
+    gateway, and both serve **plain HTTP only** — `tests/e2e-docker`'s nginx has
+    a single `listen 80 default_server` and no `ssl_certificate` at all, and the
+    hwsim harness points mockportal at `PORTAL_PORT=80`.
+
+    So while this tag said `https://`, the request went to the gateway on port
+    443, where nothing listens, and never appeared in `/log`. That is why
+    `gateway.off_domain_confined` had never fired on any substrate: not because
+    the app refused the request, but because the fixture aimed it at a closed
+    port. Post-#135 that reads as a hard failure blaming the app.
+
+    Asserting on the scheme rather than just the hostname, because the hostname
+    was present the entire time this was broken. See #120.
+    """
+    body = _open(f"{portal}/portal").read().decode("utf-8")
+    assert 'src="http://evil-tracker.example.com' in body, body
+    assert "https://evil-tracker.example.com" not in body, body
+
+
 def test_login_redirects_to_probe(portal: str) -> None:
     resp = _open(f"{portal}/login", method="POST", data=b"user=tester")
     assert resp.status == 302
