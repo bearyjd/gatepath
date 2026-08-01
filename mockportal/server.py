@@ -17,7 +17,10 @@ Behavior:
                         redirect at all), as Cisco/Meraki-style gateways do.
   GET /intercept-refresh-header -> 200 carrying a `Refresh: 0; url=/portal` header.
   GET /intercept-meta           -> 200 whose body carries a meta-refresh to /portal.
-                        All three are stateless and model gateways that never
+  GET /intercept-script         -> 200 whose body bounces via inline
+                        `top.location.href` with no header and no meta tag —
+                        the shape captured from a real affected gateway.
+                        All four are stateless and model gateways that never
                         emit a 3xx for the connectivity check.
   All responses     -> automatic Date header is offset by PORTAL_DATE_SKEW_SECONDS
                         (default 0, i.e. inert — normal, unskewed header).
@@ -241,6 +244,19 @@ def _make_handler(
                     "</head><body>redirecting</body></html>"
                 ).encode("utf-8")
                 self._send(200, body, {"Content-Type": "text/html; charset=utf-8"})
+                return
+            if self.path.startswith("/intercept-script"):
+                # Shape captured from a real affected gateway: 200 whose entire
+                # body is a one-line scripted bounce, with no Refresh header and
+                # no meta-refresh. This is the variant that actually shipped in
+                # the wild; the header/meta ones above are the documented forms.
+                body = (
+                    "<html><head></head><body>"
+                    '<script type="text/javascript" language="javascript">'
+                    f'top.location.href="{portal_url}";'
+                    "</script></body></html>"
+                ).encode("utf-8")
+                self._send(200, body, {"Content-Type": "text/html"})
                 return
             if self.path.startswith("/loop-a"):
                 self._send(302, headers={"Location": loop_b_url})

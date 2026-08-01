@@ -87,7 +87,84 @@ class PortalRedirectHintTest {
         assertNull(PortalRedirectHint.resolve(null, html, base))
     }
 
+    // ── Scripted location assignment ────────────────────────────────────────
+
+    @Test
+    fun `field captured gateway response yields the real portal url`() {
+        // Verbatim body from an affected network (MACs and IP are from the
+        // capture; the gateway answers generate_204 with 200 and bounces via
+        // script rather than a Refresh header or meta-refresh).
+        val html =
+            """<html><head></head><body><script type="text/javascript" language="javascript">""" +
+                """top.location.href="http://10.4.4.11:8088/portal/entry?cid=52:31:4E:D9:87:EC""" +
+                """&ap=28:87:BA:E5:D8:16&ssid=guest%40erlebniswald&clientIp=10.31.1.131""" +
+                """&t=1785600822&rid=1&u=connectivitycheck.gstatic.com%2Fgenerate_204"</script></body></html>"""
+        val hint = PortalRedirectHint.resolve(null, html, base)
+        assertEquals(
+            "http://10.4.4.11:8088/portal/entry?cid=52:31:4E:D9:87:EC" +
+                "&ap=28:87:BA:E5:D8:16&ssid=guest%40erlebniswald&clientIp=10.31.1.131" +
+                "&t=1785600822&rid=1&u=connectivitycheck.gstatic.com%2Fgenerate_204",
+            hint,
+        )
+    }
+
+    @Test
+    fun `bare location assignment is found`() {
+        assertEquals(
+            "http://portal.example.com/entry",
+            PortalRedirectHint.resolve(
+                null,
+                """<script>location.href='http://portal.example.com/entry';</script>""",
+                base,
+            ),
+        )
+    }
+
+    @Test
+    fun `window location without href is found`() {
+        assertEquals(
+            "http://portal.example.com/entry",
+            PortalRedirectHint.resolve(
+                null,
+                """<script>window.location = "http://portal.example.com/entry"</script>""",
+                base,
+            ),
+        )
+    }
+
+    @Test
+    fun `location replace is found`() {
+        assertEquals(
+            "http://portal.example.com/entry",
+            PortalRedirectHint.resolve(
+                null,
+                """<script>location.replace("http://portal.example.com/entry")</script>""",
+                base,
+            ),
+        )
+    }
+
+    @Test
+    fun `scripted javascript scheme is still rejected`() {
+        assertNull(
+            PortalRedirectHint.resolve(
+                null,
+                """<script>top.location.href="javascript:alert(1)"</script>""",
+                base,
+            ),
+        )
+    }
+
     // ── Precedence ──────────────────────────────────────────────────────────
+
+    @Test
+    fun `meta refresh wins over scripted location`() {
+        val html = """
+            <meta http-equiv='refresh' content='0;url=http://from-meta.example.com/'>
+            <script>top.location.href="http://from-script.example.com/"</script>
+        """.trimIndent()
+        assertEquals("http://from-meta.example.com/", PortalRedirectHint.resolve(null, html, base))
+    }
 
     @Test
     fun `refresh header wins over meta refresh`() {

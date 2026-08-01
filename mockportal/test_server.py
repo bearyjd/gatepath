@@ -238,6 +238,16 @@ def test_intercept_meta_carries_portal_target_in_body(portal: str) -> None:
     assert f"{portal}/portal" in body
 
 
+def test_intercept_script_bounces_via_inline_script(portal: str) -> None:
+    """The variant captured from a real gateway: 200, no header, no meta tag."""
+    resp = _open(f"{portal}/intercept-script")
+    assert resp.status == 200
+    assert "Refresh" not in resp.headers
+    body = resp.read().decode("utf-8")
+    assert "http-equiv" not in body
+    assert f'top.location.href="{portal}/portal"' in body
+
+
 def test_intercept_endpoints_do_not_consume_the_probe_counter(portal: str) -> None:
     """The 200-style endpoints must be stateless.
 
@@ -245,7 +255,12 @@ def test_intercept_endpoints_do_not_consume_the_probe_counter(portal: str) -> No
     contract is counter-driven. If these consumed the counter, adding them would
     silently shift every existing probe-count assertion.
     """
-    for path in ("/intercept-200", "/intercept-refresh-header", "/intercept-meta"):
+    for path in (
+        "/intercept-200",
+        "/intercept-refresh-header",
+        "/intercept-meta",
+        "/intercept-script",
+    ):
         _open(f"{portal}{path}")
     # /generate_204 must still redirect exactly complete_after (3) times.
     for _ in range(3):

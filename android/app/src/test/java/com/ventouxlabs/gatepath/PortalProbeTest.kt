@@ -186,6 +186,20 @@ class PortalProbeTest {
         )
     }
 
+    @Test
+    fun `200 with scripted location points at the script target`() = runBlocking {
+        resetServer()
+        // The variant actually observed in the field: no Refresh header, no
+        // meta-refresh, just top.location.href in an inline script.
+        val result = probe.probe(network = null, testUrl = "$baseUrl/intercept-script")
+        assertTrue("Expected Portal but got $result", result is ProbeResult.Portal)
+        val portal = result as ProbeResult.Portal
+        assertTrue(
+            "Should recover /portal from the script, got ${portal.locationUrl}",
+            portal.locationUrl.endsWith("/portal"),
+        )
+    }
+
     // ── Non-200, non-204, non-3xx is still an Error ─────────────────────────
 
     @Test

@@ -47,15 +47,34 @@ object PortalRedirectHint {
     private val META_TAG = Regex("""<meta\s[^>]*>""", RegexOption.IGNORE_CASE)
 
     /**
+     * `top.location.href = "..."` and friends — the third redirect form seen in
+     * the field, used by gateways that emit neither a Refresh header nor a
+     * meta-refresh. Covers the `top.` / `window.` / `self.` / `parent.`
+     * prefixes, an optional `.href`, and `location.replace("...")`.
+     *
+     * This is a deliberately shallow string match, not JavaScript evaluation:
+     * it recovers the portal URL for the common one-line bounce and gives up on
+     * anything more elaborate, which is the correct trade for untrusted input.
+     */
+    private val JS_LOCATION = Regex(
+        """(?:top|window|self|parent)?\.?location(?:\.href)?\s*(?:=|\.replace\s*\()\s*["']([^"']+)["']""",
+        RegexOption.IGNORE_CASE,
+    )
+
+    /**
      * Best-effort portal location for a 200 response, or `null` when no usable
      * hint is present.
      *
      * [refreshHeader] takes precedence over [html]: a header is set by the
      * responding server itself, while body markup may have been injected into
-     * a page the gateway is proxying.
+     * a page the gateway is proxying. Within the body, a meta-refresh wins over
+     * a scripted `location` assignment — the former is declarative and
+     * unambiguous, the latter is a string match on code we do not execute.
      */
     fun resolve(refreshHeader: String?, html: String?, baseUrl: String): String? =
-        fromRefreshDirective(refreshHeader, baseUrl) ?: fromHtml(html, baseUrl)
+        fromRefreshDirective(refreshHeader, baseUrl)
+            ?: fromHtml(html, baseUrl)
+            ?: fromScriptedLocation(html, baseUrl)
 
     /** Parse a `Refresh: 0; url=...` directive value. */
     private fun fromRefreshDirective(directive: String?, baseUrl: String): String? {
@@ -75,6 +94,21 @@ object PortalRedirectHint {
             fromRefreshDirective(content, baseUrl)?.let { return it }
         }
         return null
+    }
+
+    /**
+     * Find a `location` assignment in inline script. Observed in the field on a
+     * gateway that answers the connectivity check with a 200 whose entire body
+     * is `<script>top.location.href="http://<gateway>/portal/entry?...">`.
+     *
+     * Without this, such a portal still loads — the WebView runs the script —
+     * but Gatepath would record the probe URL as the portal host, so the whole
+     * real session lands in the audit log as off-domain.
+     */
+    private fun fromScriptedLocation(html: String?, baseUrl: String): String? {
+        if (html.isNullOrEmpty()) return null
+        val match = JS_LOCATION.find(html.take(MAX_HTML_SCAN_CHARS)) ?: return null
+        return sanitize(match.groupValues.getOrNull(1), baseUrl)
     }
 
     /** Read a single attribute value out of one tag, quoted or bare. */
