@@ -54,9 +54,13 @@ portal traffic can't escape the captive compartment.
 - `ip netns add gatepath` (real).
 - **No-leak sentinel baseline:** the `trusted_net` sentinel is reachable from the
   client's host netns (proving the later in-netns confinement check is meaningful).
-- Helper JSONL audit-log writes; off-domain blocking — the portal HTML embeds
-  `evil-tracker.example.com` + an external link, and the assertion fails if
-  either Host header reaches the gateway.
+- Helper JSONL audit-log writes; off-domain **confinement** — the portal HTML
+  embeds `evil-tracker.example.com` + an external link, and the assertion
+  requires those Host headers to reach the captive gateway. That is the pass:
+  off-domain traffic is allowed and counted by design, and the claim is that it
+  stays on the captive side rather than reaching the trusted network. The
+  assertion fails if the page loaded and *no* off-domain request arrived —
+  the signature of refusing it again (#119, #120).
 
 **Needs a real Wi-Fi PHY (skipped on veth; runs on `mac80211_hwsim`/hardware):**
 - The PHY move, in-netns `wpa_supplicant`/DHCP, the WebView spawn (`systemd-run`),
