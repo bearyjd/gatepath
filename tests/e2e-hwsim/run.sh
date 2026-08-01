@@ -893,7 +893,29 @@ if [ -s "$RUNNER_VERDICT" ]; then
   if [ "$WEBVIEW" -eq 1 ]; then
     w_ok="$(jq -r '.webview_ok' "$RUNNER_VERDICT" 2>/dev/null)"
     if [ "$w_ok" = "true" ]; then
-      ok "WEBVIEW: real WebKit runner started (portal rendered in-netns)"
+      # `webview_ok` means the runner module IMPORTED, nothing more — the
+      # template sets it from `python3 -c 'import ...'` before it execs the
+      # WebView, and exec replaces the process so nothing can report back
+      # afterwards. Saying "portal rendered in-netns" here overstated it by a
+      # long way: a WebView with no display constructs fine, logs its WebKit
+      # version, and then renders nothing at all. Report what was measured.
+      ok "WEBVIEW: runner importable and exec'd (rendering NOT asserted here — see off-domain below)"
+      # Rendering evidence, such as it is: the page must have been parsed for
+      # any subresource to be requested. portal_webview only logs past its
+      # version banner once resources start loading, so a runner log that
+      # stops at that banner means the WebView never got as far as the page.
+      # Anchored to logger OUTPUT, not any mention of the module: the runner
+      # traces under `set -x`, so a bare substring match also counts the
+      # `import` probe and the `exec` line and never trips.
+      if [ "$(grep -cE '^(INFO|DEBUG|WARNING|ERROR):gatepath\.portal_webview' \
+                "$RUNNER_LOG" 2>/dev/null)" -le 1 ]; then
+        warn "WEBVIEW: the runner log stops at the WebKit version banner — the"
+        warn "  WebView constructed but never rendered. Almost always a missing"
+        warn "  display: drive.py passes empty WAYLAND_DISPLAY/DISPLAY/XAUTHORITY"
+        warn "  and the runner's XDG_RUNTIME_DIR is derived from uid 0, so"
+        warn "  window.present() has nothing to present to. Off-domain traffic"
+        warn "  cannot be exercised in that state — see #120."
+      fi
     else
       note_fail "WEBVIEW: --webview was requested but the WebView never started (webview_ok=$w_ok); see $RUNNER_LOG"
     fi
@@ -934,7 +956,7 @@ PY
       if [ -n "$od_hosts" ]; then
         ok "OFF-DOMAIN CONFINED: reached the captive gateway, not the trusted net ($od_hosts)"
       else
-        note_fail "OFF-DOMAIN: the portal page loaded but no off-domain request reached the gateway — either something refused it (the #119 regression) or the fixture is aiming it at a port the gateway does not serve (see #120); gateway log in $WORKDIR/gateway-log.json"
+        note_fail "OFF-DOMAIN: no off-domain request reached the gateway. Three causes, in descending likelihood: (a) the WebView never RENDERED, so the page was fetched but never parsed and no subresource was ever requested — check the WEBVIEW note above, this is the usual one when running headless; (b) something refused the request (the #119 regression); (c) the fixture aims it at a port the gateway does not serve (#120). Gateway log: $WORKDIR/gateway-log.json"
       fi
     else
       note_fail "OFF-DOMAIN: could not fetch the gateway request log from http://$AP_ADDR/log — claim NOT evaluated"
