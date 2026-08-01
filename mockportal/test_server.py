@@ -211,6 +211,48 @@ def test_portal_unchanged_when_sentinel_unset() -> None:
         assert body == PORTAL_HTML
 
 
+def test_intercept_200_serves_login_page_without_redirecting(portal: str) -> None:
+    """Models a gateway that answers the connectivity check with 200.
+
+    Cisco/Meraki-style intercepts never emit a 3xx — they replace the response
+    body with the login page. Android previously classified this as an error, so
+    the portal was never detected; see PortalProbe's KDoc.
+    """
+    resp = _open(f"{portal}/intercept-200")
+    assert resp.status == 200
+    body = resp.read().decode("utf-8")
+    assert "<form" in body and 'action="/login"' in body
+
+
+def test_intercept_refresh_header_carries_portal_target(portal: str) -> None:
+    resp = _open(f"{portal}/intercept-refresh-header")
+    assert resp.status == 200
+    assert resp.headers["Refresh"] == f"0; url={portal}/portal"
+
+
+def test_intercept_meta_carries_portal_target_in_body(portal: str) -> None:
+    resp = _open(f"{portal}/intercept-meta")
+    assert resp.status == 200
+    body = resp.read().decode("utf-8")
+    assert 'http-equiv="refresh"' in body
+    assert f"{portal}/portal" in body
+
+
+def test_intercept_endpoints_do_not_consume_the_probe_counter(portal: str) -> None:
+    """The 200-style endpoints must be stateless.
+
+    They share a server with /generate_204, whose redirect-then-validate
+    contract is counter-driven. If these consumed the counter, adding them would
+    silently shift every existing probe-count assertion.
+    """
+    for path in ("/intercept-200", "/intercept-refresh-header", "/intercept-meta"):
+        _open(f"{portal}{path}")
+    # /generate_204 must still redirect exactly complete_after (3) times.
+    for _ in range(3):
+        assert _open(f"{portal}/generate_204").status == 302
+    assert _open(f"{portal}/generate_204").status == 204
+
+
 def test_loop_endpoints_redirect_to_each_other(portal: str) -> None:
     resp_a = _open(f"{portal}/loop-a")
     assert resp_a.status == 302
