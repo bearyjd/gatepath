@@ -747,6 +747,15 @@ iw dev "\$iface" link 2>&1 || true
 ip -br link show "\$iface" 2>&1 || true
 ip addr replace "$CLIENT_STATIC_CIDR" dev "\$iface"
 ip route replace default via "$AP_ADDR" dev "\$iface"
+# A real DHCP client also installs the lease's DNS option; this shim must too,
+# or the netns has an address and a route but no resolver. Everything then
+# works by bare IP and nothing works by hostname — which is how #142 hid: the
+# harness only ever navigates to http://$AP_ADDR/portal, so the missing
+# resolver was invisible until the off-domain subresource needed to resolve.
+# We run under \`ip netns exec\`, and the helper pre-creates
+# /etc/netns/<ns>/resolv.conf, so this write lands in that bind-mounted file
+# rather than on the host's resolver.
+printf 'nameserver %s\n' "$AP_ADDR" > /etc/resolv.conf
 if [ "\$assoc" != yes ]; then
   echo "WARN: \$iface never associated (no carrier) after 25s — failing DHCP so SetupCaptive refuses honestly"
   exit 1
