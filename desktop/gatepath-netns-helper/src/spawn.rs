@@ -298,6 +298,20 @@ fn systemd_run_args(runner_path: &Path, request: &SpawnRequest) -> Vec<String> {
         "--property=Type=exec".to_string(),
         "--property=MemoryDenyWriteExecute=no".to_string(),
         format!("--property=NetworkNamespacePath={}", netns_path.display()),
+        // NetworkNamespacePath= joins the NETWORK namespace and nothing else.
+        // Unlike `ip netns exec`, systemd does no mount-namespace work, so the
+        // child would otherwise read the HOST's /etc/resolv.conf — typically
+        // `nameserver 127.0.0.53`, which inside the netns resolves to that
+        // namespace's own loopback with nothing listening. Every DNS query
+        // then fails, and a captive portal reachable only by hostname (most
+        // commercial vendors: the splash redirects to n143.network-auth.com or
+        // similar) never loads. Bind the per-netns resolver the DHCP lease
+        // populated over /etc/resolv.conf so the child resolves through the
+        // captive gateway. See #142.
+        format!(
+            "--property=BindReadOnlyPaths={}:/etc/resolv.conf",
+            crate::netns::netns_resolv_conf_path(&request.netns_name).display()
+        ),
         format!("--uid={}", request.caller_uid),
     ];
     args.extend(setenv_args(request));
@@ -836,6 +850,8 @@ mod tests {
                 "--property=Type=exec".to_string(),
                 "--property=MemoryDenyWriteExecute=no".to_string(),
                 "--property=NetworkNamespacePath=/var/run/netns/gatepath".to_string(),
+                "--property=BindReadOnlyPaths=/etc/netns/gatepath/resolv.conf:/etc/resolv.conf"
+                    .to_string(),
                 "--uid=1000".to_string(),
                 "--setenv=XDG_RUNTIME_DIR=/run/user/1000".to_string(),
                 "--setenv=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus".to_string(),
@@ -843,6 +859,37 @@ mod tests {
                 "/usr/lib/gatepath/portal-webview-runner".to_string(),
                 "http://captive.example/login".to_string(),
             ]
+        );
+    }
+
+    #[test]
+    fn systemd_run_args_binds_the_netns_resolver_over_etc_resolv_conf() {
+        // Issue #142: NetworkNamespacePath= joins the NETWORK namespace only.
+        // Unlike `ip netns exec` it does no mount-namespace work, so without
+        // this the child reads the HOST's /etc/resolv.conf — typically
+        // `nameserver 127.0.0.53`, which inside the netns is that namespace's
+        // own loopback with nothing listening. DNS then fails for every
+        // hostname, so any captive portal not reachable by bare IP cannot load.
+        let runner = Path::new(PORTAL_RUNNER_PATH);
+        let args = systemd_run_args(runner, &req("http://captive.example/login"));
+        assert!(
+            args.iter().any(|a| a
+                == "--property=BindReadOnlyPaths=/etc/netns/gatepath/resolv.conf:/etc/resolv.conf"),
+            "{args:?}"
+        );
+    }
+
+    #[test]
+    fn systemd_run_resolver_bind_follows_the_netns_name() {
+        // The bind source must track the namespace, not be hardcoded, or a
+        // differently-named netns silently gets the host resolver back.
+        let mut request = req("http://captive.example/login");
+        request.netns_name = "gatepath-alt".into();
+        let args = systemd_run_args(Path::new(PORTAL_RUNNER_PATH), &request);
+        assert!(
+            args.iter().any(|a| a
+                == "--property=BindReadOnlyPaths=/etc/netns/gatepath-alt/resolv.conf:/etc/resolv.conf"),
+            "{args:?}"
         );
     }
 

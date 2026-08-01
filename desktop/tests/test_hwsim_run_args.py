@@ -120,6 +120,20 @@ def test_unknown_flag_is_rejected() -> None:
     assert "unknown flag" in combined, combined
 
 
+def test_static_dhcp_shim_installs_a_resolver() -> None:
+    """The static shim must set DNS, not just an address and a route.
+
+    A real DHCP client installs the lease's DNS option. Without it the netns
+    has connectivity by bare IP and none by hostname — which is exactly how
+    #142 stayed hidden: the harness only ever navigates to
+    `http://192.168.77.1/portal`, so nothing ever needed to resolve a name.
+    """
+    body = RUN_SH.read_text()
+    shim = body.split('cat > "$WORKDIR/bin/udhcpc"', 1)[1].split("\nEOF\n", 1)[0]
+    assert "/etc/resolv.conf" in shim, "static shim installs no resolver"
+    assert "nameserver" in shim, shim[-400:]
+
+
 def test_dhcp_does_not_swallow_a_following_flag() -> None:
     """`--dhcp --webview` is a missing value, not a value of "--webview".
 

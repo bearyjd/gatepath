@@ -42,6 +42,30 @@ use thiserror::Error;
 /// `setns(2)` or used with `nsenter`.
 pub const NETNS_DIR: &str = "/var/run/netns";
 
+/// Per-netns configuration overlay directory, an iproute2 convention:
+/// `ip netns exec <name> …` bind-mounts every file in `/etc/netns/<name>/`
+/// over its `/etc/` counterpart inside the new mount namespace.
+pub const NETNS_CONF_DIR: &str = "/etc/netns";
+
+/// Path of the per-netns resolver for `name`.
+///
+/// This file does double duty, and both halves are load-bearing (#142):
+///
+/// 1. **DHCP writes here instead of the host.** The in-netns DHCP client runs
+///    under `ip netns exec`, which bind-mounts this file over `/etc/resolv.conf`
+///    — but only if it already exists. Absent it, nothing is bind-mounted and
+///    `dhclient` rewrites the *host's* `/etc/resolv.conf` from the captive
+///    network's lease, which is both a leak of captive-controlled config onto
+///    the trusted system and a change that outlives the session.
+/// 2. **The WebView reads it.** `systemd-run --property=NetworkNamespacePath=`
+///    joins the network namespace only and does no mount work, so without an
+///    explicit bind the child gets the host resolver (`nameserver 127.0.0.53`
+///    on a systemd host) — unreachable from inside the netns, so every
+///    hostname lookup fails. See `spawn::systemd_run_args`.
+pub fn netns_resolv_conf_path(name: &str) -> PathBuf {
+    Path::new(NETNS_CONF_DIR).join(name).join("resolv.conf")
+}
+
 /// Failure modes for kernel operations. Each variant carries enough context
 /// to land in an audit-log entry without needing to look at the helper's
 /// own logs.
@@ -233,6 +257,13 @@ impl NetnsOps for LinuxNetnsOps {
                 name: name.into(),
                 stderr,
             })?;
+        // Must exist BEFORE the DHCP client runs. `ip netns exec` only
+        // bind-mounts /etc/netns/<name>/resolv.conf if the file is already
+        // there; otherwise dhclient rewrites the host's resolver from the
+        // captive lease. Created empty — DHCP fills it in, and an empty
+        // resolver simply yields failed lookups rather than wrong ones. See
+        // [netns_resolv_conf_path] and #142.
+        provision_netns_resolv_conf(name)?;
         Ok(path)
     }
 
@@ -273,7 +304,40 @@ impl NetnsOps for LinuxNetnsOps {
             .map_err(|(_, stderr)| NetnsError::TeardownFailed {
                 name: name.into(),
                 stderr,
-            })
+            })?;
+        // Best-effort: the session is over and the netns is gone, so a
+        // leftover resolver directory is inert. Failing teardown over it would
+        // strand the PHY outside the host namespace, which is far worse than
+        // an orphaned empty file.
+        remove_netns_resolv_conf(name);
+        Ok(())
+    }
+}
+
+/// Create `/etc/netns/<name>/resolv.conf`, empty, replacing any stale copy.
+///
+/// Truncating matters: a resolver left behind by a previous crashed session
+/// names the *previous* captive network's DNS, and silently resolving this
+/// session's lookups through it is worse than not resolving them at all.
+fn provision_netns_resolv_conf(name: &str) -> Result<(), NetnsError> {
+    let path = netns_resolv_conf_path(name);
+    let dir = path.parent().expect("resolv.conf path always has a parent");
+    std::fs::create_dir_all(dir).map_err(|e| NetnsError::CreateFailed {
+        name: name.into(),
+        stderr: format!("creating {}: {e}", dir.display()),
+    })?;
+    std::fs::write(&path, b"").map_err(|e| NetnsError::CreateFailed {
+        name: name.into(),
+        stderr: format!("creating {}: {e}", path.display()),
+    })
+}
+
+/// Remove the per-netns resolver directory. Best-effort by design; see the
+/// call site in `destroy_netns`.
+fn remove_netns_resolv_conf(name: &str) {
+    if let Some(dir) = netns_resolv_conf_path(name).parent() {
+        let _ = std::fs::remove_file(netns_resolv_conf_path(name));
+        let _ = std::fs::remove_dir(dir);
     }
 }
 
@@ -372,6 +436,36 @@ mod tests {
         assert!(validate_netns_name("a/../etc").is_err());
         assert!(validate_netns_name("semi;colon").is_err());
         assert!(validate_netns_name(&"x".repeat(65)).is_err());
+    }
+
+    #[test]
+    fn resolv_conf_path_stays_under_the_netns_conf_dir() {
+        // create_netns/destroy_netns now WRITE and DELETE under /etc using this
+        // path, so a name that escaped the directory would be a privileged
+        // arbitrary-write. validate_netns_name is the guard (both call sites
+        // run it first); this pins the composition rather than trusting it.
+        let path = netns_resolv_conf_path("gatepath");
+        assert_eq!(path, Path::new("/etc/netns/gatepath/resolv.conf"));
+
+        for escape in ["..", "../..", "a/../../etc", "/etc", "."] {
+            assert!(
+                validate_netns_name(escape).is_err(),
+                "{escape:?} must never reach netns_resolv_conf_path"
+            );
+        }
+    }
+
+    #[test]
+    fn every_valid_netns_name_yields_a_path_inside_the_conf_dir() {
+        for name in ["gatepath", "gatepath-alt", "a", "A_9-z", &"x".repeat(64)] {
+            validate_netns_name(name).expect("fixture must be a valid name");
+            let path = netns_resolv_conf_path(name);
+            assert!(
+                path.starts_with(NETNS_CONF_DIR),
+                "{path:?} escaped {NETNS_CONF_DIR}"
+            );
+            assert!(path.ends_with("resolv.conf"), "{path:?}");
+        }
     }
 
     #[test]
