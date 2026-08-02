@@ -135,14 +135,81 @@ class PortalProbeTest {
     @Test
     fun `custom testUrl is used instead of default`() = runBlocking {
         resetServer()
-        // Point to /portal directly — should get 200, which is "unexpected HTTP status"
-        val result = probe.probe(network = null, testUrl = "$baseUrl/portal")
-        // 200 is neither 204 nor 3xx, so probe should return Error
-        assertTrue("Expected Error for 200 response but got $result", result is ProbeResult.Error)
-        val error = result as ProbeResult.Error
+        // Point at an endpoint the default URL would never reach. /log returns
+        // 200 with a JSON body and no redirect hint, so a Portal result naming
+        // exactly this URL proves the injected URL was the one fetched.
+        val logUrl = "$baseUrl/log"
+        val result = probe.probe(network = null, testUrl = logUrl)
+        assertTrue("Expected Portal but got $result", result is ProbeResult.Portal)
+        assertEquals(logUrl, (result as ProbeResult.Portal).locationUrl)
+    }
+
+    // ── 200-style intercepts → Portal ────────────────────────────────────────
+    //
+    // Regression coverage for the field bug: gateways that answer the
+    // connectivity check with 200 instead of a 3xx were classified as Error,
+    // so CaptivePortalMonitor emitted CaptivePortalSuspected and the sign-in
+    // WebView never opened. See PortalProbe's KDoc.
+
+    @Test
+    fun `200 with login page in place is a Portal at the probe url`() = runBlocking {
+        resetServer()
+        val probeUrl = "$baseUrl/intercept-200"
+        val result = probe.probe(network = null, testUrl = probeUrl)
+        assertTrue("Expected Portal but got $result", result is ProbeResult.Portal)
+        // No Refresh header and no meta-refresh, so the probe URL itself is the
+        // portal — the gateway is already serving the login page there.
+        assertEquals(probeUrl, (result as ProbeResult.Portal).locationUrl)
+    }
+
+    @Test
+    fun `200 with Refresh header points at the header target`() = runBlocking {
+        resetServer()
+        val result = probe.probe(network = null, testUrl = "$baseUrl/intercept-refresh-header")
+        assertTrue("Expected Portal but got $result", result is ProbeResult.Portal)
+        val portal = result as ProbeResult.Portal
         assertTrue(
-            "Error message should mention status 200, got: ${error.message}",
-            error.message.contains("200"),
+            "Should follow the Refresh header to /portal, got ${portal.locationUrl}",
+            portal.locationUrl.endsWith("/portal"),
+        )
+    }
+
+    @Test
+    fun `200 with meta refresh points at the meta target`() = runBlocking {
+        resetServer()
+        val result = probe.probe(network = null, testUrl = "$baseUrl/intercept-meta")
+        assertTrue("Expected Portal but got $result", result is ProbeResult.Portal)
+        val portal = result as ProbeResult.Portal
+        assertTrue(
+            "Should follow the meta-refresh to /portal, got ${portal.locationUrl}",
+            portal.locationUrl.endsWith("/portal"),
+        )
+    }
+
+    @Test
+    fun `200 with scripted location points at the script target`() = runBlocking {
+        resetServer()
+        // The variant actually observed in the field: no Refresh header, no
+        // meta-refresh, just top.location.href in an inline script.
+        val result = probe.probe(network = null, testUrl = "$baseUrl/intercept-script")
+        assertTrue("Expected Portal but got $result", result is ProbeResult.Portal)
+        val portal = result as ProbeResult.Portal
+        assertTrue(
+            "Should recover /portal from the script, got ${portal.locationUrl}",
+            portal.locationUrl.endsWith("/portal"),
+        )
+    }
+
+    // ── Non-200, non-204, non-3xx is still an Error ─────────────────────────
+
+    @Test
+    fun `404 is still an Error`() = runBlocking {
+        resetServer()
+        val result = probe.probe(network = null, testUrl = "$baseUrl/no-such-endpoint")
+        assertTrue("Expected Error but got $result", result is ProbeResult.Error)
+        assertTrue(
+            "Error should mention 404, got: ${(result as ProbeResult.Error).message}",
+            result.message.contains("404"),
         )
     }
 

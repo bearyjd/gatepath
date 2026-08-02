@@ -13,6 +13,15 @@ Behavior:
   GET /log          -> JSON array of all requests received (test assertions).
   GET /loop-a       -> always 302 to /loop-b (stateless; models a redirect loop).
   GET /loop-b       -> always 302 to /loop-a (stateless; models a redirect loop).
+  GET /intercept-200            -> 200 with the login page served in place (no
+                        redirect at all), as Cisco/Meraki-style gateways do.
+  GET /intercept-refresh-header -> 200 carrying a `Refresh: 0; url=/portal` header.
+  GET /intercept-meta           -> 200 whose body carries a meta-refresh to /portal.
+  GET /intercept-script         -> 200 whose body bounces via inline
+                        `top.location.href` with no header and no meta tag —
+                        the shape captured from a real affected gateway.
+                        All four are stateless and model gateways that never
+                        emit a 3xx for the connectivity check.
   All responses     -> automatic Date header is offset by PORTAL_DATE_SKEW_SECONDS
                         (default 0, i.e. inert — normal, unskewed header).
 
@@ -203,6 +212,51 @@ def _make_handler(
             if self.path.startswith("/log"):
                 payload = json.dumps(state.snapshot()).encode("utf-8")
                 self._send(200, payload, {"Content-Type": "application/json"})
+                return
+            # ── 200-style intercepts ────────────────────────────────────────
+            # Cisco/Meraki/Cloudflare-style gateways answer the connectivity
+            # check with 200 rather than a 3xx: either serving the login page in
+            # place, or bouncing onward via a Refresh header / meta-refresh.
+            # These three endpoints model each variant so both platforms' probes
+            # can be tested against a real server. They are stateless and
+            # additive — the /generate_204 contract above is unchanged.
+            if self.path.startswith("/intercept-200"):
+                self._send(
+                    200,
+                    PORTAL_HTML.encode("utf-8"),
+                    {"Content-Type": "text/html; charset=utf-8"},
+                )
+                return
+            if self.path.startswith("/intercept-refresh-header"):
+                self._send(
+                    200,
+                    b"<html><body>redirecting</body></html>",
+                    {
+                        "Content-Type": "text/html; charset=utf-8",
+                        "Refresh": f"0; url={portal_url}",
+                    },
+                )
+                return
+            if self.path.startswith("/intercept-meta"):
+                body = (
+                    "<!doctype html><html><head>"
+                    f'<meta http-equiv="refresh" content="0; url={portal_url}">'
+                    "</head><body>redirecting</body></html>"
+                ).encode("utf-8")
+                self._send(200, body, {"Content-Type": "text/html; charset=utf-8"})
+                return
+            if self.path.startswith("/intercept-script"):
+                # Shape captured from a real affected gateway: 200 whose entire
+                # body is a one-line scripted bounce, with no Refresh header and
+                # no meta-refresh. This is the variant that actually shipped in
+                # the wild; the header/meta ones above are the documented forms.
+                body = (
+                    "<html><head></head><body>"
+                    '<script type="text/javascript" language="javascript">'
+                    f'top.location.href="{portal_url}";'
+                    "</script></body></html>"
+                ).encode("utf-8")
+                self._send(200, body, {"Content-Type": "text/html"})
                 return
             if self.path.startswith("/loop-a"):
                 self._send(302, headers={"Location": loop_b_url})
