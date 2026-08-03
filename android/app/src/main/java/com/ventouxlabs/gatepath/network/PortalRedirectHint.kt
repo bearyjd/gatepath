@@ -72,9 +72,15 @@ object PortalRedirectHint {
      * unambiguous, the latter is a string match on code we do not execute.
      */
     fun resolve(refreshHeader: String?, html: String?, baseUrl: String): String? =
-        fromRefreshDirective(refreshHeader, baseUrl)
-            ?: fromHtml(html, baseUrl)
-            ?: fromScriptedLocation(html, baseUrl)
+        inspect(refreshHeader, html, baseUrl)?.url
+
+    /** Same safe parse as [resolve], plus the structural redirect signal. */
+    fun inspect(refreshHeader: String?, html: String?, baseUrl: String): Hint? =
+        fromRefreshDirective(refreshHeader, baseUrl)?.let { Hint(it, PortalProbeCapture.RedirectSignal.REFRESH_HEADER) }
+            ?: fromHtml(html, baseUrl)?.let { Hint(it, PortalProbeCapture.RedirectSignal.META_REFRESH) }
+            ?: fromScriptedLocation(html, baseUrl)?.let { Hint(it, PortalProbeCapture.RedirectSignal.SCRIPTED_LOCATION) }
+
+    data class Hint(val url: String, val signal: PortalProbeCapture.RedirectSignal)
 
     /** Parse a `Refresh: 0; url=...` directive value. */
     private fun fromRefreshDirective(directive: String?, baseUrl: String): String? {

@@ -43,6 +43,7 @@ class MainActivity : ComponentActivity() {
                 val networkStatus by viewModel.networkStatus.collectAsState()
                 val diagnostics by viewModel.latestDiagnostics.collectAsState()
                 val diagnosis by viewModel.diagnosis.collectAsState()
+                val probeCapture by viewModel.latestProbeCapture.collectAsState()
 
                 when (val s = session) {
                     is PortalSession.Active -> {
@@ -65,7 +66,7 @@ class MainActivity : ComponentActivity() {
                                 diagnosis = diagnosis,
                                 onDismiss = viewModel::onDismiss,
                                 onRunDiagnostics = viewModel::rerunDiagnostics,
-                                onShareDiagnostics = ::shareDiagnostics,
+                                onShareDiagnostics = { redact -> shareDiagnostics(redact, probeCapture) },
                             )
                         }
                     }
@@ -76,7 +77,7 @@ class MainActivity : ComponentActivity() {
                         diagnosis = diagnosis,
                         onDismiss = viewModel::onDismiss,
                         onRunDiagnostics = viewModel::rerunDiagnostics,
-                        onShareDiagnostics = ::shareDiagnostics,
+                        onShareDiagnostics = { redact -> shareDiagnostics(redact, probeCapture) },
                     )
                 }
             }
@@ -96,12 +97,16 @@ class MainActivity : ComponentActivity() {
      * File I/O runs off the main thread inside [DiagnosticsSharer.writeBundle];
      * the chooser is launched on the resulting URI.
      */
-    private fun shareDiagnostics(redact: Boolean) {
+    private fun shareDiagnostics(
+        redact: Boolean,
+        probeCapture: com.ventouxlabs.gatepath.network.PortalProbeCapture?,
+    ) {
         lifecycleScope.launch {
             try {
                 val uri = DiagnosticsSharer.writeBundle(
                     context = this@MainActivity,
                     diagnosis = viewModel.diagnosis.value,
+                    probeCapture = probeCapture,
                     redact = redact,
                 )
                 val sendIntent =

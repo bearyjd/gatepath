@@ -9,6 +9,7 @@ import com.ventouxlabs.gatepath.audit.AuditLog
 import com.ventouxlabs.gatepath.diag.BundleMeta
 import com.ventouxlabs.gatepath.diag.DiagnosisResult
 import com.ventouxlabs.gatepath.diag.DiagnosticsBundle
+import com.ventouxlabs.gatepath.network.PortalProbeCapture
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -44,12 +45,14 @@ object DiagnosticsSharer {
     suspend fun writeBundle(
         context: Context,
         diagnosis: DiagnosisResult?,
+        probeCapture: PortalProbeCapture?,
         redact: Boolean,
     ): Uri = withContext(Dispatchers.IO) {
         val text = DiagnosticsBundle.build(
             meta = collectMeta(context),
             entries = AuditLog.readAll(),
             diagnosis = diagnosis,
+            probeCapture = probeCapture,
             redact = redact,
         )
 

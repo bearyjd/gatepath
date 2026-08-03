@@ -21,6 +21,7 @@ sealed interface NetworkEvent {
     data class CaptiveNetworkAvailable(
         val network: Network,
         val portalUrl: String,
+        val capture: PortalProbeCapture? = null,
     ) : NetworkEvent
 
     /**
@@ -147,7 +148,7 @@ class CaptivePortalMonitor(
                     is ProbeResult.Portal -> {
                         Log.d(TAG, "Captive portal detected on $network (bind path)")
                         captive.add(network)
-                        trySend(NetworkEvent.CaptiveNetworkAvailable(network, bindResult.locationUrl))
+                        trySend(NetworkEvent.CaptiveNetworkAvailable(network, bindResult.locationUrl, bindResult.capture))
                         return@launch
                     }
                     is ProbeResult.Validated -> {
@@ -168,7 +169,7 @@ class CaptivePortalMonitor(
                     is ProbeResult.Portal -> {
                         Log.d(TAG, "Captive portal detected on $network (default-route fallback)")
                         captive.add(network)
-                        trySend(NetworkEvent.CaptiveNetworkAvailable(network, fallbackResult.locationUrl))
+                        trySend(NetworkEvent.CaptiveNetworkAvailable(network, fallbackResult.locationUrl, fallbackResult.capture))
                     }
                     is ProbeResult.Validated, is ProbeResult.Error -> {
                         // Default route didn't see the redirect either. Build

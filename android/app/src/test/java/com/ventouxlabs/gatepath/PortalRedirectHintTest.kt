@@ -1,6 +1,7 @@
 package com.ventouxlabs.gatepath
 
 import com.ventouxlabs.gatepath.network.PortalRedirectHint
+import com.ventouxlabs.gatepath.network.PortalProbeCapture
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
@@ -17,6 +18,18 @@ import org.junit.Test
 class PortalRedirectHintTest {
 
     private val base = "http://connectivitycheck.gstatic.com/generate_204"
+
+    @Test
+    fun `inspect labels scripted locations`() {
+        val hint = PortalRedirectHint.inspect(
+            null,
+            """<script>top.location.href="http://10.4.4.11/portal?client=secret"</script>""",
+            base,
+        )
+
+        assertEquals(PortalProbeCapture.RedirectSignal.SCRIPTED_LOCATION, hint?.signal)
+        assertEquals("http://10.4.4.11/portal?client=secret", hint?.url)
+    }
 
     // ── Refresh header ──────────────────────────────────────────────────────
 

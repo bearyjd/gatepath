@@ -57,7 +57,7 @@ sealed interface ProbeResult {
     data object Validated : ProbeResult
 
     /** HTTP 301/302/307/308: captive portal detected at [locationUrl]. */
-    data class Portal(val locationUrl: String) : ProbeResult
+    data class Portal(val locationUrl: String, val capture: PortalProbeCapture? = null) : ProbeResult
 
     /** Network error or unexpected response. */
     data class Error(val message: String) : ProbeResult
@@ -104,25 +104,43 @@ class PortalProbe {
                         // meta-refresh; the body is untrusted gateway output,
                         // so the read is byte-bounded and any failure degrades
                         // to "no hint" rather than propagating.
+                        val body = runCatching {
+                            BoundedReader.readBounded(conn.inputStream, MAX_HINT_BODY_BYTES)
+                        }.getOrNull()
                         val hint = runCatching {
-                            PortalRedirectHint.resolve(
+                            PortalRedirectHint.inspect(
                                 refreshHeader = conn.getHeaderField("Refresh"),
-                                html = BoundedReader.readBounded(
-                                    conn.inputStream,
-                                    MAX_HINT_BODY_BYTES,
-                                ),
+                                html = body,
                                 baseUrl = testUrl,
                             )
                         }.getOrNull()
                         // Falling back to testUrl is safe: the gateway is
                         // already intercepting it, so loading it in the WebView
                         // yields the same login page the probe just received.
-                        ProbeResult.Portal(locationUrl = hint ?: testUrl)
+                        ProbeResult.Portal(
+                            locationUrl = hint?.url ?: testUrl,
+                            capture = PortalProbeCapture(
+                                httpStatus = code,
+                                contentType = conn.contentType?.take(128),
+                                redirectSignal = hint?.signal ?: PortalProbeCapture.RedirectSignal.NONE,
+                                bodyCharacters = body?.length,
+                                bodySha256 = body?.let(PortalProbeCapture::sha256),
+                            ),
+                        )
                     }
                     code in 300..399 -> {
                         val location = conn.getHeaderField("Location")
                         if (location != null) {
-                            ProbeResult.Portal(locationUrl = location)
+                            ProbeResult.Portal(
+                                locationUrl = location,
+                                capture = PortalProbeCapture(
+                                    httpStatus = code,
+                                    contentType = conn.contentType?.take(128),
+                                    redirectSignal = PortalProbeCapture.RedirectSignal.LOCATION_HEADER,
+                                    bodyCharacters = null,
+                                    bodySha256 = null,
+                                ),
+                            )
                         } else {
                             ProbeResult.Error("Redirect with no Location header (code=$code)")
                         }

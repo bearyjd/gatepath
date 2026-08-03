@@ -1,6 +1,7 @@
 package com.ventouxlabs.gatepath.diag
 
 import com.ventouxlabs.gatepath.audit.AuditEntry
+import com.ventouxlabs.gatepath.network.PortalProbeCapture
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 
@@ -53,6 +54,7 @@ object DiagnosticsBundle {
         meta: BundleMeta,
         entries: List<AuditEntry>,
         diagnosis: DiagnosisResult?,
+        probeCapture: PortalProbeCapture? = null,
         redact: Boolean,
     ): String = buildString {
         appendLine("=== Gatepath diagnostics ===")
@@ -66,6 +68,10 @@ object DiagnosticsBundle {
         appendLine("--- Latest diagnosis ---")
         val diagText = renderDiagnosis(diagnosis)
         appendLine(if (redact) redactDiagnosisText(diagText, entries) else diagText)
+        appendLine()
+
+        appendLine("--- Latest portal probe capture ---")
+        appendLine(renderProbeCapture(probeCapture))
         appendLine()
 
         appendLine("--- Audit log (audit.jsonl) ---")
@@ -115,6 +121,17 @@ object DiagnosticsBundle {
             for (check in diagnosis.checks) {
                 append("\n  - ${check.probeName}: ${renderReport(check.report)}")
             }
+        }
+    }
+
+    private fun renderProbeCapture(capture: PortalProbeCapture?): String {
+        if (capture == null) return "(no intercepted response captured)"
+        return buildString {
+            appendLine("http_status: ${capture.httpStatus}")
+            appendLine("content_type: ${capture.contentType ?: "(absent)"}")
+            appendLine("redirect_signal: ${capture.redirectSignal}")
+            appendLine("body_characters: ${capture.bodyCharacters ?: "(not captured)"}")
+            append("body_sha256: ${capture.bodySha256 ?: "(not captured)"}")
         }
     }
 
