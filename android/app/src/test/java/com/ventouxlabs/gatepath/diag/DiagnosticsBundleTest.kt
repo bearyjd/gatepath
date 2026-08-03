@@ -1,6 +1,7 @@
 package com.ventouxlabs.gatepath.diag
 
 import com.ventouxlabs.gatepath.audit.AuditEntry
+import com.ventouxlabs.gatepath.network.PortalProbeCapture
 import kotlinx.serialization.json.Json
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -180,5 +181,29 @@ class DiagnosticsBundleTest {
     fun `absent diagnosis is stated, not omitted`() {
         val out = DiagnosticsBundle.build(meta, entries = emptyList(), diagnosis = null, redact = false)
         assertTrue(out.contains("no diagnosis captured"))
+    }
+
+    @Test
+    fun `probe capture exports structural evidence but never a portal url or body`() {
+        val capture = PortalProbeCapture(
+            httpStatus = 200,
+            contentType = "text/html",
+            redirectSignal = PortalProbeCapture.RedirectSignal.SCRIPTED_LOCATION,
+            bodyCharacters = 91,
+            bodySha256 = PortalProbeCapture.sha256("<script>location='http://portal.example/?token=secret'</script>"),
+        )
+        val out = DiagnosticsBundle.build(
+            meta,
+            entries = emptyList(),
+            diagnosis = null,
+            probeCapture = capture,
+            redact = true,
+        )
+
+        assertTrue(out.contains("http_status: 200"))
+        assertTrue(out.contains("redirect_signal: SCRIPTED_LOCATION"))
+        assertTrue(out.contains(capture.bodySha256!!))
+        assertFalse(out.contains("portal.example"))
+        assertFalse(out.contains("token=secret"))
     }
 }

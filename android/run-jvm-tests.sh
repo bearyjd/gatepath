@@ -128,6 +128,7 @@ MAIN_SOURCES=(
     "$SRC_MAIN/com/ventouxlabs/gatepath/network/BlockedDomains.kt"
     "$SRC_MAIN/com/ventouxlabs/gatepath/network/PortalProbe.kt"
     "$SRC_MAIN/com/ventouxlabs/gatepath/network/PortalRedirectHint.kt"
+    "$SRC_MAIN/com/ventouxlabs/gatepath/network/PortalProbeCapture.kt"
     "$SRC_MAIN/com/ventouxlabs/gatepath/session/PortalSession.kt"
     "$SRC_MAIN/com/ventouxlabs/gatepath/session/PortalSessionManager.kt"
     "$SRC_MAIN/com/ventouxlabs/gatepath/ui/WebViewHostMatching.kt"

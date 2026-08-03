@@ -12,6 +12,7 @@ import com.ventouxlabs.gatepath.diag.ProbeContext
 import com.ventouxlabs.gatepath.network.CaptivePortalMonitor
 import com.ventouxlabs.gatepath.network.HttpFetcher
 import com.ventouxlabs.gatepath.network.NetworkDiagnostics
+import com.ventouxlabs.gatepath.network.PortalProbeCapture
 import com.ventouxlabs.gatepath.network.NetworkEvent
 import com.ventouxlabs.gatepath.network.PortalProbe
 import com.ventouxlabs.gatepath.network.VpnDetector
@@ -95,6 +96,9 @@ class MainViewModel @Inject constructor(
     private val _latestDiagnostics = MutableStateFlow<NetworkDiagnostics?>(null)
     val latestDiagnostics: StateFlow<NetworkDiagnostics?> = _latestDiagnostics.asStateFlow()
 
+    private val _latestProbeCapture = MutableStateFlow<PortalProbeCapture?>(null)
+    val latestProbeCapture: StateFlow<PortalProbeCapture?> = _latestProbeCapture.asStateFlow()
+
     /**
      * Result of the most recent diagnostic-engine run. Set when the monitor
      * emits [NetworkEvent.CaptivePortalSuspected] and the engine has produced
@@ -128,6 +132,7 @@ class MainViewModel @Inject constructor(
             monitor.observe().collect { event ->
                 when (event) {
                     is NetworkEvent.CaptiveNetworkAvailable -> {
+                        _latestProbeCapture.value = event.capture
                         _activeNetwork.value = event.network
                         _networkStatus.value = NetworkStatus.CaptiveDetected
                         _latestDiagnostics.value = null
