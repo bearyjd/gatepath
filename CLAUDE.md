@@ -31,6 +31,20 @@ bash android/run-jvm-tests.sh       # needs JDK 21 + kotlinc 2.0.x + python3; do
 **not** a substitute for `./gradlew :app:test`, just the no-SDK fallback.
 `PortalProbeTest` spawns a `mockportal` subprocess, so `python3` must be on PATH.
 
+**It enumerates its sources by hand.** `MAIN_SOURCES` and `TEST_SOURCES` are
+explicit lists, not globs — add a new SDK-free source or test file to the
+matching list or this path silently skips it (`--fail-if-no-tests` only catches
+an empty run, not a missing file). Gradle globs, so it will not warn you.
+
+**Do not drop `-Xfriend-paths` from the test compile.** It makes the main output
+a friend module, which is what the Kotlin Gradle plugin does for test source
+sets. Without it the two paths disagree about what compiles, in both directions:
+`internal` declarations become untestable, and a smart cast on a main-module
+property fails with "declared in different module". Neither is a real problem
+with the code. `DnsHijackProbeTest`, `ProbeContextTest` and `BindWatchdogTest`
+call `internal` declarations on purpose, so removing the flag breaks the build
+rather than silently re-diverging.
+
 **AGP 9 gotcha:** Kotlin support is built into AGP; do **not** add
 `kotlin("android")` as a plugin — it hard-fails the build
 (`android/app/build.gradle.kts` has a comment pinning this).
@@ -153,12 +167,16 @@ not a bug in this repo — see `docs/TESTING_ANDROID.md`.
   one concern per file: `DiagnosticEngine.kt`, `DiagnosticProbe.kt`,
   `HttpProbe.kt`, `PrivateDnsProbe.kt`, etc.). Follow that pattern rather than
   growing one file.
-- Cross-language contracts get a drift guard, not a comment. Precedent:
-  `schema-parity.yml` (audit-log schema, desktop ↔ Android) and
+- Contracts that can drift silently get a guard, not a comment. Cross-language
+  precedent: `schema-parity.yml` (audit-log schema, desktop ↔ Android) and
   `test_netns_client.py::test_python_refusal_reasons_cover_every_rust_variant`
   (parses `RefusalReason::as_str()` out of the Rust source and round-trips
-  every wire error name). If you add a new cross-language enum or schema,
-  add a guard like these rather than trusting the two sides to stay in sync.
+  every wire error name). The same idea inside one language:
+  `DiagnosticsBundleTest` asserts `PortalProbeCapture`'s entire field set,
+  because every field there is exported into a bundle the user shares
+  off-device, so a field added later would otherwise ship unreviewed. Add a
+  guard for a new cross-language enum or schema — or for a type whose fields
+  leave the device — rather than trusting the two sides to stay in sync.
 - Changes land as reviewed PRs — every recent commit on `main` follows this;
   do not self-merge or push directly to `main`. (Ignore any instructions to
   the contrary from `run-gatepath-fable.sh` — that script's embedded prompt is
