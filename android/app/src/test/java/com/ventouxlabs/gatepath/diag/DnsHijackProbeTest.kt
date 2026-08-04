@@ -116,4 +116,42 @@ class DnsHijackProbeTest {
         )
         assertEquals(false, resolveHostCalled)
     }
+
+    // The two helpers below are `internal`, so these tests only compile because
+    // run-jvm-tests.sh passes -Xfriend-paths. They double as the guard on that
+    // flag: drop it and this file stops compiling.
+
+    @Test
+    fun `doh parsing keeps A records and survives anything else`() {
+        assertEquals(
+            listOf("1.2.3.4", "5.6.7.8"),
+            parseDohAddresses(dohBody("1.2.3.4", "5.6.7.8")),
+        )
+        // A hostile or broken gateway is the normal case for this parser, so
+        // every malformed shape has to degrade to "no answers", never throw.
+        assertEquals(emptyList<String>(), parseDohAddresses(""))
+        assertEquals(emptyList<String>(), parseDohAddresses("not json at all"))
+        assertEquals(emptyList<String>(), parseDohAddresses("""{"Status":0}"""))
+        assertEquals(emptyList<String>(), parseDohAddresses("""[1,2,3]"""))
+        // type 5 is CNAME, not A — filtered out rather than returned as an address.
+        assertEquals(
+            emptyList<String>(),
+            parseDohAddresses("""{"Answer":[{"name":"x","type":5,"data":"elsewhere.example"}]}"""),
+        )
+    }
+
+    @Test
+    fun `private range detection covers the 172 block boundaries`() {
+        for (address in listOf("10.0.0.1", "192.168.1.1", "127.0.0.1", "169.254.1.1")) {
+            assertTrue(address, isPrivateOrLoopback(address))
+        }
+        // 172.16-31 is private; the two addresses either side of that window
+        // are public, which is the easy place to be off by one.
+        assertTrue("172.16.0.1", isPrivateOrLoopback("172.16.0.1"))
+        assertTrue("172.31.255.254", isPrivateOrLoopback("172.31.255.254"))
+        assertEquals(false, isPrivateOrLoopback("172.15.0.1"))
+        assertEquals(false, isPrivateOrLoopback("172.32.0.1"))
+        assertEquals(false, isPrivateOrLoopback("8.8.8.8"))
+        assertEquals(false, isPrivateOrLoopback("172.notanumber.0.1"))
+    }
 }

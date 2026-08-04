@@ -222,6 +222,7 @@ TEST_SOURCES=(
     "$SRC_TEST/com/ventouxlabs/gatepath/VpnPrefixParityTest.kt"
     "$SRC_TEST/com/ventouxlabs/gatepath/BoundedReaderTest.kt"
     "$SRC_TEST/com/ventouxlabs/gatepath/diag/DiagnosticEngineTest.kt"
+    "$SRC_TEST/com/ventouxlabs/gatepath/diag/ProbeContextTest.kt"
     "$SRC_TEST/com/ventouxlabs/gatepath/diag/PrivateDnsProbeTest.kt"
     "$SRC_TEST/com/ventouxlabs/gatepath/diag/HttpProbeTest.kt"
     "$SRC_TEST/com/ventouxlabs/gatepath/diag/VpnProbeTest.kt"
@@ -237,8 +238,16 @@ TEST_SOURCES=(
 
 TEST_CP="$MAIN_CP:$CLASSES_MAIN:$ANDROID_STUB:$JUNIT_JAR:$HAMCREST_JAR:$COROUTINES_TEST"
 
+# -Xfriend-paths makes the main output a "friend" of the test compilation, which
+# is what the Kotlin Gradle plugin does for test source sets. Without it, main
+# and test are two unrelated modules here and Gradle silently accepts code this
+# script rejects: `internal` declarations are invisible (so their unit tests
+# cannot be written at all), and a smart cast on a main-module property fails
+# with "declared in different module". Both are artefacts of how this script
+# compiles, not real problems with the code, so keep the two paths in agreement.
 kotlinc \
     -Xplugin="$SERIALIZATION_PLUGIN" \
+    -Xfriend-paths="$CLASSES_MAIN" \
     -classpath "$TEST_CP" \
     -d "$CLASSES_TEST" \
     "${TEST_SOURCES[@]}"
