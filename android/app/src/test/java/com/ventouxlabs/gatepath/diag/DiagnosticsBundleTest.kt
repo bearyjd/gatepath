@@ -204,25 +204,89 @@ class DiagnosticsBundleTest {
 
         assertTrue(out.contains("http_status: 200"))
         assertTrue(out.contains("redirect_signal: SCRIPTED_LOCATION"))
-        assertTrue(out.contains(capture.bodySha256!!))
         assertFalse(out.contains("portal.example"))
         assertFalse(out.contains("token=secret"))
     }
 
     /**
-     * Drift guard for the one bundle section that has no redaction pass.
+     * The digest is a stable fingerprint of a portal page that may be
+     * personalised, so a shareable bundle must not carry it — but an
+     * unredacted bundle still should, because comparing digests across probes
+     * is the point of capturing one.
+     */
+    @Test
+    fun `body digest is dropped when redacting and kept when not`() {
+        val capture = captureOf(
+            bodySha256 = PortalProbeCapture.sha256("<html>session=abc123</html>"),
+        )
+
+        val redacted = DiagnosticsBundle.build(
+            meta,
+            entries = emptyList(),
+            diagnosis = null,
+            probeCapture = capture,
+            redact = true,
+        )
+        val plain = DiagnosticsBundle.build(
+            meta,
+            entries = emptyList(),
+            diagnosis = null,
+            probeCapture = capture,
+            redact = false,
+        )
+
+        assertFalse(redacted.contains(capture.bodySha256!!))
+        assertTrue(redacted.contains("body_sha256: ${DiagnosticsBundle.REDACTED}"))
+        assertTrue(plain.contains(capture.bodySha256))
+    }
+
+    /**
+     * A `Content-Type` is arbitrary gateway-controlled text, so a hostile
+     * gateway must not be able to route a per-device value into a bundle the
+     * user shares by hiding it in a header parameter.
+     */
+    @Test
+    fun `a content-type carrying a session parameter cannot reach the bundle`() {
+        val hostile = PortalProbeCapture.normalizeContentType("text/html; session=abc123device")
+        val out = DiagnosticsBundle.build(
+            meta,
+            entries = emptyList(),
+            diagnosis = null,
+            probeCapture = captureOf(contentType = hostile),
+            redact = true,
+        )
+
+        assertEquals("text/html", hostile)
+        assertFalse(out.contains("abc123device"))
+        assertFalse(out.contains("session="))
+    }
+
+    private fun captureOf(
+        contentType: String? = "text/html",
+        bodySha256: String? = null,
+    ) = PortalProbeCapture(
+        httpStatus = 200,
+        contentType = contentType,
+        redirectSignal = PortalProbeCapture.RedirectSignal.SCRIPTED_LOCATION,
+        bodyCharacters = 91,
+        bodySha256 = bodySha256,
+    )
+
+    /**
+     * Drift guard on what the probe capture is allowed to export.
      *
-     * [DiagnosticsBundle.build] scrubs the diagnosis text and every audit entry
-     * when `redact = true`, but renders [PortalProbeCapture] verbatim in both
-     * modes. That is only sound while every field on the capture is
-     * non-identifying *by construction* — which is the class's stated contract,
-     * not something the renderer enforces. So a field added to the capture
-     * reaches a bundle the user shares off-device, redacted or not, with no
-     * test failing.
+     * Every field here reaches a bundle the user shares off-device. Only
+     * [PortalProbeCapture.bodySha256] is scrubbed when `redact = true`; the
+     * rest are exported in both modes and so must be non-identifying *by
+     * construction* — a contract the class upholds at capture time, not
+     * something the renderer can enforce after the fact.
      *
-     * This asserts the field set itself, so adding one is a deliberate decision:
-     * either confirm it cannot carry a device identifier or credential and list
-     * it here, or give `renderProbeCapture` a redaction branch.
+     * Asserting the field set makes adding one a deliberate decision: show it
+     * cannot carry a device identifier or credential and list it here, or give
+     * it a branch in `renderProbeCapture`. An earlier version of this guard
+     * listed `contentType` as safe because it came from the gateway; that
+     * missed the adversary redaction exists for, which is whoever the user
+     * hands the bundle to.
      */
     @Test
     fun `every exported probe-capture field is privacy-safe by construction`() {
@@ -234,17 +298,18 @@ class DiagnosticsBundleTest {
 
         val knownPrivacySafe = setOf(
             "httpStatus", // numeric status code
-            "contentType", // gateway-supplied media type, bounded to 128 chars
+            "contentType", // narrowed to a known media type by normalizeContentType
             "redirectSignal", // enum over a closed set
             "bodyCharacters", // length only, never the body
-            "bodySha256", // one-way digest, never the body
+            "bodySha256", // one-way digest, and dropped entirely when redacting
         )
 
         assertEquals(
-            "PortalProbeCapture's fields changed. It is written into the shared " +
-                "diagnostics bundle with NO redaction pass in either mode. Confirm the " +
-                "new field cannot carry a device identifier, credential, or portal URL " +
-                "and add it here — or redact it in DiagnosticsBundle.renderProbeCapture.",
+            "PortalProbeCapture's fields changed. Every field except bodySha256 is " +
+                "written into the shared diagnostics bundle unredacted, in both modes. " +
+                "Confirm the new field cannot carry a device identifier, credential, or " +
+                "portal URL and add it here — or give it a branch in " +
+                "DiagnosticsBundle.renderProbeCapture.",
             knownPrivacySafe,
             declared,
         )

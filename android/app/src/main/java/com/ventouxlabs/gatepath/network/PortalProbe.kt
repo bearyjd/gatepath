@@ -117,11 +117,12 @@ class PortalProbe {
                         // Falling back to testUrl is safe: the gateway is
                         // already intercepting it, so loading it in the WebView
                         // yields the same login page the probe just received.
+                        val mediaType = PortalProbeCapture.normalizeContentType(conn.contentType)
                         ProbeResult.Portal(
                             locationUrl = hint?.url ?: testUrl,
                             capture = PortalProbeCapture(
                                 httpStatus = code,
-                                contentType = conn.contentType?.take(128),
+                                contentType = mediaType,
                                 redirectSignal = hint?.signal ?: PortalProbeCapture.RedirectSignal.NONE,
                                 bodyCharacters = body?.length,
                                 bodySha256 = body?.let(PortalProbeCapture::sha256),
@@ -130,12 +131,13 @@ class PortalProbe {
                     }
                     code in 300..399 -> {
                         val location = conn.getHeaderField("Location")
+                        val mediaType = PortalProbeCapture.normalizeContentType(conn.contentType)
                         if (location != null) {
                             ProbeResult.Portal(
                                 locationUrl = location,
                                 capture = PortalProbeCapture(
                                     httpStatus = code,
-                                    contentType = conn.contentType?.take(128),
+                                    contentType = mediaType,
                                     redirectSignal = PortalProbeCapture.RedirectSignal.LOCATION_HEADER,
                                     bodyCharacters = null,
                                     bodySha256 = null,

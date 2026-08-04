@@ -212,6 +212,7 @@ TEST_SOURCES=(
     "$SRC_TEST/com/ventouxlabs/gatepath/AuditSchemaParityTest.kt"
     "$SRC_TEST/com/ventouxlabs/gatepath/PortalProbeTest.kt"
     "$SRC_TEST/com/ventouxlabs/gatepath/PortalRedirectHintTest.kt"
+    "$SRC_TEST/com/ventouxlabs/gatepath/PortalProbeCaptureTest.kt"
     "$SRC_TEST/com/ventouxlabs/gatepath/HttpFetcherTest.kt"
     "$SRC_TEST/com/ventouxlabs/gatepath/WebViewHostMatchingTest.kt"
     "$SRC_TEST/com/ventouxlabs/gatepath/SslErrorPolicyTest.kt"
