@@ -216,9 +216,8 @@ class DiagnosticsBundleTest {
      */
     @Test
     fun `body digest is dropped when redacting and kept when not`() {
-        val capture = captureOf(
-            bodySha256 = PortalProbeCapture.sha256("<html>session=abc123</html>"),
-        )
+        val digest = PortalProbeCapture.sha256("<html>session=abc123</html>")
+        val capture = captureOf(bodySha256 = digest)
 
         val redacted = DiagnosticsBundle.build(
             meta,
@@ -235,9 +234,9 @@ class DiagnosticsBundleTest {
             redact = false,
         )
 
-        assertFalse(redacted.contains(capture.bodySha256!!))
+        assertFalse(redacted.contains(digest))
         assertTrue(redacted.contains("body_sha256: ${DiagnosticsBundle.REDACTED}"))
-        assertTrue(plain.contains(capture.bodySha256))
+        assertTrue(plain.contains(digest))
     }
 
     /**
