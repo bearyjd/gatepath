@@ -26,9 +26,9 @@ data class BundleMeta(
  *
  * ### Redaction (`redact = true`)
  * Scope: the network-identifying fields the desktop
- * `packaging/collect-diagnostics.sh --redact` scrubs — SSID, gateway IP, and
- * portal domain. Applied in two passes so an identifier can't slip through a
- * free-text field:
+ * `gatepath-netns-helper/packaging/collect-diagnostics.sh --redact` scrubs —
+ * SSID, gateway IP, and portal domain. Applied in two passes so an identifier
+ * can't slip through a free-text field:
  * 1. **Audit entries** are scrubbed object-level ([redactEntry]) — a `null`
  *    identifier stays `null` (nothing to reveal), matching the desktop sed which
  *    only rewrites quoted string values; [AuditEntry.portalDomain] is always a

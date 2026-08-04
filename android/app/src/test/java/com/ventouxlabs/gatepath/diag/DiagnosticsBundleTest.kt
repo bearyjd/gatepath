@@ -7,6 +7,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.lang.reflect.Modifier
 
 /**
  * Pure-JVM tests for [DiagnosticsBundle] — the shareable-bundle builder and its
@@ -14,7 +15,8 @@ import org.junit.Test
  * diag/audit tests.
  *
  * The redaction contract mirrors the desktop
- * `packaging/collect-diagnostics.sh --redact` (ssid, gateway_ip, portal_domain).
+ * `gatepath-netns-helper/packaging/collect-diagnostics.sh --redact`
+ * (ssid, gateway_ip, portal_domain).
  */
 class DiagnosticsBundleTest {
 
@@ -205,5 +207,46 @@ class DiagnosticsBundleTest {
         assertTrue(out.contains(capture.bodySha256!!))
         assertFalse(out.contains("portal.example"))
         assertFalse(out.contains("token=secret"))
+    }
+
+    /**
+     * Drift guard for the one bundle section that has no redaction pass.
+     *
+     * [DiagnosticsBundle.build] scrubs the diagnosis text and every audit entry
+     * when `redact = true`, but renders [PortalProbeCapture] verbatim in both
+     * modes. That is only sound while every field on the capture is
+     * non-identifying *by construction* — which is the class's stated contract,
+     * not something the renderer enforces. So a field added to the capture
+     * reaches a bundle the user shares off-device, redacted or not, with no
+     * test failing.
+     *
+     * This asserts the field set itself, so adding one is a deliberate decision:
+     * either confirm it cannot carry a device identifier or credential and list
+     * it here, or give `renderProbeCapture` a redaction branch.
+     */
+    @Test
+    fun `every exported probe-capture field is privacy-safe by construction`() {
+        val declared = PortalProbeCapture::class.java.declaredFields
+            // A companion object contributes a static `Companion` field.
+            .filterNot { Modifier.isStatic(it.modifiers) }
+            .map { it.name }
+            .toSet()
+
+        val knownPrivacySafe = setOf(
+            "httpStatus", // numeric status code
+            "contentType", // gateway-supplied media type, bounded to 128 chars
+            "redirectSignal", // enum over a closed set
+            "bodyCharacters", // length only, never the body
+            "bodySha256", // one-way digest, never the body
+        )
+
+        assertEquals(
+            "PortalProbeCapture's fields changed. It is written into the shared " +
+                "diagnostics bundle with NO redaction pass in either mode. Confirm the " +
+                "new field cannot carry a device identifier, credential, or portal URL " +
+                "and add it here — or redact it in DiagnosticsBundle.renderProbeCapture.",
+            knownPrivacySafe,
+            declared,
+        )
     }
 }
