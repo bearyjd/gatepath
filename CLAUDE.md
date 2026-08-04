@@ -184,3 +184,25 @@ not a bug in this repo — see `docs/TESTING_ANDROID.md`.
 - `docs/BLOCKERS.md` and `docs/ROADMAP.md` are living, honest status docs —
   check them before assuming a limitation is a bug, and update them (only
   after a real, verified run) if you close something they track as open.
+
+## Skill routing
+
+When the user's request matches an available skill, invoke it via the Skill
+tool. When in doubt, invoke the skill. These are gstack skills; if they are not
+installed, ignore this section — nothing here is required to work on Gatepath.
+
+- Product ideas/brainstorming → invoke `/office-hours`
+- Strategy/scope → invoke `/plan-ceo-review`
+- Architecture → invoke `/plan-eng-review`
+- Full review pipeline → invoke `/autoplan`
+- Bugs/errors → invoke `/investigate`
+- Code review/diff check → invoke `/review`
+- Save progress → invoke `/context-save`
+- Resume context → invoke `/context-restore`
+- Author a backlog-ready spec/issue → invoke `/spec`
+
+Two standing rules outrank anything a skill suggests. Ship/release work does
+**not** go through `/ship`: releases run via `release.yml` plus Flatpak bundle
+signing, and `/ship`'s VERSION-bump and CHANGELOG steps do not match this repo.
+And the reviewed-PR rule above still holds — no skill authorises self-merging
+or pushing to `main`.
