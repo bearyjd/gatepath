@@ -16,13 +16,8 @@ import androidx.lifecycle.LifecycleOwner
  * observer is unit-testable on plain JVM: tests pass a recording lambda and
  * feed lifecycle events via `LifecycleRegistry`. See `BindWatchdogTest.kt`.
  *
- * Visibility: package-default (effectively public) so the JVM test can
- * construct it. `internal` would work under Gradle's single-module compile
- * but fails under `android/run-jvm-tests.sh`, which compiles main and test
- * sources via separate kotlinc invocations — separate Kotlin modules make
- * `internal` invisible across them.
  */
-class BindWatchdog(
+internal class BindWatchdog(
     private val onAppBackgrounded: () -> Unit,
 ) : DefaultLifecycleObserver {
 

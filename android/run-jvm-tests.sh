@@ -222,6 +222,7 @@ TEST_SOURCES=(
     "$SRC_TEST/com/ventouxlabs/gatepath/VpnPrefixParityTest.kt"
     "$SRC_TEST/com/ventouxlabs/gatepath/BoundedReaderTest.kt"
     "$SRC_TEST/com/ventouxlabs/gatepath/diag/DiagnosticEngineTest.kt"
+    "$SRC_TEST/com/ventouxlabs/gatepath/diag/ProbeContextTest.kt"
     "$SRC_TEST/com/ventouxlabs/gatepath/diag/PrivateDnsProbeTest.kt"
     "$SRC_TEST/com/ventouxlabs/gatepath/diag/HttpProbeTest.kt"
     "$SRC_TEST/com/ventouxlabs/gatepath/diag/VpnProbeTest.kt"
