@@ -187,12 +187,10 @@ class DiagnosticsBundleTest {
 
     @Test
     fun `probe capture exports structural evidence but never a portal url or body`() {
-        val capture = PortalProbeCapture(
-            httpStatus = 200,
-            contentType = "text/html",
-            redirectSignal = PortalProbeCapture.RedirectSignal.SCRIPTED_LOCATION,
-            bodyCharacters = 91,
-            bodySha256 = PortalProbeCapture.sha256("<script>location='http://portal.example/?token=secret'</script>"),
+        val capture = captureOf(
+            bodySha256 = PortalProbeCapture.sha256(
+                "<script>location='http://portal.example/?token=secret'</script>",
+            ),
         )
         val out = DiagnosticsBundle.build(
             meta,
@@ -260,17 +258,6 @@ class DiagnosticsBundleTest {
         assertFalse(out.contains("session="))
     }
 
-    private fun captureOf(
-        contentType: String? = "text/html",
-        bodySha256: String? = null,
-    ) = PortalProbeCapture(
-        httpStatus = 200,
-        contentType = contentType,
-        redirectSignal = PortalProbeCapture.RedirectSignal.SCRIPTED_LOCATION,
-        bodyCharacters = 91,
-        bodySha256 = bodySha256,
-    )
-
     /**
      * Drift guard on what the probe capture is allowed to export.
      *
@@ -313,4 +300,16 @@ class DiagnosticsBundleTest {
             declared,
         )
     }
+
+    /** A capture whose fields are all unremarkable, so a test varies only what it is about. */
+    private fun captureOf(
+        contentType: String? = "text/html",
+        bodySha256: String? = null,
+    ) = PortalProbeCapture(
+        httpStatus = 200,
+        contentType = contentType,
+        redirectSignal = PortalProbeCapture.RedirectSignal.SCRIPTED_LOCATION,
+        bodyCharacters = 91,
+        bodySha256 = bodySha256,
+    )
 }
