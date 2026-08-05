@@ -138,6 +138,10 @@ class MainActivity : ComponentActivity() {
      */
     private fun maybeApplyDebugIntent(intent: Intent) {
         if (!BuildConfig.DEBUG) return
+        // Breadcrumb: proves the Intent was actually delivered. Its absence is
+        // how the e2e harness learned `am start` was resuming the task without
+        // calling onNewIntent — see run-scenario.py's --activity-single-top.
+        Log.i(TAG, "Debug intent received: extras=${intent.extras?.keySet()}")
         if (intent.getBooleanExtra(EXTRA_DEBUG_WRITE_BUNDLE, false)) {
             debugWriteDiagnosticsBundle(intent.getBooleanExtra(EXTRA_DEBUG_REDACT, true))
             return

@@ -555,9 +555,19 @@ def step_write_bundle(state: dict) -> dict:
         serial, f"run-as {APP_PACKAGE} rm -f {BUNDLE_URI_RELATIVE}", timeout=10, check=False
     )
     adb_helper.shell(serial, "logcat -G 8M; logcat -c", timeout=15, check=False)
+    # --activity-single-top is load-bearing. `am start` defaults to
+    # FLAG_ACTIVITY_NEW_TASK, and MainActivity is already running by this point
+    # in the scenario, so without it Android just resumes the existing task and
+    # never delivers the Intent — onNewIntent does not fire and the extras are
+    # dropped on the floor. launch_debug_portal gets away with the plain form
+    # only because the activity is not up yet when it runs.
+    #
+    # Force-stopping first would also deliver the intent, but it would restart
+    # the process and null the retained capture, making the capture-cleared
+    # assertion downstream pass for the wrong reason.
     adb_helper.shell(
         serial,
-        f"am start -n {APP_PACKAGE}/.MainActivity "
+        f"am start --activity-single-top -n {APP_PACKAGE}/.MainActivity "
         f"--ez gatepath.debug.write_bundle true --ez gatepath.debug.redact true",
         timeout=20,
     )
