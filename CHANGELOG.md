@@ -7,11 +7,12 @@ and the project aims to follow [Semantic Versioning](https://semver.org/spec/v2.
 
 Gatepath is **two independent apps** — `android/` (Kotlin/Compose) and `desktop/`
 (Python/GTK4 + a privileged Rust netns helper) — sharing a security model and an
-audit-log schema; entries tag the platform where it isn't obvious. **No versioned
-release has been cut yet**, so everything below is unreleased, heading toward
-1.0.0. The living, detailed status lives in [`docs/ROADMAP.md`](docs/ROADMAP.md).
+audit-log schema; entries tag the platform where it isn't obvious. The living,
+detailed status lives in [`docs/ROADMAP.md`](docs/ROADMAP.md).
 
 ## [Unreleased]
+
+## [1.0.0] - 2026-08-05
 
 ### Added
 
@@ -138,4 +139,5 @@ release has been cut yet**, so everything below is unreleased, heading toward
 - Desktop DoH-forwarder detection is intentionally not implemented (no D-Bus/portal
   signal exists). See `docs/BLOCKERS.md`.
 
-[Unreleased]: https://github.com/bearyjd/gatepath/commits/main
+[Unreleased]: https://github.com/bearyjd/gatepath/compare/v1.0.0...main
+[1.0.0]: https://github.com/bearyjd/gatepath/releases/tag/v1.0.0
