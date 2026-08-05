@@ -1,6 +1,7 @@
 package com.ventouxlabs.gatepath
 
 import com.ventouxlabs.gatepath.network.PortalProbe
+import com.ventouxlabs.gatepath.network.PortalProbeCapture
 import com.ventouxlabs.gatepath.network.ProbeResult
 import kotlinx.coroutines.runBlocking
 import org.junit.AfterClass
@@ -223,6 +224,50 @@ class PortalProbeTest {
         assertTrue(
             "Probe must not follow the 302 redirect; expected Portal, got $result",
             result is ProbeResult.Portal,
+        )
+    }
+
+    // ── The capture rides along with a Portal result ────────────────────────
+
+    /**
+     * The normaliser and the bundle renderer are each tested in isolation.
+     * These assert the join: that a real probe against the mock portal actually
+     * fills the capture in. Without them, a null capture or a field wired to
+     * the wrong value passes every other test in the suite, and the only
+     * symptom is a diagnostics bundle that quietly says
+     * "(no intercepted response captured)".
+     */
+    @Test
+    fun `a redirect intercept carries a LOCATION_HEADER capture`() = runBlocking {
+        resetServer()
+        val result = probe.probe(network = null, testUrl = "$baseUrl/generate_204")
+
+        assertTrue("Expected Portal but got $result", result is ProbeResult.Portal)
+        val capture = requireNotNull((result as ProbeResult.Portal).capture) {
+            "a 302 intercept must carry a capture, got null"
+        }
+        assertEquals(PortalProbeCapture.RedirectSignal.LOCATION_HEADER, capture.redirectSignal)
+        assertTrue("Expected a 3xx status, got ${capture.httpStatus}", capture.httpStatus in 300..399)
+    }
+
+    @Test
+    fun `a 200 intercept carries a capture with a normalised media type`() = runBlocking {
+        resetServer()
+        val result = probe.probe(network = null, testUrl = "$baseUrl/log")
+
+        assertTrue("Expected Portal but got $result", result is ProbeResult.Portal)
+        val capture = requireNotNull((result as ProbeResult.Portal).capture) {
+            "a 200 intercept must carry a capture, got null"
+        }
+        assertEquals(200, capture.httpStatus)
+        // Whatever the gateway sent, the capture may only hold an allowlisted
+        // media type or the stand-in — never raw header text.
+        val mediaType = capture.contentType
+        assertTrue(
+            "content_type should be normalised, got $mediaType",
+            mediaType == null ||
+                mediaType == PortalProbeCapture.OTHER_MEDIA_TYPE ||
+                mediaType.matches(Regex("[a-z0-9.+-]+/[a-z0-9.+-]+")),
         )
     }
 }
