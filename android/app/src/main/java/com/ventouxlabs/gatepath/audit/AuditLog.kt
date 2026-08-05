@@ -88,10 +88,12 @@ class AuditLogWriter(private val file: File) {
         var unreadable = 0
         val entries = tail.mapNotNull { line ->
             runCatching { readerJson.decodeFromString<AuditEntry>(line) }
-                .onFailure {
-                    unreadable++
-                    Log.w(TAG, "Skipping unreadable audit line: ${it.message}")
-                }
+                // Counted, not logged: AuditLogWriter is deliberately free of
+                // android.* so it stays JVM-testable, and the count reaches the
+                // user in the bundle itself rather than in a logcat line nobody
+                // reads. (Calling Log here also throws "not mocked" under the
+                // Gradle unit-test runtime, which is how this was caught.)
+                .onFailure { unreadable++ }
                 .getOrNull()
         }
         return AuditReadResult(entries, unreadable)

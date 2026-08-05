@@ -50,9 +50,12 @@ class AuditTailParityTest {
 
         fun repoRoot(): File {
             System.getProperty("gatepath.repo.root")?.let { return File(it) }
+            // Same shape as AuditSchemaParityTest.findRepoRoot: probe upward for
+            // the target file. Avoids a File? platform-type warning too.
             var dir = File(System.getProperty("user.dir") ?: ".").absoluteFile
-            while (!File(dir, ".git").exists() && dir.parentFile != null) {
-                dir = dir.parentFile
+            repeat(5) {
+                if (File(dir, COLLECTOR).exists()) return dir
+                dir = dir.parentFile ?: return dir
             }
             return dir
         }
