@@ -81,6 +81,29 @@ the old counter behaviour, so this stays backward compatible.
   load and stops the fast (~5s) validation from tearing the session down before
   the WebView loads.
 
+- **`am start` silently drops extras once the activity is already running.**
+  It defaults to `FLAG_ACTIVITY_NEW_TASK`, so with `MainActivity` at standard
+  launchMode Android just resumes the existing task: `onNewIntent` never fires,
+  the extras are discarded, and the ONLY symptom is that nothing happens — no
+  error, no log line. `launch_debug_portal` gets away with the plain form
+  because the activity is not up yet when it runs. Any step firing a debug
+  intent *later* in the scenario needs `am start --activity-single-top`.
+  Do **not** reach for `am force-stop` instead: it delivers the intent, but it
+  restarts the process and wipes retained ViewModel state, which can make a
+  downstream assertion pass for the wrong reason (`bundle.capture_cleared`
+  would have gone green because the process restarted, not because the
+  validated transition cleared the capture).
+- **Never `logcat -c` in a step that runs before `pull_logcat`.** It wipes the
+  WebView evidence `off_domain` and `vpn.confinement` grep for, and both go red
+  while the clearing step itself passes — so the failure points away from its
+  cause. This is the #134/#135 clobbering trap from the other direction.
+- **Signal step completion with a file, not a log line.** Given the spam and
+  rotation above, a step that waits on logcat is waiting on a channel that may
+  drop its answer. `pull_audit_log` and `_pull_sink` both poll app-private files
+  via `run-as`; `write_bundle` does the same with `files/debug-bundle-uri.txt`.
+  Delete the file first, so a leftover from an earlier attempt cannot read as
+  the current run's success.
+
 ## The validated end-to-end ordering
 
 ```
@@ -93,7 +116,16 @@ wait_validated          # reevaluate same wifi netid; poll IS_VALIDATED
                         #   SAME network go captive→validated → NetworkValidated →
                         #   portal_completed audit
 pull_audit_log          # run-as cat files/audit.jsonl
+write_bundle            # am start --activity-single-top --ez gatepath.debug.write_bundle
+                        #   poll for files/debug-bundle-uri.txt (written only AFTER
+                        #   getUriForFile, so it proves the FileProvider authority
+                        #   resolved); runs post-validation, which is also what makes
+                        #   it the check that the capture did not outlive its incident
+pull_bundle             # run-as cat cache/diagnostics/gatepath-diagnostics.txt
 ```
+
+Note `write_bundle`/`pull_bundle` sit BEFORE `pull_logcat` in `STEPS` so the
+app's own lines land in the captured buffer.
 
 ## No-leak sentinel (ROADMAP P0.1)
 
