@@ -66,8 +66,10 @@ VPN_SINK_RELATIVE = "files/vpn-sink.jsonl"
 # DiagnosticsSharer writes here (CACHE_SUBDIR/FILE_NAME). App-private, so it
 # comes out via run-as like the audit log does.
 BUNDLE_RELATIVE = "cache/diagnostics/gatepath-diagnostics.txt"
-# Logged by MainActivity.debugWriteDiagnosticsBundle; keep in sync with it.
-BUNDLE_MARKER = "debug_bundle_written"
+# Written by MainActivity.debugWriteDiagnosticsBundle AFTER getUriForFile
+# returns, so its presence proves the FileProvider authority resolved. A file,
+# not a log line: logcat is not a reliable channel here (HARNESS_NOTES §3).
+BUNDLE_URI_RELATIVE = "files/debug-bundle-uri.txt"
 # The unbound liveness probe targets a dedicated sentinel host:port the captive
 # monitor never touches (it probes 10.0.2.2:18080), so the bound WebView's
 # attempt to reach the same sentinel is unambiguous in the VPN sink. Single
@@ -507,6 +509,30 @@ def should_write_fallback_logcat(path: Path) -> bool:
     return not path.exists() or path.stat().st_size == 0
 
 
+def _dump_bundle_diagnostics(state: dict) -> None:
+    """Leave evidence behind when the bundle never appears.
+
+    This step cannot be run locally (no /dev/kvm), so a bare timeout would give
+    the next attempt nothing to work from. Capture the log buffer and the app's
+    own view of its storage instead of guessing again.
+    """
+    serial = state["serial"]
+    art = state["artifacts_dir"]
+    try:
+        art.joinpath("write-bundle-failure-logcat.txt").write_text(
+            adb_helper.shell(serial, "logcat -d", timeout=25, check=False)
+        )
+        listing = adb_helper.shell(
+            serial,
+            f"run-as {APP_PACKAGE} sh -c 'ls -la files cache cache/diagnostics 2>&1'",
+            timeout=15,
+            check=False,
+        )
+        art.joinpath("write-bundle-failure-ls.txt").write_text(listing)
+    except Exception:  # noqa: BLE001 — diagnostics must never mask the real error
+        pass
+
+
 def step_write_bundle(state: dict) -> dict:
     """Ask the app to build a redacted diagnostics bundle, without the chooser.
 
@@ -515,36 +541,57 @@ def step_write_bundle(state: dict) -> dict:
     not outlive its incident — the thing that would otherwise ship a previous
     gateway's evidence in a report about this one.
 
-    The share sheet itself is undriveable here for the same reason the captive
-    notification is (HARNESS_NOTES §1), so a debug-only intent writes the bundle
-    and logs the FileProvider URI instead.
+    The share sheet is undriveable here for the same reason the captive
+    notification is (HARNESS_NOTES §1), so a debug-only intent writes the bundle.
+
+    Waits on a FILE, not a log line. A first version of this polled logcat and
+    timed out: the buffer has been rotating through boot spam since before this
+    step runs, exactly as HARNESS_NOTES §3 describes.
     """
     serial = state["serial"]
+    # Delete any sidecar from an earlier attempt first — otherwise a stale file
+    # would read as this run's success.
+    adb_helper.shell(
+        serial, f"run-as {APP_PACKAGE} rm -f {BUNDLE_URI_RELATIVE}", timeout=10, check=False
+    )
+    adb_helper.shell(serial, "logcat -G 8M; logcat -c", timeout=15, check=False)
     adb_helper.shell(
         serial,
         f"am start -n {APP_PACKAGE}/.MainActivity "
         f"--ez gatepath.debug.write_bundle true --ez gatepath.debug.redact true",
         timeout=20,
     )
-    deadline = time.time() + 30
+
+    deadline = time.time() + 60
     while time.time() < deadline:
-        log = adb_helper.shell(serial, "logcat -d", timeout=20, check=False)
-        if BUNDLE_MARKER in log:
-            if f"{BUNDLE_MARKER} failed" in log:
-                raise RuntimeError(f"bundle write failed; see logcat for {BUNDLE_MARKER}")
-            return {"marker": True}
-        time.sleep(1)
-    raise RuntimeError(f"'{BUNDLE_MARKER}' never appeared in logcat within 30s")
+        uri = adb_helper.shell(
+            serial,
+            f"run-as {APP_PACKAGE} cat {BUNDLE_URI_RELATIVE}",
+            timeout=10,
+            check=False,
+        ).strip()
+        if uri.startswith("content://"):
+            return {"uri": uri}
+        time.sleep(2)
+
+    _dump_bundle_diagnostics(state)
+    raise RuntimeError(
+        f"{BUNDLE_URI_RELATIVE} never appeared within 60s. See "
+        "write-bundle-failure-logcat.txt and write-bundle-failure-ls.txt in artifacts."
+    )
 
 
 def step_pull_bundle(state: dict) -> dict:
-    """run-as cat the bundle into artifacts/ for the host-side assertion pass."""
+    """run-as cat the bundle and its URI sidecar into artifacts/ for the driver."""
     serial = state["serial"]
     text = adb_helper.shell(
         serial, f"run-as {APP_PACKAGE} cat {BUNDLE_RELATIVE}", timeout=15, check=False
     )
-    out = state["artifacts_dir"] / "diagnostics-bundle.txt"
-    out.write_text(text)
+    state["artifacts_dir"].joinpath("diagnostics-bundle.txt").write_text(text)
+    uri = adb_helper.shell(
+        serial, f"run-as {APP_PACKAGE} cat {BUNDLE_URI_RELATIVE}", timeout=10, check=False
+    )
+    state["artifacts_dir"].joinpath("bundle-uri.txt").write_text(uri)
     return {"bytes": len(text)}
 
 

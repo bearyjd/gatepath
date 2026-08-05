@@ -422,7 +422,7 @@ def check_vpn_confinement(
 def check_diagnostics_bundle(
     bundle: str,
     audit_entries: list[dict[str, Any]],
-    logcat: str,
+    uri: str,
     failures: list[str],
 ) -> None:
     """F. The bundle the user actually shares.
@@ -440,16 +440,15 @@ def check_diagnostics_bundle(
         return
     ok("bundle.file", f"{len(bundle)} bytes")
 
-    # The FileProvider URI proves the authority resolved. Without it the share
-    # would throw at getUriForFile and the user would see only "share failed".
-    uri_line = next(
-        (ln for ln in logcat.splitlines() if "debug_bundle_written" in ln and "uri=" in ln),
-        None,
-    )
-    if uri_line is None:
-        fail("bundle.uri", "no 'debug_bundle_written ... uri=' line in logcat", failures)
-    elif "content://" not in uri_line:
-        fail("bundle.uri", f"expected a content:// URI, got: {uri_line.strip()}", failures)
+    # The FileProvider URI proves the authority resolved. The app writes it only
+    # after getUriForFile returns, so its absence means the share would have
+    # thrown there and the user would have seen just "share failed". Read from a
+    # pulled file rather than logcat, which is not a dependable channel here.
+    uri = uri.strip()
+    if not uri:
+        fail("bundle.uri", "bundle-uri.txt missing or empty — getUriForFile never returned", failures)
+    elif not uri.startswith("content://"):
+        fail("bundle.uri", f"expected a content:// URI, got: {uri!r}", failures)
     else:
         ok("bundle.uri", "FileProvider minted a content:// URI")
 
@@ -569,13 +568,15 @@ def main(argv: list[str]) -> int:
         sentinel_attempted = _webview_attempted_sentinel(logcat_text)
         check_vpn_confinement(sink_lines, failures, sentinel_attempted)
 
-    # F. The shared bundle — needs logcat (for the FileProvider URI) and the
-    # audit entries (for the identifiers redaction is checked against).
+    # F. The shared bundle — needs the pulled URI sidecar and the audit entries
+    # (for the identifiers redaction is checked against).
     bundle_path = root / "diagnostics-bundle.txt"
     bundle_text = (
         bundle_path.read_text(errors="replace") if bundle_path.exists() else ""
     )
-    check_diagnostics_bundle(bundle_text, audit_entries, logcat_text, failures)
+    uri_path = root / "bundle-uri.txt"
+    uri_text = uri_path.read_text(errors="replace") if uri_path.exists() else ""
+    check_diagnostics_bundle(bundle_text, audit_entries, uri_text, failures)
 
     if failures:
         print(f"\n{len(failures)} failure(s):", file=sys.stderr)

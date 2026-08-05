@@ -213,10 +213,7 @@ def test_off_domain_ignores_non_webview_logcat_lines():
 # has watched go red is indistinguishable from one that always passes, which is
 # the defect that produced #134/#135.
 
-GOOD_LOGCAT = (
-    "08-05 12:00:00.000 I GatepathMain: debug_bundle_written redact=true "
-    "uri=content://com.ventouxlabs.gatepath.fileprovider/diagnostics/gatepath-diagnostics.txt"
-)
+GOOD_URI = "content://com.ventouxlabs.gatepath.fileprovider/diagnostics/gatepath-diagnostics.txt"
 AUDIT = [{"ssid": "Airport-WiFi", "gateway_ip": "192.168.0.1",
           "portal_domain": "wifi.example-airport.com"}]
 GOOD_BUNDLE = (
@@ -228,10 +225,10 @@ GOOD_BUNDLE = (
 )
 
 
-def _run(bundle=GOOD_BUNDLE, audit=None, logcat=GOOD_LOGCAT):
+def _run(bundle=GOOD_BUNDLE, audit=None, uri=GOOD_URI):
     failures: list[str] = []
     assertions.check_diagnostics_bundle(
-        bundle, AUDIT if audit is None else audit, logcat, failures
+        bundle, AUDIT if audit is None else audit, uri, failures
     )
     return failures
 
@@ -245,12 +242,12 @@ def test_empty_bundle_fails():
 
 
 def test_missing_fileprovider_uri_fails():
-    assert any("bundle.uri" in f for f in _run(logcat="nothing here"))
+    # Empty sidecar == getUriForFile never returned.
+    assert any("bundle.uri" in f for f in _run(uri="  \n"))
 
 
 def test_non_content_uri_fails():
-    logcat = "I GatepathMain: debug_bundle_written redact=true uri=file:///data/x.txt"
-    assert any("bundle.uri" in f for f in _run(logcat=logcat))
+    assert any("bundle.uri" in f for f in _run(uri="file:///data/x.txt"))
 
 
 def test_leaked_identifier_fails():

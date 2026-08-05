@@ -20,6 +20,7 @@ import com.ventouxlabs.gatepath.ui.theme.GatepathTheme
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
+import java.io.File
 import javax.inject.Inject
 
 @AndroidEntryPoint
@@ -175,6 +176,13 @@ class MainActivity : ComponentActivity() {
                     probeCapture = viewModel.latestProbeCapture.value,
                     redact = redact,
                 )
+                // Signal completion through a FILE, not logcat. The harness
+                // cannot depend on logcat here (HARNESS_NOTES §3: boot spam
+                // buries app lines and the ring buffer rotates them out).
+                // Written only AFTER getUriForFile returns, so its existence
+                // proves the FileProvider authority resolved — which writing
+                // the bundle alone does not, since writeText happens first.
+                File(filesDir, DEBUG_BUNDLE_URI_FILE).writeText(uri.toString())
                 Log.i(TAG, "$DEBUG_BUNDLE_MARKER redact=$redact uri=$uri")
             } catch (e: CancellationException) {
                 throw e // cooperative cancellation is not a failure
@@ -190,7 +198,10 @@ class MainActivity : ComponentActivity() {
         private const val EXTRA_DEBUG_WRITE_BUNDLE = "gatepath.debug.write_bundle"
         private const val EXTRA_DEBUG_REDACT = "gatepath.debug.redact"
 
-        /** Grepped out of logcat by the e2e harness; keep in sync with run-scenario.py. */
+        /** Also logged, but only as a human breadcrumb — the harness reads the file below. */
         private const val DEBUG_BUNDLE_MARKER = "debug_bundle_written"
+
+        /** The e2e harness polls for this via run-as; keep in sync with run-scenario.py. */
+        private const val DEBUG_BUNDLE_URI_FILE = "debug-bundle-uri.txt"
     }
 }
