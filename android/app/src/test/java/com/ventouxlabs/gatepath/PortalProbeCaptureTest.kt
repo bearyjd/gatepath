@@ -12,6 +12,9 @@ import org.junit.Test
  * so the values it accepts from a hostile gateway matter more than the ones it
  * rejects. `Content-Type` is the interesting one: it looks like a media type
  * but is arbitrary gateway-controlled text.
+ *
+ * `normalizeContentType` is `internal`; these tests reach it only because
+ * run-jvm-tests.sh passes -Xfriend-paths.
  */
 class PortalProbeCaptureTest {
 
@@ -53,13 +56,15 @@ class PortalProbeCaptureTest {
     fun `an unrecognised type collapses instead of being echoed`() {
         // Echoing the raw value would reopen exactly the channel the allowlist
         // closes, so an unknown type must not appear in the output at all.
+        // Note a valid RFC 6838 token pair is not enough: `text/html-abc123` is
+        // well-formed, which is why this is an allowlist and not a shape check.
         assertEquals(
             PortalProbeCapture.OTHER_MEDIA_TYPE,
-            PortalProbeCapture.normalizeContentType("application/x-tracked-abc123device"),
+            PortalProbeCapture.normalizeContentType("text/html-abc123device"),
         )
         assertEquals(
             PortalProbeCapture.OTHER_MEDIA_TYPE,
-            PortalProbeCapture.normalizeContentType("abc123device"),
+            PortalProbeCapture.normalizeContentType("application/x-tracked-abc123device"),
         )
         assertEquals(
             PortalProbeCapture.OTHER_MEDIA_TYPE,
@@ -68,19 +73,32 @@ class PortalProbeCaptureTest {
     }
 
     /**
-     * Known-answer test. The digest is built by hex-formatting signed bytes,
-     * which is a classic place to lose the high bit, so pin it to published
-     * SHA-256 vectors rather than to whatever the implementation returns.
+     * The invariant behind the private constructor: normalisation is not
+     * something a caller has to remember, because [PortalProbeCapture.of] is
+     * the only way in. A capture holding a raw header should be impossible to
+     * build, not merely discouraged by a docstring.
      */
     @Test
-    fun `sha256 matches published vectors`() {
-        assertEquals(
-            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
-            PortalProbeCapture.sha256("abc"),
+    fun `the factory normalises, so an un-normalised capture cannot be built`() {
+        val capture = PortalProbeCapture.of(
+            httpStatus = 200,
+            rawContentType = "text/html; session=abc123device",
+            redirectSignal = PortalProbeCapture.RedirectSignal.SCRIPTED_LOCATION,
         )
-        assertEquals(
-            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-            PortalProbeCapture.sha256(""),
+
+        assertEquals("text/html", capture.contentType)
+        assertEquals(200, capture.httpStatus)
+        assertEquals(PortalProbeCapture.RedirectSignal.SCRIPTED_LOCATION, capture.redirectSignal)
+    }
+
+    @Test
+    fun `the factory passes a null header through as null`() {
+        val capture = PortalProbeCapture.of(
+            httpStatus = 302,
+            rawContentType = null,
+            redirectSignal = PortalProbeCapture.RedirectSignal.LOCATION_HEADER,
         )
+
+        assertNull(capture.contentType)
     }
 }

@@ -147,6 +147,7 @@ class MainViewModel @Inject constructor(
                         _networkStatus.value = NetworkStatus.SignInComplete
                         _latestDiagnostics.value = null
                         _diagnosis.value = null
+                        _latestProbeCapture.value = null
                         suspectedNetwork = null
                         if (_activeNetwork.value == event.network) {
                             handleSignInSuccess()
@@ -159,6 +160,7 @@ class MainViewModel @Inject constructor(
                         _networkStatus.value = NetworkStatus.NoPortal
                         _latestDiagnostics.value = null
                         _diagnosis.value = null
+                        _latestProbeCapture.value = null
                         suspectedNetwork = null
                     }
                     is NetworkEvent.CaptivePortalSuspected -> {
@@ -169,6 +171,9 @@ class MainViewModel @Inject constructor(
                         Log.w(TAG, "Captive suspected on ${event.network}: ${event.diagnostics}")
                         _latestDiagnostics.value = event.diagnostics
                         _networkStatus.value = NetworkStatus.CaptivePending
+                        // A capture from an earlier gateway would describe a
+                        // different incident than the one being diagnosed here.
+                        _latestProbeCapture.value = null
                         suspectedNetwork = event.network
                         runDiagnosticEngine(event.network, event.diagnostics)
                     }
@@ -176,6 +181,7 @@ class MainViewModel @Inject constructor(
                         _networkStatus.value = NetworkStatus.Lost
                         _latestDiagnostics.value = null
                         _diagnosis.value = null
+                        _latestProbeCapture.value = null
                         suspectedNetwork = null
                         if (_activeNetwork.value == event.network) {
                             _activeNetwork.value = null
