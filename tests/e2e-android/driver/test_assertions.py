@@ -205,3 +205,76 @@ def test_off_domain_ignores_non_webview_logcat_lines():
     failures: list[str] = []
     assertions.check_off_domain([GW_PORTAL], [AUDIT_ZERO], noise, failures)
     assert any("not_exercised" in f for f in failures), failures
+
+
+# ── Diagnostics bundle (the shared artifact) ──────────────────────────────────
+#
+# These exist to prove check_diagnostics_bundle CAN fail. An assertion nobody
+# has watched go red is indistinguishable from one that always passes, which is
+# the defect that produced #134/#135.
+
+GOOD_LOGCAT = (
+    "08-05 12:00:00.000 I GatepathMain: debug_bundle_written redact=true "
+    "uri=content://com.ventouxlabs.gatepath.fileprovider/diagnostics/gatepath-diagnostics.txt"
+)
+AUDIT = [{"ssid": "Airport-WiFi", "gateway_ip": "192.168.0.1",
+          "portal_domain": "wifi.example-airport.com"}]
+GOOD_BUNDLE = (
+    "=== Gatepath diagnostics ===\n"
+    "redacted: true\n"
+    '{"ssid":"REDACTED","gateway_ip":"REDACTED","portal_domain":"REDACTED"}\n'
+    "--- Latest portal probe capture ---\n"
+    "(no intercepted response captured)\n"
+)
+
+
+def _run(bundle=GOOD_BUNDLE, audit=None, logcat=GOOD_LOGCAT):
+    failures: list[str] = []
+    assertions.check_diagnostics_bundle(
+        bundle, AUDIT if audit is None else audit, logcat, failures
+    )
+    return failures
+
+
+def test_bundle_happy_path_passes():
+    assert _run() == []
+
+
+def test_empty_bundle_fails():
+    assert any("bundle.file" in f for f in _run(bundle="   "))
+
+
+def test_missing_fileprovider_uri_fails():
+    assert any("bundle.uri" in f for f in _run(logcat="nothing here"))
+
+
+def test_non_content_uri_fails():
+    logcat = "I GatepathMain: debug_bundle_written redact=true uri=file:///data/x.txt"
+    assert any("bundle.uri" in f for f in _run(logcat=logcat))
+
+
+def test_leaked_identifier_fails():
+    leaky = GOOD_BUNDLE + "\nssid was Airport-WiFi\n"
+    assert any("bundle.redacted" in f for f in _run(bundle=leaky))
+
+
+def test_missing_redacted_token_fails():
+    bare = "=== Gatepath diagnostics ===\n(no intercepted response captured)\n"
+    assert any("bundle.redacted" in f for f in _run(bundle=bare))
+
+
+def test_no_identifiers_to_check_against_fails_rather_than_passing_vacuously():
+    # The whole point: with nothing to look for, "found no leaks" is not a pass.
+    assert any("bundle.redacted" in f for f in _run(audit=[]))
+
+
+def test_capture_that_outlived_its_incident_fails():
+    stale = GOOD_BUNDLE.replace(
+        "(no intercepted response captured)", "http_status: 200\ncontent_type: text/html"
+    )
+    assert any("bundle.capture_cleared" in f for f in _run(bundle=stale))
+
+
+def test_resurrected_body_field_fails():
+    revived = GOOD_BUNDLE + "body_sha256: abc123\n"
+    assert any("bundle.no_body_evidence" in f for f in _run(bundle=revived))

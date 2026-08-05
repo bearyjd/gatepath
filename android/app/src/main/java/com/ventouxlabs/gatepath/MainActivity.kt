@@ -137,6 +137,10 @@ class MainActivity : ComponentActivity() {
      */
     private fun maybeApplyDebugIntent(intent: Intent) {
         if (!BuildConfig.DEBUG) return
+        if (intent.getBooleanExtra(EXTRA_DEBUG_WRITE_BUNDLE, false)) {
+            debugWriteDiagnosticsBundle(intent.getBooleanExtra(EXTRA_DEBUG_REDACT, true))
+            return
+        }
         val url = intent.getStringExtra(EXTRA_DEBUG_PORTAL_URL) ?: return
         val net = connectivityManager.activeNetwork ?: run {
             Log.w(TAG, "Debug portal intent: no active network; ignored")
@@ -146,8 +150,47 @@ class MainActivity : ComponentActivity() {
         viewModel.debugForceActiveSession(url, net)
     }
 
+    /**
+     * Debug-only: build the diagnostics bundle and log where it landed, without
+     * launching the chooser.
+     *
+     * The e2e harness cannot drive the system share sheet for the same reason it
+     * cannot drive the captive-portal notification — see `HARNESS_NOTES.md §1`.
+     * Everything worth testing on this path happens before the chooser anyway:
+     * the bundle is assembled, written to the FileProvider-shareable cache dir,
+     * and a `content://` URI is minted, which is where an authority or
+     * `file_paths.xml` mistake would surface. `sendIntent` after it is a
+     * four-line `Intent` builder.
+     *
+     * Fire from adb (debug builds only; release-stripped):
+     *   adb shell am start -n com.ventouxlabs.gatepath/.MainActivity \
+     *       --ez gatepath.debug.write_bundle true --ez gatepath.debug.redact true
+     */
+    private fun debugWriteDiagnosticsBundle(redact: Boolean) {
+        lifecycleScope.launch {
+            try {
+                val uri = DiagnosticsSharer.writeBundle(
+                    context = this@MainActivity,
+                    diagnosis = viewModel.diagnosis.value,
+                    probeCapture = viewModel.latestProbeCapture.value,
+                    redact = redact,
+                )
+                Log.i(TAG, "$DEBUG_BUNDLE_MARKER redact=$redact uri=$uri")
+            } catch (e: CancellationException) {
+                throw e // cooperative cancellation is not a failure
+            } catch (e: Exception) {
+                Log.e(TAG, "$DEBUG_BUNDLE_MARKER failed", e)
+            }
+        }
+    }
+
     companion object {
         private const val TAG = "GatepathMain"
         private const val EXTRA_DEBUG_PORTAL_URL = "gatepath.debug.portal_url"
+        private const val EXTRA_DEBUG_WRITE_BUNDLE = "gatepath.debug.write_bundle"
+        private const val EXTRA_DEBUG_REDACT = "gatepath.debug.redact"
+
+        /** Grepped out of logcat by the e2e harness; keep in sync with run-scenario.py. */
+        private const val DEBUG_BUNDLE_MARKER = "debug_bundle_written"
     }
 }

@@ -63,6 +63,11 @@ AUDIT_LOG_RELATIVE = "files/audit.jsonl"
 APP_PACKAGE = "com.ventouxlabs.gatepath"
 TESTVPN_ACTIVITY = f"{APP_PACKAGE}/.testvpn.TestVpnControlActivity"
 VPN_SINK_RELATIVE = "files/vpn-sink.jsonl"
+# DiagnosticsSharer writes here (CACHE_SUBDIR/FILE_NAME). App-private, so it
+# comes out via run-as like the audit log does.
+BUNDLE_RELATIVE = "cache/diagnostics/gatepath-diagnostics.txt"
+# Logged by MainActivity.debugWriteDiagnosticsBundle; keep in sync with it.
+BUNDLE_MARKER = "debug_bundle_written"
 # The unbound liveness probe targets a dedicated sentinel host:port the captive
 # monitor never touches (it probes 10.0.2.2:18080), so the bound WebView's
 # attempt to reach the same sentinel is unambiguous in the VPN sink. Single
@@ -502,6 +507,47 @@ def should_write_fallback_logcat(path: Path) -> bool:
     return not path.exists() or path.stat().st_size == 0
 
 
+def step_write_bundle(state: dict) -> dict:
+    """Ask the app to build a redacted diagnostics bundle, without the chooser.
+
+    Deliberately runs AFTER wait_validated. That transition clears the retained
+    probe capture, so a bundle taken here is also the check that the capture does
+    not outlive its incident — the thing that would otherwise ship a previous
+    gateway's evidence in a report about this one.
+
+    The share sheet itself is undriveable here for the same reason the captive
+    notification is (HARNESS_NOTES §1), so a debug-only intent writes the bundle
+    and logs the FileProvider URI instead.
+    """
+    serial = state["serial"]
+    adb_helper.shell(
+        serial,
+        f"am start -n {APP_PACKAGE}/.MainActivity "
+        f"--ez gatepath.debug.write_bundle true --ez gatepath.debug.redact true",
+        timeout=20,
+    )
+    deadline = time.time() + 30
+    while time.time() < deadline:
+        log = adb_helper.shell(serial, "logcat -d", timeout=20, check=False)
+        if BUNDLE_MARKER in log:
+            if f"{BUNDLE_MARKER} failed" in log:
+                raise RuntimeError(f"bundle write failed; see logcat for {BUNDLE_MARKER}")
+            return {"marker": True}
+        time.sleep(1)
+    raise RuntimeError(f"'{BUNDLE_MARKER}' never appeared in logcat within 30s")
+
+
+def step_pull_bundle(state: dict) -> dict:
+    """run-as cat the bundle into artifacts/ for the host-side assertion pass."""
+    serial = state["serial"]
+    text = adb_helper.shell(
+        serial, f"run-as {APP_PACKAGE} cat {BUNDLE_RELATIVE}", timeout=15, check=False
+    )
+    out = state["artifacts_dir"] / "diagnostics-bundle.txt"
+    out.write_text(text)
+    return {"bytes": len(text)}
+
+
 def step_pull_logcat(state: dict) -> dict:
     serial = state["serial"]
     # Full post-clear buffer (launch_debug_portal cleared it just before the
@@ -577,6 +623,8 @@ STEPS: list[Callable[[dict], dict]] = [
     step("wait_validated", step_wait_validated),
     step("mark_bound_end", step_mark_bound_end),
     step("pull_vpn_sink", step_pull_vpn_sink),
+    step("write_bundle", step_write_bundle),
+    step("pull_bundle", step_pull_bundle),
     step("pull_logcat", step_pull_logcat),
     step("pull_audit_log", step_pull_audit_log),
     step("fetch_gateway_log", step_fetch_gateway_log),

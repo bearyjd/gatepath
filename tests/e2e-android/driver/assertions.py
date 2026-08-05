@@ -419,6 +419,85 @@ def check_vpn_confinement(
         )
 
 
+def check_diagnostics_bundle(
+    bundle: str,
+    audit_entries: list[dict[str, Any]],
+    logcat: str,
+    failures: list[str],
+) -> None:
+    """F. The bundle the user actually shares.
+
+    Everything upstream of this is verified by unit tests against a bundle
+    STRING. This is the only pass that looks at a bundle a real device wrote to
+    a real FileProvider path, which is where an authority or file_paths.xml
+    mistake surfaces and where a unit test cannot reach.
+
+    Written to fail on absent evidence rather than pass quietly: an assertion
+    that cannot fail is the defect this driver exists to prevent (#134/#135).
+    """
+    if not bundle.strip():
+        fail("bundle.file", "diagnostics-bundle.txt missing or empty", failures)
+        return
+    ok("bundle.file", f"{len(bundle)} bytes")
+
+    # The FileProvider URI proves the authority resolved. Without it the share
+    # would throw at getUriForFile and the user would see only "share failed".
+    uri_line = next(
+        (ln for ln in logcat.splitlines() if "debug_bundle_written" in ln and "uri=" in ln),
+        None,
+    )
+    if uri_line is None:
+        fail("bundle.uri", "no 'debug_bundle_written ... uri=' line in logcat", failures)
+    elif "content://" not in uri_line:
+        fail("bundle.uri", f"expected a content:// URI, got: {uri_line.strip()}", failures)
+    else:
+        ok("bundle.uri", "FileProvider minted a content:// URI")
+
+    # Redaction, checked against the identifiers this run actually produced.
+    identifiers = {
+        str(e[k])
+        for e in audit_entries
+        for k in ("ssid", "gateway_ip", "portal_domain")
+        if e.get(k)
+    }
+    if not identifiers:
+        fail(
+            "bundle.redacted",
+            "no ssid/gateway_ip/portal_domain in the audit log to test redaction "
+            "against — cannot conclude the bundle is scrubbed",
+            failures,
+        )
+    else:
+        leaked = sorted(v for v in identifiers if v in bundle)
+        if leaked:
+            fail("bundle.redacted", f"redacted bundle still contains {leaked}", failures)
+        elif "REDACTED" not in bundle:
+            fail("bundle.redacted", "no REDACTED token — was redaction applied at all?", failures)
+        else:
+            ok("bundle.redacted", f"{len(identifiers)} identifier(s) scrubbed")
+
+    # The capture must not outlive its incident. This bundle is taken after
+    # wait_validated, which clears it, so a populated capture block here means a
+    # previous gateway's evidence is riding along in a report about this one.
+    if "(no intercepted response captured)" in bundle:
+        ok("bundle.capture_cleared", "capture cleared on the validated transition")
+    else:
+        fail(
+            "bundle.capture_cleared",
+            "expected '(no intercepted response captured)' after validation; the "
+            "retained capture outlived the incident it describes",
+            failures,
+        )
+
+    # Body-derived fields were removed because a gateway controls them. Guard
+    # the removal end-to-end, not just in the unit test.
+    resurrected = [f for f in ("body_sha256", "body_characters") if f in bundle]
+    if resurrected:
+        fail("bundle.no_body_evidence", f"gateway-controlled field(s) back: {resurrected}", failures)
+    else:
+        ok("bundle.no_body_evidence", "no body-derived fields")
+
+
 def _summarise(data: dict[str, Any]) -> str:
     parts = []
     for k, v in data.items():
@@ -489,6 +568,14 @@ def main(argv: list[str]) -> int:
         # D2 positive control: did the WebView actually attempt the sentinel?
         sentinel_attempted = _webview_attempted_sentinel(logcat_text)
         check_vpn_confinement(sink_lines, failures, sentinel_attempted)
+
+    # F. The shared bundle — needs logcat (for the FileProvider URI) and the
+    # audit entries (for the identifiers redaction is checked against).
+    bundle_path = root / "diagnostics-bundle.txt"
+    bundle_text = (
+        bundle_path.read_text(errors="replace") if bundle_path.exists() else ""
+    )
+    check_diagnostics_bundle(bundle_text, audit_entries, logcat_text, failures)
 
     if failures:
         print(f"\n{len(failures)} failure(s):", file=sys.stderr)
