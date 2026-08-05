@@ -70,6 +70,13 @@ VPN_SINK_RELATIVE = "files/vpn-sink.jsonl"
 # the assertion (PR #55).
 SENTINEL_DST = "10.0.2.2"
 SENTINEL_PORT = 18081
+# Mirrors TestVpnControlActivity.PROBE_COUNT (3) * CONNECT_TIMEOUT_MS (1500ms).
+# `am start` returns once the activity is launched, not once its onCreate()
+# (which spawns and `.join()`s the probe thread) returns — so a "probe" action
+# can still be mid-flight for up to this long after the shell command
+# completes. Single source of truth, same rule as SENTINEL_DST/SENTINEL_PORT:
+# keep in sync with TestVpnControlActivity.kt.
+PROBE_DRAIN_SEC = 4.5
 
 
 def _testvpn(serial: str, action: str, label: str | None = None) -> None:
@@ -250,6 +257,16 @@ def step_liveness_probe(state: dict) -> dict:
         ):
             captured = True
             break
+    # The loop above fires a new "probe" action every 1.5s and can break the
+    # moment capture is detected — but `am start` is fire-and-forget: it does
+    # not wait for the activity's onCreate() (which runs up to PROBE_COUNT
+    # sequential connect() attempts) to finish. So the LAST probe fired can
+    # still be sending SYNs for up to PROBE_DRAIN_SEC after this loop exits.
+    # Drain that straggler before measuring quiescence below, or its packets
+    # can land after bound_begin and read as a leak that never happened (the
+    # android-e2e false failure on PR #154: 4 sentinel packets inside the
+    # bound window that were this straggler, not a WebView leak).
+    time.sleep(PROBE_DRAIN_SEC)
     # Quiescence settle BEFORE opening the bound window. The unbound TCP probe
     # hits the VPN black hole (no SYN-ACK), so its SYNs keep RETRANSMITTING into
     # the sink for several seconds after the connect. If bound_begin is laid
