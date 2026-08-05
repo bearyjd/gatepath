@@ -27,9 +27,8 @@ data class BundleMeta(
  * ### Redaction (`redact = true`)
  * Scope: the network-identifying fields the desktop
  * `gatepath-netns-helper/packaging/collect-diagnostics.sh --redact` scrubs —
- * SSID, gateway IP, and portal domain, plus the probe-capture body digest.
- * Applied in three passes so an identifier can't slip through a free-text
- * field:
+ * SSID, gateway IP, and portal domain. Applied in two passes so an identifier
+ * can't slip through a free-text field:
  * 1. **Audit entries** are scrubbed object-level ([redactEntry]) — a `null`
  *    identifier stays `null` (nothing to reveal), matching the desktop sed which
  *    only rewrites quoted string values; [AuditEntry.portalDomain] is always a
@@ -38,9 +37,10 @@ data class BundleMeta(
  *    audit log (a probe error can embed the portal domain, e.g.
  *    `UnknownHostException: portal.example.com`) and has bare IP literals masked
  *    (gateway/DNS answers the probes echo verbatim). See [redactDiagnosisText].
- * 3. The **probe capture** drops its body digest ([renderProbeCapture]) — a
- *    personalised portal page makes that hash a stable per-device fingerprint.
- *    Its other fields are non-identifying before they arrive, so they stand.
+ *
+ * The **probe capture** needs no pass of its own: [PortalProbeCapture] only
+ * admits values that are safe to share, enforced at construction rather than
+ * scrubbed here.
  */
 object DiagnosticsBundle {
 
@@ -75,7 +75,7 @@ object DiagnosticsBundle {
         appendLine()
 
         appendLine("--- Latest portal probe capture ---")
-        appendLine(renderProbeCapture(probeCapture, redact))
+        appendLine(renderProbeCapture(probeCapture))
         appendLine()
 
         appendLine("--- Audit log (audit.jsonl) ---")
@@ -129,21 +129,18 @@ object DiagnosticsBundle {
     }
 
     /**
-     * The capture is structural by construction ([PortalProbeCapture] narrows
-     * the gateway's `Content-Type` to a known media type before it ever gets
-     * here), so only [PortalProbeCapture.bodySha256] needs scrubbing: against a
-     * personalised portal page the digest is a stable per-device fingerprint
-     * that anyone holding candidate responses can confirm by matching.
+     * No redaction branch, deliberately: [PortalProbeCapture] only admits
+     * values that are safe to share, so there is nothing here to scrub. It
+     * carries no body-derived field for the same reason — a gateway controls
+     * its own response, so a length or a digest is an identifier channel it
+     * can vary per device.
      */
-    private fun renderProbeCapture(capture: PortalProbeCapture?, redact: Boolean): String {
+    private fun renderProbeCapture(capture: PortalProbeCapture?): String {
         if (capture == null) return "(no intercepted response captured)"
         return buildString {
             appendLine("http_status: ${capture.httpStatus}")
             appendLine("content_type: ${capture.contentType ?: "(absent)"}")
-            appendLine("redirect_signal: ${capture.redirectSignal}")
-            appendLine("body_characters: ${capture.bodyCharacters ?: "(not captured)"}")
-            val digest = if (redact) REDACTED else capture.bodySha256 ?: "(not captured)"
-            append("body_sha256: $digest")
+            append("redirect_signal: ${capture.redirectSignal}")
         }
     }
 

@@ -1,32 +1,34 @@
 package com.ventouxlabs.gatepath.network
 
-import java.security.MessageDigest
-
 /**
  * Privacy-preserving evidence from an intercepted connectivity-check response.
- * It deliberately excludes bodies, cookies, and portal URLs: those frequently
- * carry device identifiers or one-time credentials.
  *
- * A response header is arbitrary gateway-controlled text, not reliably a media
- * type, so [contentType] is never stored raw: [normalizeContentType] collapses
- * it to a known media type or [OTHER_MEDIA_TYPE]. Without that, a hostile
- * gateway could smuggle a per-device value (`text/html; session=<id>`) into a
- * bundle the user shares with someone else.
+ * Every field here is exported into a diagnostics bundle the user shares
+ * off-device, so the type only admits values that are safe to send. Build one
+ * through [of] — the constructor is private precisely so a caller cannot hand
+ * in a raw response header.
  *
- * [bodySha256] is only non-identifying while the portal body is impersonal:
- * for a personalised page the digest is a stable fingerprint that anyone
- * holding candidate responses can confirm by matching. `DiagnosticsBundle`
- * therefore omits it from a redacted bundle.
+ * ### What it deliberately does not carry
+ * Bodies, body digests, body lengths, cookies, and portal URLs. Anything
+ * derived from the response body is gateway-controlled and can be varied per
+ * device — padding changes a length, personalised markup changes a digest — so
+ * it is an identifier channel into a bundle the user believes is scrubbed. A
+ * digest was carried here briefly on the theory that comparing digests across
+ * probes was useful; nothing in the app compares them, so it earned nothing and
+ * cost a consent problem.
  *
- * `DiagnosticsBundleTest` guards this field set against drift — a new field
- * must be shown non-identifying, or given redaction, before it is exported.
+ * [contentType] is the one header value kept, and only after [normalizeContentType]
+ * reduces it to a known media type. A response header is arbitrary
+ * gateway-controlled text, not reliably a media type: `text/html; session=<id>`
+ * is a valid header.
+ *
+ * `DiagnosticsBundleTest` guards this field set against drift.
  */
-data class PortalProbeCapture(
+@ConsistentCopyVisibility
+data class PortalProbeCapture private constructor(
     val httpStatus: Int,
     val contentType: String?,
     val redirectSignal: RedirectSignal,
-    val bodyCharacters: Int?,
-    val bodySha256: String?,
 ) {
     enum class RedirectSignal { LOCATION_HEADER, REFRESH_HEADER, META_REFRESH, SCRIPTED_LOCATION, NONE }
 
@@ -56,19 +58,30 @@ data class PortalProbeCapture(
         )
 
         /**
+         * The only way to build a capture. [rawContentType] is the response
+         * header verbatim; narrowing happens here so an un-normalised capture
+         * is unrepresentable rather than merely discouraged. Callers pass what
+         * the connection gave them and cannot get it wrong.
+         */
+        fun of(
+            httpStatus: Int,
+            rawContentType: String?,
+            redirectSignal: RedirectSignal,
+        ): PortalProbeCapture = PortalProbeCapture(
+            httpStatus = httpStatus,
+            contentType = normalizeContentType(rawContentType),
+            redirectSignal = redirectSignal,
+        )
+
+        /**
          * Reduce a raw `Content-Type` to a known media type, dropping every
          * parameter (`; charset=...` and anything a gateway invents). Unknown
          * types collapse to [OTHER_MEDIA_TYPE] rather than being echoed.
          */
-        fun normalizeContentType(raw: String?): String? {
+        internal fun normalizeContentType(raw: String?): String? {
             if (raw == null) return null
             val mediaType = raw.substringBefore(';').trim().lowercase()
             return if (mediaType in ALLOWED_MEDIA_TYPES) mediaType else OTHER_MEDIA_TYPE
         }
-
-        /** Hash a bounded, decoded body; never retain the body itself. */
-        fun sha256(body: String): String = MessageDigest.getInstance("SHA-256")
-            .digest(body.toByteArray(Charsets.UTF_8))
-            .joinToString("") { "%02x".format(it) }
     }
 }
