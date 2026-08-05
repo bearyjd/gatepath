@@ -145,10 +145,7 @@ class MainViewModel @Inject constructor(
                         // The portal sign-in succeeded — captive network now has
                         // NET_CAPABILITY_VALIDATED. Transition Active → Completed.
                         _networkStatus.value = NetworkStatus.SignInComplete
-                        _latestDiagnostics.value = null
-                        _diagnosis.value = null
-                        _latestProbeCapture.value = null
-                        suspectedNetwork = null
+                        clearIncidentState()
                         if (_activeNetwork.value == event.network) {
                             handleSignInSuccess()
                         }
@@ -158,10 +155,7 @@ class MainViewModel @Inject constructor(
                         // user "you're on a normal network, all good" instead
                         // of leaving them on "Monitoring network…" forever.
                         _networkStatus.value = NetworkStatus.NoPortal
-                        _latestDiagnostics.value = null
-                        _diagnosis.value = null
-                        _latestProbeCapture.value = null
-                        suspectedNetwork = null
+                        clearIncidentState()
                     }
                     is NetworkEvent.CaptivePortalSuspected -> {
                         // Both probe paths failed. Diagnostics carries VPN
@@ -171,18 +165,20 @@ class MainViewModel @Inject constructor(
                         Log.w(TAG, "Captive suspected on ${event.network}: ${event.diagnostics}")
                         _latestDiagnostics.value = event.diagnostics
                         _networkStatus.value = NetworkStatus.CaptivePending
-                        // A capture from an earlier gateway would describe a
-                        // different incident than the one being diagnosed here.
-                        _latestProbeCapture.value = null
+                        // Only drop the capture when the incident actually
+                        // changed. A re-evaluation of the network we already
+                        // captured can land here, and that capture still
+                        // describes this incident — discarding it would leave
+                        // a suspected-portal bundle with no evidence at all.
+                        if (_activeNetwork.value != event.network) {
+                            _latestProbeCapture.value = null
+                        }
                         suspectedNetwork = event.network
                         runDiagnosticEngine(event.network, event.diagnostics)
                     }
                     is NetworkEvent.CaptiveNetworkLost -> {
                         _networkStatus.value = NetworkStatus.Lost
-                        _latestDiagnostics.value = null
-                        _diagnosis.value = null
-                        _latestProbeCapture.value = null
-                        suspectedNetwork = null
+                        clearIncidentState()
                         if (_activeNetwork.value == event.network) {
                             _activeNetwork.value = null
                             // The manager picks ABORTED_PRE_ACTIVE for pre-Active
@@ -194,6 +190,20 @@ class MainViewModel @Inject constructor(
                 }
             }
         }
+    }
+
+    /**
+     * Reset everything scoped to one captive incident.
+     *
+     * [NetworkEvent.CaptiveNetworkAvailable] deliberately does not call this:
+     * it sets a fresh capture, and clearing first would publish a transient
+     * null to collectors of [latestProbeCapture].
+     */
+    private fun clearIncidentState() {
+        _latestDiagnostics.value = null
+        _diagnosis.value = null
+        suspectedNetwork = null
+        _latestProbeCapture.value = null
     }
 
     /**

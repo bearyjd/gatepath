@@ -234,10 +234,15 @@ class DiagnosticsBundleTest {
      * Asserting the field set makes adding one a deliberate decision. Two
      * earlier versions of this guard got that decision wrong in the same way:
      * `contentType` was listed safe because it came from the gateway, and
-     * `bodyCharacters` because it was "only a length". Both missed that the
-     * gateway chooses those values and the adversary redaction exists for is
-     * whoever the user hands the bundle to. If the gateway controls it, it
-     * does not belong here.
+     * `bodyCharacters` because it was "only a length".
+     *
+     * The rule that actually separates the survivors from the removals is not
+     * "gateway-controlled" — the gateway picks the status code too. It is
+     * whether the value's space is **small, enumerated, and conspicuous to
+     * vary**. `httpStatus` and `redirectSignal` qualify: a few bits each, and
+     * encoding anything in them means returning absurd status codes. A body
+     * length or digest does not: effectively unbounded, and a gateway varies
+     * it invisibly by padding its own response.
      */
     @Test
     fun `every exported probe-capture field is privacy-safe by construction`() {
@@ -256,9 +261,10 @@ class DiagnosticsBundleTest {
         assertEquals(
             "PortalProbeCapture's fields changed. Every field is written into the " +
                 "shared diagnostics bundle unredacted, in both modes, so a new one must " +
-                "be safe by construction. Anything the gateway controls — including a " +
-                "body length or digest, which it varies by padding its own response — " +
-                "does not belong here.",
+                "be safe by construction. A gateway-controlled value is admissible only " +
+                "when its space is small, enumerated and conspicuous to vary (httpStatus, " +
+                "redirectSignal). A body length or digest is not: effectively unbounded, " +
+                "and varied invisibly by padding the response.",
             knownPrivacySafe,
             declared,
         )
