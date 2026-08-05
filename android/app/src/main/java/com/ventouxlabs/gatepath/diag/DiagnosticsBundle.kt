@@ -59,6 +59,7 @@ object DiagnosticsBundle {
         entries: List<AuditEntry>,
         diagnosis: DiagnosisResult?,
         probeCapture: PortalProbeCapture? = null,
+        unreadableEntries: Int = 0,
         redact: Boolean,
     ): String = buildString {
         appendLine("=== Gatepath diagnostics ===")
@@ -67,6 +68,11 @@ object DiagnosticsBundle {
         appendLine("android: ${meta.androidRelease} (API ${meta.androidSdkInt})")
         appendLine("redacted: $redact")
         appendLine("audit_entries: ${entries.size}")
+        // Silence here would let a reader mistake a dropped line for an event
+        // that never happened, so an incomplete log says so on its face.
+        if (unreadableEntries > 0) {
+            appendLine("audit_entries_unreadable: $unreadableEntries")
+        }
         appendLine()
 
         appendLine("--- Latest diagnosis ---")

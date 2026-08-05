@@ -13,6 +13,7 @@ import com.ventouxlabs.gatepath.network.CaptivePortalMonitor
 import com.ventouxlabs.gatepath.network.HttpFetcher
 import com.ventouxlabs.gatepath.network.NetworkDiagnostics
 import com.ventouxlabs.gatepath.network.PortalProbeCapture
+import com.ventouxlabs.gatepath.network.ProbeResult
 import com.ventouxlabs.gatepath.network.NetworkEvent
 import com.ventouxlabs.gatepath.network.PortalProbe
 import com.ventouxlabs.gatepath.network.VpnDetector
@@ -241,7 +242,17 @@ class MainViewModel @Inject constructor(
                         InetAddress.getAllByName(host).mapNotNull { it.hostAddress }
                     }.getOrElse { emptyList() }
                 },
-                activeProbe = { portalProbe.probe(network = null, testUrl = monitor.probeUrl) },
+                // Keep whatever this probe intercepts. Without it the suspected
+                // path clears the stale capture (correctly) and then discards
+                // the fresh one, leaving the bundle with no evidence for the
+                // incident the user is actually reporting.
+                activeProbe = {
+                    portalProbe.probe(network = null, testUrl = monitor.probeUrl).also { result ->
+                        if (result is ProbeResult.Portal) {
+                            result.capture?.let { _latestProbeCapture.value = it }
+                        }
+                    }
+                },
             )
             val result = diagnosticEngine.run(ctx)
             Log.i(TAG, "Diagnosis on ${network}: top=${result.top::class.simpleName} action=${result.recommended}")

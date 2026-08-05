@@ -68,7 +68,7 @@ class AuditLogTest {
         val entry = sampleEntry()
         writer.append(entry)
 
-        val entries = writer.readAll()
+        val entries = writer.readRecent().entries
         assertEquals(1, entries.size)
         val read = entries[0]
 
@@ -90,21 +90,21 @@ class AuditLogTest {
     @Test
     fun `nullable ssid round-trips as null`() = runBlocking {
         writer.append(sampleEntry(ssid = null))
-        val read = writer.readAll()[0]
+        val read = writer.readRecent().entries[0]
         assertNull(read.ssid)
     }
 
     @Test
     fun `nullable gatewayIp round-trips as null`() = runBlocking {
         writer.append(sampleEntry(gatewayIp = null))
-        val read = writer.readAll()[0]
+        val read = writer.readRecent().entries[0]
         assertNull(read.gatewayIp)
     }
 
     @Test
     fun `nullable sessionClosedUtc round-trips as null`() = runBlocking {
         writer.append(sampleEntry(sessionClosedUtc = null))
-        val read = writer.readAll()[0]
+        val read = writer.readRecent().entries[0]
         assertNull(read.sessionClosedUtc)
     }
 
@@ -120,7 +120,7 @@ class AuditLogTest {
         for (reason in validReasons) {
             writer.append(sampleEntry(closeReason = reason))
         }
-        val entries = writer.readAll()
+        val entries = writer.readRecent().entries
         val writtenReasons = entries.map { it.closeReason }.toSet()
         assertEquals(validReasons, writtenReasons)
     }
@@ -136,7 +136,7 @@ class AuditLogTest {
         }
         jobs.awaitAll()
 
-        val entries = writer.readAll()
+        val entries = writer.readRecent().entries
         assertEquals(10, entries.size)
         entries.forEach { entry ->
             assertEquals(1, entry.schemaVersion)
@@ -152,7 +152,7 @@ class AuditLogTest {
         for (i in 0 until 5) {
             writer.append(sampleEntry(index = i))
         }
-        val entries = writer.readAll()
+        val entries = writer.readRecent().entries
         assertEquals(5, entries.size)
         // Verify order preserved (timestamps differ by index digit)
         for (i in 0 until 5) {
@@ -161,10 +161,71 @@ class AuditLogTest {
     }
 
     @Test
-    fun `readAll returns empty list when file does not exist`() {
+    fun `readRecent returns empty list when file does not exist`() {
         val nonExistentFile = File(tempDir, "missing.jsonl")
         val emptyWriter = AuditLogWriter(nonExistentFile)
-        val entries = emptyWriter.readAll()
+        val entries = emptyWriter.readRecent().entries
         assertTrue(entries.isEmpty())
+    }
+
+    // ── Bounded, resilient reads (the diagnostics-bundle path) ──────────────
+
+    /** sampleEntry varies only timestampUtc by index, so that identifies an entry. */
+    private fun stamps(entries: List<AuditEntry>) = entries.map { it.timestampUtc }
+
+    @Test
+    fun `readRecent keeps the newest entries and drops the oldest`() = runBlocking {
+        repeat(10) { i -> writer.append(sampleEntry(index = i)) }
+
+        val result = writer.readRecent(limit = 3)
+
+        assertEquals(0, result.unreadable)
+        assertEquals(
+            listOf(
+                "2026-05-05T12:34:56.007Z",
+                "2026-05-05T12:34:56.008Z",
+                "2026-05-05T12:34:56.009Z",
+            ),
+            stamps(result.entries),
+        )
+    }
+
+    @Test
+    fun `readRecent counts unreadable lines instead of losing the whole log`() = runBlocking {
+        writer.append(sampleEntry(index = 1))
+        // What the OS killing the process mid-append leaves behind.
+        logFile.appendText("{\"schema_version\":1,\"timestamp_utc\":\"2026\n", Charsets.UTF_8)
+        writer.append(sampleEntry(index = 2))
+
+        val result = writer.readRecent()
+
+        assertEquals(1, result.unreadable)
+        assertEquals(
+            listOf("2026-05-05T12:34:56.001Z", "2026-05-05T12:34:56.002Z"),
+            stamps(result.entries),
+        )
+    }
+
+    @Test
+    fun `readRecent survives a key written by a newer build`() = runBlocking {
+        writer.append(sampleEntry(index = 1))
+        // The same entry plus a field this build has never heard of. Strict
+        // decoding rejects it and takes every other entry down with it.
+        val forward = logFile.readLines().first()
+            .replaceFirst("{", """{"field_from_the_future":42,""")
+        logFile.appendText(forward + "\n", Charsets.UTF_8)
+
+        val result = writer.readRecent()
+
+        assertEquals(0, result.unreadable)
+        assertEquals(2, result.entries.size)
+    }
+
+    @Test
+    fun `readRecent with a non-positive limit reads nothing rather than throwing`() = runBlocking {
+        writer.append(sampleEntry(index = 1))
+
+        assertEquals(0, writer.readRecent(limit = 0).entries.size)
+        assertEquals(0, writer.readRecent(limit = -1).entries.size)
     }
 }

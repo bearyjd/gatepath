@@ -210,6 +210,7 @@ TEST_SOURCES=(
     "$SRC_TEST/com/ventouxlabs/gatepath/SessionStateTest.kt"
     "$SRC_TEST/com/ventouxlabs/gatepath/AuditLogTest.kt"
     "$SRC_TEST/com/ventouxlabs/gatepath/AuditSchemaParityTest.kt"
+    "$SRC_TEST/com/ventouxlabs/gatepath/AuditTailParityTest.kt"
     "$SRC_TEST/com/ventouxlabs/gatepath/PortalProbeTest.kt"
     "$SRC_TEST/com/ventouxlabs/gatepath/PortalRedirectHintTest.kt"
     "$SRC_TEST/com/ventouxlabs/gatepath/PortalProbeCaptureTest.kt"

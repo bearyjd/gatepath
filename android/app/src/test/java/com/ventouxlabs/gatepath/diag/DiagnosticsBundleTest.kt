@@ -224,6 +224,56 @@ class DiagnosticsBundleTest {
     }
 
     /**
+     * The absent-evidence paths. A bundle with no capture, or a capture whose
+     * header the gateway never sent, must say so in words rather than printing
+     * "null" and leaving a reader to guess whether the probe ran at all.
+     */
+    @Test
+    fun `a missing capture and a missing header both read as prose, not null`() {
+        val noCapture = DiagnosticsBundle.build(
+            meta,
+            entries = emptyList(),
+            diagnosis = null,
+            probeCapture = null,
+            redact = true,
+        )
+        assertTrue(noCapture.contains("(no intercepted response captured)"))
+        assertFalse(noCapture.contains("null"))
+
+        val noHeader = DiagnosticsBundle.build(
+            meta,
+            entries = emptyList(),
+            diagnosis = null,
+            probeCapture = captureOf(rawContentType = null),
+            redact = true,
+        )
+        assertTrue(noHeader.contains("content_type: (absent)"))
+    }
+
+    /**
+     * A damaged log must degrade, not disappear, and must admit that it did.
+     */
+    @Test
+    fun `unreadable entries are reported, and stay silent when there are none`() {
+        val damaged = DiagnosticsBundle.build(
+            meta,
+            entries = emptyList(),
+            diagnosis = null,
+            unreadableEntries = 3,
+            redact = true,
+        )
+        assertTrue(damaged.contains("audit_entries_unreadable: 3"))
+
+        val clean = DiagnosticsBundle.build(
+            meta,
+            entries = emptyList(),
+            diagnosis = null,
+            redact = true,
+        )
+        assertFalse(clean.contains("audit_entries_unreadable"))
+    }
+
+    /**
      * Drift guard on what the probe capture is allowed to export.
      *
      * Every field here reaches a bundle the user shares off-device, in both

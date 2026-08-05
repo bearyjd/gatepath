@@ -48,11 +48,13 @@ object DiagnosticsSharer {
         probeCapture: PortalProbeCapture?,
         redact: Boolean,
     ): Uri = withContext(Dispatchers.IO) {
+        val audit = AuditLog.readRecent()
         val text = DiagnosticsBundle.build(
             meta = collectMeta(context),
-            entries = AuditLog.readAll(),
+            entries = audit.entries,
             diagnosis = diagnosis,
             probeCapture = probeCapture,
+            unreadableEntries = audit.unreadable,
             redact = redact,
         )
 
