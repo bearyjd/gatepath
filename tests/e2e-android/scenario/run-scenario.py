@@ -554,7 +554,11 @@ def step_write_bundle(state: dict) -> dict:
     adb_helper.shell(
         serial, f"run-as {APP_PACKAGE} rm -f {BUNDLE_URI_RELATIVE}", timeout=10, check=False
     )
-    adb_helper.shell(serial, "logcat -G 8M; logcat -c", timeout=15, check=False)
+    # Deliberately does NOT clear logcat. An earlier version did, back when this
+    # step polled the log for its signal, and that wiped the WebView evidence
+    # that pull_logcat (which runs after this) captures for the off_domain and
+    # vpn.confinement assertions — both went red while this step itself passed.
+    # Same clobbering trap as #134/#135, just from the other direction.
     # --activity-single-top is load-bearing. `am start` defaults to
     # FLAG_ACTIVITY_NEW_TASK, and MainActivity is already running by this point
     # in the scenario, so without it Android just resumes the existing task and
