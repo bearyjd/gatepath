@@ -63,6 +63,13 @@ AUDIT_LOG_RELATIVE = "files/audit.jsonl"
 APP_PACKAGE = "com.ventouxlabs.gatepath"
 TESTVPN_ACTIVITY = f"{APP_PACKAGE}/.testvpn.TestVpnControlActivity"
 VPN_SINK_RELATIVE = "files/vpn-sink.jsonl"
+# DiagnosticsSharer writes here (CACHE_SUBDIR/FILE_NAME). App-private, so it
+# comes out via run-as like the audit log does.
+BUNDLE_RELATIVE = "cache/diagnostics/gatepath-diagnostics.txt"
+# Written by MainActivity.debugWriteDiagnosticsBundle AFTER getUriForFile
+# returns, so its presence proves the FileProvider authority resolved. A file,
+# not a log line: logcat is not a reliable channel here (HARNESS_NOTES §3).
+BUNDLE_URI_RELATIVE = "files/debug-bundle-uri.txt"
 # The unbound liveness probe targets a dedicated sentinel host:port the captive
 # monitor never touches (it probes 10.0.2.2:18080), so the bound WebView's
 # attempt to reach the same sentinel is unambiguous in the VPN sink. Single
@@ -519,6 +526,106 @@ def should_write_fallback_logcat(path: Path) -> bool:
     return not path.exists() or path.stat().st_size == 0
 
 
+def _dump_bundle_diagnostics(state: dict) -> None:
+    """Leave evidence behind when the bundle never appears.
+
+    This step cannot be run locally (no /dev/kvm), so a bare timeout would give
+    the next attempt nothing to work from. Capture the log buffer and the app's
+    own view of its storage instead of guessing again.
+    """
+    serial = state["serial"]
+    art = state["artifacts_dir"]
+    try:
+        art.joinpath("write-bundle-failure-logcat.txt").write_text(
+            adb_helper.shell(serial, "logcat -d", timeout=25, check=False)
+        )
+        listing = adb_helper.shell(
+            serial,
+            f"run-as {APP_PACKAGE} sh -c 'ls -la files cache cache/diagnostics 2>&1'",
+            timeout=15,
+            check=False,
+        )
+        art.joinpath("write-bundle-failure-ls.txt").write_text(listing)
+    except Exception:  # noqa: BLE001 — diagnostics must never mask the real error
+        pass
+
+
+def step_write_bundle(state: dict) -> dict:
+    """Ask the app to build a redacted diagnostics bundle, without the chooser.
+
+    Deliberately runs AFTER wait_validated. That transition clears the retained
+    probe capture, so a bundle taken here is also the check that the capture does
+    not outlive its incident — the thing that would otherwise ship a previous
+    gateway's evidence in a report about this one.
+
+    The share sheet is undriveable here for the same reason the captive
+    notification is (HARNESS_NOTES §1), so a debug-only intent writes the bundle.
+
+    Waits on a FILE, not a log line. A first version of this polled logcat and
+    timed out: the buffer has been rotating through boot spam since before this
+    step runs, exactly as HARNESS_NOTES §3 describes.
+    """
+    serial = state["serial"]
+    # Delete any sidecar from an earlier attempt first — otherwise a stale file
+    # would read as this run's success.
+    adb_helper.shell(
+        serial, f"run-as {APP_PACKAGE} rm -f {BUNDLE_URI_RELATIVE}", timeout=10, check=False
+    )
+    # Deliberately does NOT clear logcat. An earlier version did, back when this
+    # step polled the log for its signal, and that wiped the WebView evidence
+    # that pull_logcat (which runs after this) captures for the off_domain and
+    # vpn.confinement assertions — both went red while this step itself passed.
+    # Same clobbering trap as #134/#135, just from the other direction.
+    # --activity-single-top is load-bearing. `am start` defaults to
+    # FLAG_ACTIVITY_NEW_TASK, and MainActivity is already running by this point
+    # in the scenario, so without it Android just resumes the existing task and
+    # never delivers the Intent — onNewIntent does not fire and the extras are
+    # dropped on the floor. launch_debug_portal gets away with the plain form
+    # only because the activity is not up yet when it runs.
+    #
+    # Force-stopping first would also deliver the intent, but it would restart
+    # the process and null the retained capture, making the capture-cleared
+    # assertion downstream pass for the wrong reason.
+    adb_helper.shell(
+        serial,
+        f"am start --activity-single-top -n {APP_PACKAGE}/.MainActivity "
+        f"--ez gatepath.debug.write_bundle true --ez gatepath.debug.redact true",
+        timeout=20,
+    )
+
+    deadline = time.time() + 60
+    while time.time() < deadline:
+        uri = adb_helper.shell(
+            serial,
+            f"run-as {APP_PACKAGE} cat {BUNDLE_URI_RELATIVE}",
+            timeout=10,
+            check=False,
+        ).strip()
+        if uri.startswith("content://"):
+            return {"uri": uri}
+        time.sleep(2)
+
+    _dump_bundle_diagnostics(state)
+    raise RuntimeError(
+        f"{BUNDLE_URI_RELATIVE} never appeared within 60s. See "
+        "write-bundle-failure-logcat.txt and write-bundle-failure-ls.txt in artifacts."
+    )
+
+
+def step_pull_bundle(state: dict) -> dict:
+    """run-as cat the bundle and its URI sidecar into artifacts/ for the driver."""
+    serial = state["serial"]
+    text = adb_helper.shell(
+        serial, f"run-as {APP_PACKAGE} cat {BUNDLE_RELATIVE}", timeout=15, check=False
+    )
+    state["artifacts_dir"].joinpath("diagnostics-bundle.txt").write_text(text)
+    uri = adb_helper.shell(
+        serial, f"run-as {APP_PACKAGE} cat {BUNDLE_URI_RELATIVE}", timeout=10, check=False
+    )
+    state["artifacts_dir"].joinpath("bundle-uri.txt").write_text(uri)
+    return {"bytes": len(text)}
+
+
 def step_pull_logcat(state: dict) -> dict:
     serial = state["serial"]
     # Full post-clear buffer (launch_debug_portal cleared it just before the
@@ -594,6 +701,8 @@ STEPS: list[Callable[[dict], dict]] = [
     step("wait_validated", step_wait_validated),
     step("mark_bound_end", step_mark_bound_end),
     step("pull_vpn_sink", step_pull_vpn_sink),
+    step("write_bundle", step_write_bundle),
+    step("pull_bundle", step_pull_bundle),
     step("pull_logcat", step_pull_logcat),
     step("pull_audit_log", step_pull_audit_log),
     step("fetch_gateway_log", step_fetch_gateway_log),

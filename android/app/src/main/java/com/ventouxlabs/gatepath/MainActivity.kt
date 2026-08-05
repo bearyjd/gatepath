@@ -20,6 +20,7 @@ import com.ventouxlabs.gatepath.ui.theme.GatepathTheme
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
+import java.io.File
 import javax.inject.Inject
 
 @AndroidEntryPoint
@@ -137,6 +138,14 @@ class MainActivity : ComponentActivity() {
      */
     private fun maybeApplyDebugIntent(intent: Intent) {
         if (!BuildConfig.DEBUG) return
+        // Breadcrumb: proves the Intent was actually delivered. Its absence is
+        // how the e2e harness learned `am start` was resuming the task without
+        // calling onNewIntent — see run-scenario.py's --activity-single-top.
+        Log.i(TAG, "Debug intent received: extras=${intent.extras?.keySet()}")
+        if (intent.getBooleanExtra(EXTRA_DEBUG_WRITE_BUNDLE, false)) {
+            debugWriteDiagnosticsBundle(intent.getBooleanExtra(EXTRA_DEBUG_REDACT, true))
+            return
+        }
         val url = intent.getStringExtra(EXTRA_DEBUG_PORTAL_URL) ?: return
         val net = connectivityManager.activeNetwork ?: run {
             Log.w(TAG, "Debug portal intent: no active network; ignored")
@@ -146,8 +155,57 @@ class MainActivity : ComponentActivity() {
         viewModel.debugForceActiveSession(url, net)
     }
 
+    /**
+     * Debug-only: build the diagnostics bundle and log where it landed, without
+     * launching the chooser.
+     *
+     * The e2e harness cannot drive the system share sheet for the same reason it
+     * cannot drive the captive-portal notification — see `HARNESS_NOTES.md §1`.
+     * Everything worth testing on this path happens before the chooser anyway:
+     * the bundle is assembled, written to the FileProvider-shareable cache dir,
+     * and a `content://` URI is minted, which is where an authority or
+     * `file_paths.xml` mistake would surface. `sendIntent` after it is a
+     * four-line `Intent` builder.
+     *
+     * Fire from adb (debug builds only; release-stripped):
+     *   adb shell am start -n com.ventouxlabs.gatepath/.MainActivity \
+     *       --ez gatepath.debug.write_bundle true --ez gatepath.debug.redact true
+     */
+    private fun debugWriteDiagnosticsBundle(redact: Boolean) {
+        lifecycleScope.launch {
+            try {
+                val uri = DiagnosticsSharer.writeBundle(
+                    context = this@MainActivity,
+                    diagnosis = viewModel.diagnosis.value,
+                    probeCapture = viewModel.latestProbeCapture.value,
+                    redact = redact,
+                )
+                // Signal completion through a FILE, not logcat. The harness
+                // cannot depend on logcat here (HARNESS_NOTES §3: boot spam
+                // buries app lines and the ring buffer rotates them out).
+                // Written only AFTER getUriForFile returns, so its existence
+                // proves the FileProvider authority resolved — which writing
+                // the bundle alone does not, since writeText happens first.
+                File(filesDir, DEBUG_BUNDLE_URI_FILE).writeText(uri.toString())
+                Log.i(TAG, "$DEBUG_BUNDLE_MARKER redact=$redact uri=$uri")
+            } catch (e: CancellationException) {
+                throw e // cooperative cancellation is not a failure
+            } catch (e: Exception) {
+                Log.e(TAG, "$DEBUG_BUNDLE_MARKER failed", e)
+            }
+        }
+    }
+
     companion object {
         private const val TAG = "GatepathMain"
         private const val EXTRA_DEBUG_PORTAL_URL = "gatepath.debug.portal_url"
+        private const val EXTRA_DEBUG_WRITE_BUNDLE = "gatepath.debug.write_bundle"
+        private const val EXTRA_DEBUG_REDACT = "gatepath.debug.redact"
+
+        /** Also logged, but only as a human breadcrumb — the harness reads the file below. */
+        private const val DEBUG_BUNDLE_MARKER = "debug_bundle_written"
+
+        /** The e2e harness polls for this via run-as; keep in sync with run-scenario.py. */
+        private const val DEBUG_BUNDLE_URI_FILE = "debug-bundle-uri.txt"
     }
 }
