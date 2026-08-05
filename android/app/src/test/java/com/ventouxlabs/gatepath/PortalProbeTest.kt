@@ -247,7 +247,10 @@ class PortalProbeTest {
             "a 302 intercept must carry a capture, got null"
         }
         assertEquals(PortalProbeCapture.RedirectSignal.LOCATION_HEADER, capture.redirectSignal)
-        assertTrue("Expected a 3xx status, got ${capture.httpStatus}", capture.httpStatus in 300..399)
+        assertTrue(
+            "Expected a 3xx status, got ${capture.httpStatus}",
+            capture.httpStatus in 300..399,
+        )
     }
 
     @Test

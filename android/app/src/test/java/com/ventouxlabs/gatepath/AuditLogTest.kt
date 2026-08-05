@@ -181,7 +181,11 @@ class AuditLogTest {
 
         assertEquals(0, result.unreadable)
         assertEquals(
-            listOf("2026-05-05T12:34:56.007Z", "2026-05-05T12:34:56.008Z", "2026-05-05T12:34:56.009Z"),
+            listOf(
+                "2026-05-05T12:34:56.007Z",
+                "2026-05-05T12:34:56.008Z",
+                "2026-05-05T12:34:56.009Z",
+            ),
             stamps(result.entries),
         )
     }
