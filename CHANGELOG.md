@@ -12,6 +12,14 @@ detailed status lives in [`docs/ROADMAP.md`](docs/ROADMAP.md).
 
 ## [Unreleased]
 
+## [1.0.1] - 2026-08-06
+
+### Fixed
+
+- Android release builds are now signed with our release keystore.
+  `v1.0.0`'s AAB/APK were published unsigned (no keystore was configured yet);
+  no functional changes from `1.0.0` otherwise.
+
 ## [1.0.0] - 2026-08-05
 
 ### Added
@@ -139,5 +147,6 @@ detailed status lives in [`docs/ROADMAP.md`](docs/ROADMAP.md).
 - Desktop DoH-forwarder detection is intentionally not implemented (no D-Bus/portal
   signal exists). See `docs/BLOCKERS.md`.
 
-[Unreleased]: https://github.com/bearyjd/gatepath/compare/v1.0.0...main
+[Unreleased]: https://github.com/bearyjd/gatepath/compare/v1.0.1...main
+[1.0.1]: https://github.com/bearyjd/gatepath/releases/tag/v1.0.1
 [1.0.0]: https://github.com/bearyjd/gatepath/releases/tag/v1.0.0
