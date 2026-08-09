@@ -20,7 +20,10 @@ import android.webkit.WebViewClient
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.viewinterop.AndroidView
@@ -79,6 +82,12 @@ fun GatepathWebView(
     val portalHost = remember(url) { runCatching { URI(url).host }.getOrNull() ?: "" }
 
     val webView = remember {
+        // Debug-only: lets `chrome://inspect` attach to this WebView so the
+        // live DOM/CSS of a captive portal page can be inspected instead of
+        // guessed at from logcat. No-op / not compiled into release builds.
+        if (BuildConfig.DEBUG) {
+            WebView.setWebContentsDebuggingEnabled(true)
+        }
         WebView(context).apply {
             settings.apply {
                 javaScriptEnabled = true
@@ -164,9 +173,12 @@ fun GatepathWebView(
         }
     }
 
+    var lastLoadedUrl by remember { mutableStateOf<String?>(null) }
+
     DisposableEffect(network) {
         connectivityManager.bindProcessToNetwork(network)
         webView.loadUrl(url)
+        lastLoadedUrl = url
 
         onDispose {
             connectivityManager.bindProcessToNetwork(null)
@@ -183,6 +195,19 @@ fun GatepathWebView(
         }
     }
 
+    LaunchedEffect(url) {
+        // DisposableEffect(network) only re-runs when the Network changes, so
+        // it loads `url` once and then never again for as long as the same
+        // network stays bound. A caller can still hand us a *new* url on that
+        // same network (e.g. MainActivity's debug portal intent firing twice
+        // in a row) — without this, the WebView would silently keep showing
+        // whatever page it already had, since nothing else re-drives loadUrl.
+        if (url != lastLoadedUrl) {
+            webView.loadUrl(url)
+            lastLoadedUrl = url
+        }
+    }
+
     LaunchedEffect(reloadToken) {
         // Skip the initial composition — DisposableEffect(network) already
         // issued the first load. Re-drive the original portal URL rather than
@@ -190,6 +215,7 @@ fun GatepathWebView(
         // document the failed load left behind.
         if (reloadToken > 0) {
             webView.loadUrl(url)
+            lastLoadedUrl = url
         }
     }
 
