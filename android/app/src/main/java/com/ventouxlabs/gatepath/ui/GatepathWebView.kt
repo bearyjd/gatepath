@@ -20,7 +20,10 @@ import android.webkit.WebViewClient
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.viewinterop.AndroidView
@@ -79,6 +82,12 @@ fun GatepathWebView(
     val portalHost = remember(url) { runCatching { URI(url).host }.getOrNull() ?: "" }
 
     val webView = remember {
+        // Debug-only: lets `chrome://inspect` attach to this WebView so the
+        // live DOM/CSS of a captive portal page can be inspected instead of
+        // guessed at from logcat. No-op / not compiled into release builds.
+        if (BuildConfig.DEBUG) {
+            WebView.setWebContentsDebuggingEnabled(true)
+        }
         WebView(context).apply {
             settings.apply {
                 javaScriptEnabled = true
@@ -164,22 +173,35 @@ fun GatepathWebView(
         }
     }
 
+    var lastLoadedUrl by remember { mutableStateOf<String?>(null) }
+
     DisposableEffect(network) {
         connectivityManager.bindProcessToNetwork(network)
         webView.loadUrl(url)
+        lastLoadedUrl = url
 
         onDispose {
             connectivityManager.bindProcessToNetwork(null)
-            webView.clearCache(true)
-            webView.clearHistory()
-            // Clear the session-scoped state we enabled for the portal
-            // sign-in: cookies (set by the captive page) and DOM storage
-            // (sessionStorage / localStorage). Both flushed so nothing
-            // from the portal persists past this session.
-            CookieManager.getInstance().removeAllCookies(null)
-            CookieManager.getInstance().flush()
-            webView.clearFormData()
-            WebStorage.getInstance().deleteAllData()
+            clearPortalSessionState(webView)
+        }
+    }
+
+    LaunchedEffect(url) {
+        // DisposableEffect(network) only re-runs when the Network changes, so
+        // it loads `url` once and then never again for as long as the same
+        // network stays bound. A caller can still hand us a *new* url on that
+        // same network (e.g. MainActivity's debug portal intent firing twice
+        // in a row) — without this, the WebView would silently keep showing
+        // whatever page it already had, since nothing else re-drives loadUrl.
+        //
+        // Navigating to a genuinely different URL is a new portal session as
+        // far as the user's concerned, so clear the previous page's cookies /
+        // DOM storage first — same as the network-change path — rather than
+        // letting the old portal's session state bleed into the new one.
+        if (url != lastLoadedUrl) {
+            clearPortalSessionState(webView)
+            webView.loadUrl(url)
+            lastLoadedUrl = url
         }
     }
 
@@ -190,10 +212,27 @@ fun GatepathWebView(
         // document the failed load left behind.
         if (reloadToken > 0) {
             webView.loadUrl(url)
+            lastLoadedUrl = url
         }
     }
 
     AndroidView(factory = { webView }, modifier = modifier)
+}
+
+/**
+ * Clears the session-scoped state a portal sign-in accumulates: cookies (set
+ * by the captive page), DOM storage (sessionStorage / localStorage), cache,
+ * history, and saved form data. Shared by the network-dispose path and the
+ * same-network URL-change path — either one means "this portal session is
+ * over," so neither should let the previous page's state bleed forward.
+ */
+private fun clearPortalSessionState(webView: WebView) {
+    webView.clearCache(true)
+    webView.clearHistory()
+    CookieManager.getInstance().removeAllCookies(null)
+    CookieManager.getInstance().flush()
+    webView.clearFormData()
+    WebStorage.getInstance().deleteAllData()
 }
 
 private fun buildWebViewClient(
