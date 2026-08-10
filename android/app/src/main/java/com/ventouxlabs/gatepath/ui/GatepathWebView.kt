@@ -182,16 +182,7 @@ fun GatepathWebView(
 
         onDispose {
             connectivityManager.bindProcessToNetwork(null)
-            webView.clearCache(true)
-            webView.clearHistory()
-            // Clear the session-scoped state we enabled for the portal
-            // sign-in: cookies (set by the captive page) and DOM storage
-            // (sessionStorage / localStorage). Both flushed so nothing
-            // from the portal persists past this session.
-            CookieManager.getInstance().removeAllCookies(null)
-            CookieManager.getInstance().flush()
-            webView.clearFormData()
-            WebStorage.getInstance().deleteAllData()
+            clearPortalSessionState(webView)
         }
     }
 
@@ -202,7 +193,13 @@ fun GatepathWebView(
         // same network (e.g. MainActivity's debug portal intent firing twice
         // in a row) — without this, the WebView would silently keep showing
         // whatever page it already had, since nothing else re-drives loadUrl.
+        //
+        // Navigating to a genuinely different URL is a new portal session as
+        // far as the user's concerned, so clear the previous page's cookies /
+        // DOM storage first — same as the network-change path — rather than
+        // letting the old portal's session state bleed into the new one.
         if (url != lastLoadedUrl) {
+            clearPortalSessionState(webView)
             webView.loadUrl(url)
             lastLoadedUrl = url
         }
@@ -220,6 +217,22 @@ fun GatepathWebView(
     }
 
     AndroidView(factory = { webView }, modifier = modifier)
+}
+
+/**
+ * Clears the session-scoped state a portal sign-in accumulates: cookies (set
+ * by the captive page), DOM storage (sessionStorage / localStorage), cache,
+ * history, and saved form data. Shared by the network-dispose path and the
+ * same-network URL-change path — either one means "this portal session is
+ * over," so neither should let the previous page's state bleed forward.
+ */
+private fun clearPortalSessionState(webView: WebView) {
+    webView.clearCache(true)
+    webView.clearHistory()
+    CookieManager.getInstance().removeAllCookies(null)
+    CookieManager.getInstance().flush()
+    webView.clearFormData()
+    WebStorage.getInstance().deleteAllData()
 }
 
 private fun buildWebViewClient(
