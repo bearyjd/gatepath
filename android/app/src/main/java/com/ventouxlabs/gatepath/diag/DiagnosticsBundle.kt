@@ -60,6 +60,8 @@ object DiagnosticsBundle {
         diagnosis: DiagnosisResult?,
         probeCapture: PortalProbeCapture? = null,
         unreadableEntries: Int = 0,
+        consoleEntries: List<ConsoleCaptureEntry> = emptyList(),
+        consoleUnreadable: Int = 0,
         redact: Boolean,
     ): String = buildString {
         appendLine("=== Gatepath diagnostics ===")
@@ -93,6 +95,35 @@ object DiagnosticsBundle {
                 appendLine(json.encodeToString(e))
             }
         }
+        appendLine()
+
+        appendLine("--- WebView console (last session) ---")
+        if (consoleEntries.isEmpty()) {
+            appendLine("(no console messages captured)")
+        } else {
+            if (consoleUnreadable > 0) {
+                appendLine("console_messages_unreadable: $consoleUnreadable")
+            }
+            for (c in consoleEntries) {
+                val line = "[${c.level}] ${c.sourceHost}:${c.lineNumber} ${c.message}"
+                appendLine(if (redact) redactConsoleText(line, entries) else line)
+            }
+        }
+    }
+
+    // Session tokens, API keys, and hashes a portal's JS might accidentally
+    // log have no fixed shape, unlike the known identifiers scrubbed below —
+    // this is a best-effort heuristic, not a guarantee (see SECURITY_MODEL.md
+    // "Off-device diagnostics: WebView console capture"). JWT is applied
+    // first so its three segments collapse to one REDACTED token instead of
+    // three separate ones joined by dots.
+    private val JWT = Regex("""\b[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b""")
+    private val LONG_TOKEN = Regex("""\b[A-Za-z0-9_-]{20,}\b""")
+
+    /** Console text gets the generic token pass, then the same known-identifier/IPv4 scrub already applied to diagnosis text. */
+    private fun redactConsoleText(text: String, entries: List<AuditEntry>): String {
+        val tokenMasked = text.replace(JWT, REDACTED).replace(LONG_TOKEN, REDACTED)
+        return redactDiagnosisText(tokenMasked, entries)
     }
 
     private fun redactEntry(entry: AuditEntry): AuditEntry = entry.copy(

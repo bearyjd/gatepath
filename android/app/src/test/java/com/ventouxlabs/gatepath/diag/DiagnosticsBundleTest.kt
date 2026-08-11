@@ -326,4 +326,109 @@ class DiagnosticsBundleTest {
         rawContentType = rawContentType,
         redirectSignal = PortalProbeCapture.RedirectSignal.SCRIPTED_LOCATION,
     )
+
+    private fun consoleEntry(message: String, level: String = "ERROR") = ConsoleCaptureEntry(
+        level = level,
+        sourceHost = "portal.example.com",
+        lineNumber = 42,
+        message = message,
+        offsetMs = 100,
+    )
+
+    @Test
+    fun `console section states there were no messages when empty`() {
+        val out = DiagnosticsBundle.build(meta, entries = emptyList(), diagnosis = null, redact = false)
+        assertTrue(out.contains("(no console messages captured)"))
+    }
+
+    @Test
+    fun `console messages are rendered with level, host, line and text`() {
+        val out = DiagnosticsBundle.build(
+            meta,
+            entries = emptyList(),
+            diagnosis = null,
+            consoleEntries = listOf(consoleEntry("form submitted")),
+            redact = false,
+        )
+        assertTrue(out.contains("[ERROR] portal.example.com:42 form submitted"))
+    }
+
+    @Test
+    fun `redact masks a long token-shaped string in a console message`() {
+        val out = DiagnosticsBundle.build(
+            meta,
+            entries = emptyList(),
+            diagnosis = null,
+            consoleEntries = listOf(consoleEntry("session=a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5")),
+            redact = true,
+        )
+        assertFalse(out.contains("a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5"))
+        assertTrue(out.contains("REDACTED"))
+    }
+
+    @Test
+    fun `redact masks a JWT-shaped string as a single token, no fragment surviving`() {
+        val jwt = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U"
+        val out = DiagnosticsBundle.build(
+            meta,
+            entries = emptyList(),
+            diagnosis = null,
+            consoleEntries = listOf(consoleEntry("auth token: $jwt")),
+            redact = true,
+        )
+        assertFalse(out.contains(jwt))
+        assertFalse("no fragment of the JWT should survive", out.contains("eyJhbGciOiJIUzI1NiJ9"))
+    }
+
+    @Test
+    fun `redact does not mangle ordinary short portal copy`() {
+        val out = DiagnosticsBundle.build(
+            meta,
+            entries = emptyList(),
+            diagnosis = null,
+            consoleEntries = listOf(consoleEntry("Please accept the terms and conditions to continue")),
+            redact = true,
+        )
+        assertTrue(out.contains("Please accept the terms and conditions to continue"))
+        assertFalse(out.contains("REDACTED"))
+    }
+
+    @Test
+    fun `redact still scrubs known identifiers inside a console message`() {
+        val out = DiagnosticsBundle.build(
+            meta,
+            listOf(entry(portalDomain = "portal.example.com")),
+            diagnosis = null,
+            consoleEntries = listOf(consoleEntry("Redirecting to portal.example.com/login")),
+            redact = true,
+        )
+        assertFalse(out.contains("portal.example.com/login"))
+    }
+
+    @Test
+    fun `no redact preserves console message text verbatim`() {
+        val out = DiagnosticsBundle.build(
+            meta,
+            entries = emptyList(),
+            diagnosis = null,
+            consoleEntries = listOf(consoleEntry("session=a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5")),
+            redact = false,
+        )
+        assertTrue(out.contains("a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5"))
+    }
+
+    @Test
+    fun `console_messages_unreadable is reported only when nonzero`() {
+        val damaged = DiagnosticsBundle.build(
+            meta, entries = emptyList(), diagnosis = null,
+            consoleEntries = listOf(consoleEntry("hi")), consoleUnreadable = 2, redact = false,
+        )
+        assertTrue(damaged.contains("console_messages_unreadable: 2"))
+
+        val clean = DiagnosticsBundle.build(
+            meta, entries = emptyList(), diagnosis = null,
+            consoleEntries = listOf(consoleEntry("hi")), redact = false,
+        )
+        assertFalse(clean.contains("console_messages_unreadable"))
+    }
 }
