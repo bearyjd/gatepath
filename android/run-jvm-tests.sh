@@ -152,6 +152,8 @@ MAIN_SOURCES=(
     "$SRC_MAIN/com/ventouxlabs/gatepath/diag/ClockSkewProbe.kt"
     "$SRC_MAIN/com/ventouxlabs/gatepath/diag/HttpsOnlyProbe.kt"
     "$SRC_MAIN/com/ventouxlabs/gatepath/diag/DnsHijackProbe.kt"
+    "$SRC_MAIN/com/ventouxlabs/gatepath/diag/ConsoleCaptureEntry.kt"
+    "$SRC_MAIN/com/ventouxlabs/gatepath/diag/ConsoleCaptureBuffer.kt"
     "$SRC_MAIN/com/ventouxlabs/gatepath/diag/DiagnosticsBundle.kt"
     "$SRC_MAIN/com/ventouxlabs/gatepath/BindWatchdog.kt"
 )
@@ -234,6 +236,7 @@ TEST_SOURCES=(
     "$SRC_TEST/com/ventouxlabs/gatepath/diag/ClockSkewProbeTest.kt"
     "$SRC_TEST/com/ventouxlabs/gatepath/diag/HttpsOnlyProbeTest.kt"
     "$SRC_TEST/com/ventouxlabs/gatepath/diag/DnsHijackProbeTest.kt"
+    "$SRC_TEST/com/ventouxlabs/gatepath/diag/ConsoleCaptureBufferTest.kt"
     "$SRC_TEST/com/ventouxlabs/gatepath/diag/DiagnosticsBundleTest.kt"
 )
 
