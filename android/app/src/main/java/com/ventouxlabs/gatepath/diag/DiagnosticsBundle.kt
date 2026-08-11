@@ -97,7 +97,7 @@ object DiagnosticsBundle {
         }
         appendLine()
 
-        appendLine("--- WebView console (last session) ---")
+        appendLine("--- WebView console (most recent capture) ---")
         if (consoleEntries.isEmpty()) {
             appendLine("(no console messages captured)")
         } else {
@@ -120,10 +120,19 @@ object DiagnosticsBundle {
     private val JWT = Regex("""\b[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b""")
     private val LONG_TOKEN = Regex("""\b[A-Za-z0-9_-]{20,}\b""")
 
-    /** Console text gets the generic token pass, then the same known-identifier/IPv4 scrub already applied to diagnosis text. */
+    /**
+     * Console text gets the known-identifier/IPv4 scrub first, then the
+     * generic token pass. Order matters: LONG_TOKEN matches any 20+ char
+     * alphanumeric run, so running it first could eat *part* of a known
+     * identifier (e.g. a long portal subdomain) before the known-identifier
+     * pass gets a chance to recognize and mask the whole thing, leaking a
+     * fragment. Running known-identifier first is safe because its
+     * replacement is the literal "REDACTED" (8 chars), below the 20-char
+     * LONG_TOKEN threshold, so it isn't re-matched by the generic pass.
+     */
     private fun redactConsoleText(text: String, entries: List<AuditEntry>): String {
-        val tokenMasked = text.replace(JWT, REDACTED).replace(LONG_TOKEN, REDACTED)
-        return redactDiagnosisText(tokenMasked, entries)
+        val knownMasked = redactDiagnosisText(text, entries)
+        return knownMasked.replace(JWT, REDACTED).replace(LONG_TOKEN, REDACTED)
     }
 
     private fun redactEntry(entry: AuditEntry): AuditEntry = entry.copy(

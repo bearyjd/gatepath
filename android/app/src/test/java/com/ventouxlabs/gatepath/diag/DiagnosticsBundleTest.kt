@@ -327,13 +327,14 @@ class DiagnosticsBundleTest {
         redirectSignal = PortalProbeCapture.RedirectSignal.SCRIPTED_LOCATION,
     )
 
-    private fun consoleEntry(message: String, level: String = "ERROR") = ConsoleCaptureEntry(
-        level = level,
-        sourceHost = "portal.example.com",
-        lineNumber = 42,
-        message = message,
-        offsetMs = 100,
-    )
+    private fun consoleEntry(message: String, level: String = "ERROR", sourceHost: String = "portal.example.com") =
+        ConsoleCaptureEntry(
+            level = level,
+            sourceHost = sourceHost,
+            lineNumber = 42,
+            message = message,
+            offsetMs = 100,
+        )
 
     @Test
     fun `console section states there were no messages when empty`() {
@@ -403,6 +404,46 @@ class DiagnosticsBundleTest {
             redact = true,
         )
         assertFalse(out.contains("portal.example.com/login"))
+    }
+
+    @Test
+    fun `redact does not leave a fragment of a known identifier eaten by the generic token pass`() {
+        // A domain long enough to trip LONG_TOKEN's 20+ char threshold before
+        // the "." — if the generic pass ran first it would mask only the
+        // label, leaving ".example.com" behind even though the whole domain
+        // is a known identifier from the audit entries.
+        val out = DiagnosticsBundle.build(
+            meta,
+            listOf(entry(portalDomain = "verylongsubdomainlabelxyz.example.com")),
+            diagnosis = null,
+            consoleEntries = listOf(
+                consoleEntry(
+                    "Redirecting to verylongsubdomainlabelxyz.example.com/login",
+                    sourceHost = "js.example.net",
+                ),
+            ),
+            redact = true,
+        )
+        assertFalse("no fragment of the known domain should survive", out.contains(".example.com"))
+        assertFalse(out.contains("verylongsubdomainlabelxyz"))
+    }
+
+    @Test
+    fun `redact masks a token at exactly the 20 char threshold but not at 19`() {
+        val nineteen = "x".repeat(19)
+        val twenty = "x".repeat(20)
+        val out = DiagnosticsBundle.build(
+            meta,
+            entries = emptyList(),
+            diagnosis = null,
+            consoleEntries = listOf(
+                consoleEntry("token19=$nineteen", level = "ERROR"),
+                consoleEntry("token20=$twenty", level = "WARNING"),
+            ),
+            redact = true,
+        )
+        assertTrue("a 19-char token is below the threshold and must survive", out.contains(nineteen))
+        assertFalse("a 20-char token must be masked", out.contains(twenty))
     }
 
     @Test

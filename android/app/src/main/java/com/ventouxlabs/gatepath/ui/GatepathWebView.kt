@@ -258,9 +258,24 @@ fun GatepathWebView(
  * overwriting any prior session. Shared by the same two call sites as
  * [clearPortalSessionState], for the same reason: either one means this
  * portal session is over.
+ *
+ * Skips the write when the buffer is empty — an unconditional overwrite would
+ * let a silent page clobber a previous session's captured messages, so the
+ * file always holds the most recent *non-empty* capture rather than the
+ * literal last session. See DiagnosticsBundle's "most recent capture" header.
+ *
+ * The write is wrapped in [runCatching] because both call sites run in
+ * Compose `onDispose`/`LaunchedEffect` on the main thread, tearing down a live
+ * portal session — an IOException here (e.g. full disk) must not crash the
+ * app. A failed capture is the "lost silently" case SECURITY_MODEL.md already
+ * documents as an accepted limitation.
  */
 private fun flushConsoleCapture(context: Context, buffer: ConsoleCaptureBuffer) {
-    ConsoleCaptureFile.write(File(context.filesDir, CONSOLE_CAPTURE_FILE_NAME), buffer.snapshot())
+    val entries = buffer.snapshot()
+    if (entries.isEmpty()) return
+    runCatching {
+        ConsoleCaptureFile.write(File(context.filesDir, CONSOLE_CAPTURE_FILE_NAME), entries)
+    }
 }
 
 /**

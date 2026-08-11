@@ -119,6 +119,12 @@ If the app process dies mid-session before the buffer flushes (dispose never
 runs), that session's capture is lost silently — no partial flush. Accepted
 for v1: this is best-effort off-device diagnostics, not a guarantee.
 
+A flush with nothing captured (the page logged no console output) does not
+overwrite the file, so it holds the most recent *non-empty* capture rather
+than strictly the last session — a quiet page can't erase a previous page's
+trail. Each entry carries its own `sourceHost`, so provenance stays visible
+even when the capture predates the session that's currently active.
+
 ## What Gatepath itself sends
 
 Everything above describes traffic Gatepath *prevents*. This section is the converse:
