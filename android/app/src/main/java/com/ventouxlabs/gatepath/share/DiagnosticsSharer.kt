@@ -7,6 +7,8 @@ import android.os.Build
 import androidx.core.content.FileProvider
 import com.ventouxlabs.gatepath.audit.AuditLog
 import com.ventouxlabs.gatepath.diag.BundleMeta
+import com.ventouxlabs.gatepath.diag.CONSOLE_CAPTURE_FILE_NAME
+import com.ventouxlabs.gatepath.diag.ConsoleCaptureFile
 import com.ventouxlabs.gatepath.diag.DiagnosisResult
 import com.ventouxlabs.gatepath.diag.DiagnosticsBundle
 import com.ventouxlabs.gatepath.network.PortalProbeCapture
@@ -49,12 +51,15 @@ object DiagnosticsSharer {
         redact: Boolean,
     ): Uri = withContext(Dispatchers.IO) {
         val audit = AuditLog.readRecent()
+        val console = ConsoleCaptureFile.read(File(context.filesDir, CONSOLE_CAPTURE_FILE_NAME))
         val text = DiagnosticsBundle.build(
             meta = collectMeta(context),
             entries = audit.entries,
             diagnosis = diagnosis,
             probeCapture = probeCapture,
             unreadableEntries = audit.unreadable,
+            consoleEntries = console.entries,
+            consoleUnreadable = console.unreadable,
             redact = redact,
         )
 
