@@ -103,3 +103,14 @@ treat the file as read-only.
 
 The log lives in app-private storage. No identifying user data (browser cookies, form
 inputs, exact URL paths beyond the domain) is recorded.
+
+## Related, but separate: WebView console capture
+
+`files/webview-console.jsonl` (Android only) captures the portal WebView's
+console output for the "Share Diagnostics" bundle — see `SECURITY_MODEL.md`
+("Off-device diagnostics: WebView console capture") for what it holds and how
+it's redacted. It is a **separate file with its own format**, not part of
+this schema and **not covered by the desktop `schema-parity.yml` guard**:
+console messages are a high-volume free-text stream, a poor fit for this
+schema's discrete typed events, and desktop has no equivalent capture. Do not
+add console-message fields to `AuditEntry` or `audit_log_schema.json`.
