@@ -429,8 +429,9 @@ class MainViewModel @Inject constructor(
             sessionClosedUtc = finalState.closedUtc,
             closeReason = finalState.closeReason.schemaValue,
             durationSeconds = durationSeconds,
-            blockedNavigationAttempts = finalState.blockedNavigationAttempts,
-            blockedResourceRequests = finalState.blockedResourceRequests,
+            observedNavigationAttempts = finalState.blockedNavigationAttempts,
+            observedResourceRequests = finalState.blockedResourceRequests,
+            confinement = "confined",
             tlsCertErrorsBypassed = finalState.tlsCertErrorsBypassed,
         )
 

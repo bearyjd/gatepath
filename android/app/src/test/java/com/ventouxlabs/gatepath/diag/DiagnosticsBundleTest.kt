@@ -43,8 +43,8 @@ class DiagnosticsBundleTest {
         sessionClosedUtc = "2026-07-01T00:01:00Z",
         closeReason = "portal_completed",
         durationSeconds = 60,
-        blockedNavigationAttempts = 0,
-        blockedResourceRequests = 0,
+        observedNavigationAttempts = 0,
+        observedResourceRequests = 0,
     )
 
     @Test

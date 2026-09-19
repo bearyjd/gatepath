@@ -1,6 +1,6 @@
 {
-  "$comment": "Machine-readable contract for the Gatepath audit log. Both platforms load this file in their test suites and assert their writer's output conforms. Human-readable docs live in AUDIT_LOG_SCHEMA.md.",
-  "schema_version": 1,
+  "$comment": "Machine-readable contract for the Gatepath audit log, schema version 2. Both platforms load this file in their test suites and assert their writer's output conforms. Readers must map v1_key_renames when decoding a schema_version 1 line so old lines keep their counts. Human-readable docs live in AUDIT_LOG_SCHEMA.md.",
+  "schema_version": 2,
   "required_fields": [
     "schema_version",
     "timestamp_utc",
@@ -14,8 +14,9 @@
     "session_closed_utc",
     "close_reason",
     "duration_seconds",
-    "blocked_navigation_attempts",
-    "blocked_resource_requests"
+    "observed_navigation_attempts",
+    "observed_resource_requests",
+    "confinement"
   ],
   "optional_fields_comment": "Fields added after schema_version 1 was already in the wild. Writers on both platforms MUST emit them; readers MUST tolerate their absence, because log lines written before the field existed are still valid v1. Adding a field here is NOT a breaking change and does NOT bump schema_version — removing one, or changing a required field, would.",
   "optional_fields": [
@@ -39,9 +40,15 @@
     "session_closed_utc": "string|null",
     "close_reason": "string",
     "duration_seconds": "int",
-    "blocked_navigation_attempts": "int",
-    "blocked_resource_requests": "int",
-    "tls_cert_errors_bypassed": "int"
+    "observed_navigation_attempts": "int",
+    "observed_resource_requests": "int",
+    "tls_cert_errors_bypassed": "int",
+    "confinement": "string"
+  },
+  "confinement_enum": ["confined", "unconfined"],
+  "v1_key_renames": {
+    "blocked_navigation_attempts": "observed_navigation_attempts",
+    "blocked_resource_requests": "observed_resource_requests"
   },
   "portal_domain_may_be_empty_when_close_reason_is": [
     "aborted_pre_active"
@@ -58,17 +65,21 @@
     "aborted_pre_active"
   ],
   "platform_specific_semantics": {
-    "blocked_resource_requests": {
+    "observed_resource_requests": {
       "android": "Count of resource sub-requests that matched a tracker domain. Observed via WebViewClient.shouldInterceptRequest; counted, allowed to load. Field name retained for schema-version compatibility. See SECURITY_MODEL.md.",
       "desktop": "Count of tracker-domain subresource requests the WebView observed. Counted, allowed to load. Carried from the portal subprocess via the observation channel (portal_observations); 0 when that file is missing or unreadable. Field name retained for schema-version compatibility. See SECURITY_MODEL.md."
     },
-    "blocked_navigation_attempts": {
+    "observed_navigation_attempts": {
       "android": "Count of off-domain navigations the WebView observed (not in the portal host's same-origin set). Counted, allowed to load. Field name retained for schema-version compatibility. See SECURITY_MODEL.md.",
       "desktop": "Count of off-domain navigations the WebView observed. Counted, allowed to load. Carried from the portal subprocess via the observation channel (portal_observations); 0 when that file is missing or unreadable. Field name retained for schema-version compatibility. See SECURITY_MODEL.md."
     },
     "tls_cert_errors_bypassed": {
       "android": "Count of TLS certificate errors the WebView was told to proceed past (WebViewClient.onReceivedSslError -> handler.proceed()). Only ever incremented for the portal host and its subdomains; cert errors on any other host are cancelled and NOT counted here. A non-zero value means the session rendered a page whose certificate did not validate. See SECURITY_MODEL.md.",
       "desktop": "Count of TLS certificate errors proceeded past on the portal host (load-failed-with-tls-errors, gated by ssl_error_policy — same host-scoped rule as Android). Off-domain certificate errors are refused and NOT counted here. A non-zero value means the session rendered a page whose certificate did not validate. The portal WebView runs in a subprocess, so the count reaches this entry through the observation channel (portal_observations); if that file is missing or unreadable the field is 0, since losing a count must not cost the session record."
+    },
+    "confinement": {
+      "android": "Always 'confined': an Android session opens only when the Wi-Fi-bound probe reached the gateway, which netd permits only when no secure VPN covers Gatepath (or Gatepath is excluded from it). See SECURITY_MODEL.md.",
+      "desktop": "'confined' when the netns helper launched the portal WebView inside the gatepath namespace; 'unconfined' for the in-process (Flatpak-only) path, where WebKitGTK traffic follows the system default route."
     }
   }
 }
