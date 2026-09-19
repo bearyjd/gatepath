@@ -29,11 +29,14 @@ Buckets, all hard-fail. Which run depends on `--vpn-mode`:
   C.  Gateway log (excluding)   — /portal was requested from an Android UA.
   C'. Gateway silent (covering) — /portal was NEVER requested: no WebView
                          ever opens while Tunnelled.
-  D.  VPN sink          — the no-leak confinement proof (ROADMAP P0.1).
-                         excluding: gated on its own positive control (the
-                         WebView actually attempted the sentinel). covering:
-                         no WebView exists, so silence alone is the proof —
-                         see check_vpn_silent_while_tunnelled.
+  D.  VPN sink (covering only) — the no-leak confinement proof (ROADMAP
+                         P0.1): the bound window must stay silent. Not run in
+                         excluding mode at all — STEPS_EXCLUDING never lays a
+                         bound_begin/bound_end marker pair (Gatepath itself
+                         is EXCLUDED from the VPN there, so its own traffic
+                         never rides the tunnel the sink watches), so the
+                         sink is pulled purely for the record in that mode,
+                         not asserted on. See check_vpn_silent_while_tunnelled.
   E.  Off-domain (excluding only) — off-domain traffic is ALLOWED and
                          COUNTED, which is what the design claims since #119;
                          and it must actually have been exercised. "Nothing
@@ -43,8 +46,10 @@ Buckets, all hard-fail. Which run depends on `--vpn-mode`:
                          WebView ever opens there.
   F.  Diagnostics bundle (both modes) — the shared artefact; both modes
                          require a `confinement: ` field, only excluding
-                         mode requires the cleared-capture check (covering
-                         never validates anything).
+                         mode requires the cleared-capture and redaction
+                         checks (covering never validates anything, and its
+                         audit log — see B above — is always empty, so there
+                         is no PII in the picture to prove was scrubbed).
 
 Exit 0 only if every check passes. Mirrors tests/e2e-docker/driver/assertions.py
 in tone, layout, and exit semantics.
@@ -415,13 +420,17 @@ def check_off_domain(
 
 
 def _webview_attempted_sentinel(logcat: str) -> bool:
-    """D2 positive control: did the portal WebView actually try to reach the
-    sentinel? True iff a GatepathWebView line names the sentinel host:port (an
-    onReceivedError for the injected <img>, like the evil-tracker one). Without
-    this, 'sentinel absent from the VPN sink' is ambiguous — it could mean
-    CONFINED, or that the portal page never loaded the sentinel <img> at all (a
-    vacuous pass). The unbound probe (logged by GatepathTestVpnCtl) names the
-    same host:port and is deliberately NOT counted — only the WebView's own log."""
+    """[check_vpn_confinement]'s D2 positive control: did the portal WebView
+    actually try to reach the sentinel? True iff a GatepathWebView line names
+    the sentinel host:port (an onReceivedError for the injected <img>, like
+    the evil-tracker one). Without this, 'sentinel absent from the VPN sink'
+    is ambiguous — it could mean CONFINED, or that the portal page never
+    loaded the sentinel <img> at all (a vacuous pass). The unbound probe
+    (logged by GatepathTestVpnCtl) names the same host:port and is
+    deliberately NOT counted — only the WebView's own log.
+
+    Not called from `main()` for the same reason [check_vpn_confinement]
+    isn't — see that function's docstring."""
     needle = f"{SENTINEL_DST}:{SENTINEL_PORT}"
     for line in logcat.splitlines():
         if needle in line and "GatepathWebView" in line:
@@ -473,8 +482,17 @@ def _check_liveness(lines: list[dict[str, Any]], begin: int, failures: list[str]
 def check_vpn_confinement(
     lines: list[dict[str, Any]], failures: list[str], sentinel_attempted: bool
 ) -> None:
-    """D (excluding). The network-level no-leak proof over the VPN sink
-    (ROADMAP P0.1).
+    """The network-level no-leak proof over the VPN sink (ROADMAP P0.1), for
+    a bound window whose owner DID attempt the sentinel via a WebView.
+
+    NOT called from `main()`: STEPS_EXCLUDING never lays a bound_begin/
+    bound_end marker pair (Gatepath is EXCLUDED from the VPN there, so its
+    own traffic never rides the tunnel the sink watches), and `covering`
+    mode has no WebView to have attempted anything, so it uses
+    [check_vpn_silent_while_tunnelled] instead. Kept — with its own direct
+    unit tests below — as the general-purpose "was a positive-controlled
+    bound window actually leak-free" check, for a future mode that reads the
+    sink as this function expects.
 
     D1 (liveness, [_check_liveness]) must hold before D2 (confinement) means
     anything. D2 additionally requires `sentinel_attempted` (the WebView
@@ -785,18 +803,17 @@ def main(argv: list[str]) -> int:
         gateway_entries = json.loads(gateway_path.read_text())
 
     sink_path = root / "vpn-sink.jsonl"
-    sink_present = sink_path.exists() and sink_path.stat().st_size > 0
-    sink_lines: list[dict[str, Any]] = []
-    if sink_present:
-        sink_lines = [
-            json.loads(line)
-            for line in sink_path.read_text().splitlines()
-            if line.strip()
-        ]
-    else:
-        failures.append("vpn.file: vpn-sink.jsonl missing or empty")
-        print(f"  ✗ vpn-sink.jsonl missing or empty in {root}", file=sys.stderr)
 
+    # Per-mode routing. Each branch lists its own check letters end to end —
+    # see the module docstring for the same list in prose. D is NOT shared
+    # between the branches: `covering` is the ONLY mode where the sink is an
+    # oracle at all. STEPS_EXCLUDING never lays a bound_begin/bound_end
+    # marker pair — Gatepath itself is EXCLUDED from the VPN in that mode, so
+    # its own traffic never rides the tunnel the sink watches (see
+    # step_liveness_probe/step_settle_covering in run-scenario.py, both
+    # `covering`-only steps) — so running check_vpn_confinement there would
+    # hard-fail on `vpn.markers` on every correct excluding-mode run, not
+    # just a broken one.
     if mode == "covering":
         # B. A Tunnelled session must never complete. An empty/missing audit
         # log is exactly what this mode should produce — a PASS here, unlike
@@ -806,9 +823,19 @@ def main(argv: list[str]) -> int:
         # C'. No WebView ever opens while Tunnelled, so the mock must never
         # see a /portal hit from an Android UA.
         check_gateway_silent(gateway_entries, failures)
-        # D. The bound window must be silent: the covered probe's connect()
-        # fails with EPERM before a packet leaves the device.
-        if sink_present:
+        # D. The sink IS the oracle here, and is required: the bound window
+        # must be silent because the covered probe's connect() fails with
+        # EPERM before a packet leaves the device.
+        sink_present = sink_path.exists() and sink_path.stat().st_size > 0
+        if not sink_present:
+            failures.append("vpn.file: vpn-sink.jsonl missing or empty")
+            print(f"  ✗ vpn-sink.jsonl missing or empty in {root}", file=sys.stderr)
+        else:
+            sink_lines = [
+                json.loads(line)
+                for line in sink_path.read_text().splitlines()
+                if line.strip()
+            ]
             check_vpn_silent_while_tunnelled(sink_lines, failures)
     else:
         # B / B'. At least one completed session, and it must be confined.
@@ -820,20 +847,20 @@ def main(argv: list[str]) -> int:
             check_audit_confined(audit_entries, failures)
 
         # C. The portal must actually have been requested by an Android UA.
-        if gateway_path.exists():
-            check_gateway_log(gateway_entries, report, failures)
+        check_gateway_log(gateway_entries, report, failures)
 
         # E. Off-domain traffic — needs the gateway log, the audit log AND
         # logcat, so it runs after all three have been read. Missing
         # artifacts leave their lists empty, which check_off_domain correctly
-        # treats as "no evidence" rather than as a pass. Not run in `covering`
-        # mode: no WebView ever opens there, so there is nothing to exercise.
+        # treats as "no evidence" rather than as a pass.
         check_off_domain(gateway_entries, audit_entries, logcat_text, failures)
 
-        # D. The no-leak confinement proof, gated on its own positive control.
-        if sink_present:
-            sentinel_attempted = _webview_attempted_sentinel(logcat_text)
-            check_vpn_confinement(sink_lines, failures, sentinel_attempted)
+        # D does NOT run in `excluding` mode — see the routing comment above
+        # this if/else. The sink is still pulled (COMMON_TAIL runs for both
+        # modes), purely for the record; note that and move on rather than
+        # asserting anything about its contents.
+        if sink_path.exists():
+            ok("vpn.sink", "pulled for the record; not an oracle in excluding mode")
 
     # F. The shared bundle — needs the pulled URI sidecar and the audit
     # entries (for the identifiers redaction is checked against). Runs in

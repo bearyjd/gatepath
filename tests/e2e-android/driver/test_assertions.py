@@ -7,6 +7,8 @@ out with "import file mismatch" before running anything.
 """
 from __future__ import annotations
 
+import json
+
 import assertions
 
 BEGIN = {"marker": "bound_begin", "t": 2.0}
@@ -380,3 +382,121 @@ def test_vpn_silent_while_tunnelled_fails_on_leak():
     failures: list[str] = []
     assertions.check_vpn_silent_while_tunnelled([SENTINEL, BEGIN, SENTINEL_LEAK, END], failures)
     assert any("LEAK" in f for f in failures)
+
+
+# ── main() routing, end to end (fix round 1) ──────────────────────────────
+#
+# Every check above is unit-tested in isolation, but nothing exercised
+# main()'s own per-mode wiring — which is exactly how a real excluding-mode
+# CI run was left calling check_vpn_confinement (D), guaranteed to hard-fail
+# on `vpn.markers` because STEPS_EXCLUDING never lays a bound_begin/bound_end
+# marker pair. These build a minimal-but-realistic artifacts directory per
+# mode and call assertions.main() itself, so the routing is what's under
+# test, not any one check function.
+
+
+def _write_scenario_report(root, steps: list[str], extra_data: dict | None = None) -> None:
+    extra_data = extra_data or {}
+    payload = {
+        "rc": 0,
+        "steps": [
+            {"name": name, "ok": True, "data": extra_data.get(name, {}), "error": None}
+            for name in steps
+        ],
+    }
+    (root / "scenario-report.json").write_text(json.dumps(payload))
+
+
+def test_main_routes_excluding_mode_end_to_end(tmp_path):
+    """The regression this round exists for: a realistic excluding-mode
+    artifacts directory — including a vpn-sink.jsonl with NO markers, which
+    is exactly what STEPS_EXCLUDING produces (Gatepath is EXCLUDED from the
+    VPN there) — must pass, not hard-fail on vpn.markers."""
+    steps = assertions.run_scenario.step_names(assertions.run_scenario.STEPS_EXCLUDING)
+    _write_scenario_report(
+        tmp_path,
+        steps,
+        extra_data={
+            "connect": {"serial": "emulator-5554"},
+            "set_probe_urls": {"probe_url": "http://10.0.2.2:18080/generate_204"},
+            "wait_validated": {"validated_in_sec": 12},
+        },
+    )
+    (tmp_path / "confinement-state.txt").write_text("confined\n")
+    audit_entry = {
+        "close_reason": "portal_completed",
+        "confinement": "confined",
+        "observed_navigation_attempts": 1,
+        "observed_resource_requests": 0,
+        **AUDIT[0],
+    }
+    (tmp_path / "audit_log.jsonl").write_text(json.dumps(audit_entry) + "\n")
+    (tmp_path / "gateway-log.json").write_text(json.dumps([GW_PORTAL, GW_OFF_DOMAIN]))
+    # NO markers — exactly what step_pull_vpn_sink produces in excluding mode
+    # (a single pull for the record; the sink is not an oracle there at all).
+    (tmp_path / "vpn-sink.jsonl").write_text(
+        json.dumps({"dst": "10.0.2.2", "port": 18080, "proto": "TCP", "t": 1.0}) + "\n"
+    )
+    (tmp_path / "logcat.txt").write_text(LOGCAT_ALLOWED_DNS_FAILED)
+    (tmp_path / "diagnostics-bundle.txt").write_text(GOOD_BUNDLE)
+    (tmp_path / "bundle-uri.txt").write_text(GOOD_URI)
+
+    rc = assertions.main(["assertions.py", str(tmp_path), "--vpn-mode", "excluding"])
+    assert rc == 0
+
+
+def test_main_routes_covering_mode_end_to_end(tmp_path):
+    steps = assertions.run_scenario.step_names(assertions.run_scenario.STEPS_COVERING)
+    _write_scenario_report(
+        tmp_path,
+        steps,
+        extra_data={
+            "connect": {"serial": "emulator-5554"},
+            "set_probe_urls": {"probe_url": "http://10.0.2.2:18080/generate_204"},
+        },
+    )
+    (tmp_path / "confinement-state.txt").write_text("tunnelled\n")
+    (tmp_path / "audit_log.jsonl").write_text("")
+    (tmp_path / "gateway-log.json").write_text("[]")
+    (tmp_path / "vpn-sink.jsonl").write_text(
+        "\n".join(json.dumps(e) for e in (SENTINEL, BEGIN, END))
+    )
+    (tmp_path / "logcat.txt").write_text("")
+    (tmp_path / "diagnostics-bundle.txt").write_text(
+        "=== Gatepath diagnostics ===\n"
+        "confinement: tunnelled\n"
+        "(no incident evidence captured)\n"
+    )
+    (tmp_path / "bundle-uri.txt").write_text(GOOD_URI)
+
+    rc = assertions.main(["assertions.py", str(tmp_path), "--vpn-mode", "covering"])
+    assert rc == 0
+
+
+def test_main_covering_mode_fails_on_sentinel_leak(tmp_path):
+    steps = assertions.run_scenario.step_names(assertions.run_scenario.STEPS_COVERING)
+    _write_scenario_report(
+        tmp_path,
+        steps,
+        extra_data={
+            "connect": {"serial": "emulator-5554"},
+            "set_probe_urls": {"probe_url": "http://10.0.2.2:18080/generate_204"},
+        },
+    )
+    (tmp_path / "confinement-state.txt").write_text("tunnelled\n")
+    (tmp_path / "audit_log.jsonl").write_text("")
+    (tmp_path / "gateway-log.json").write_text("[]")
+    # A sentinel packet inside the bound window — the leak D exists to catch.
+    (tmp_path / "vpn-sink.jsonl").write_text(
+        "\n".join(json.dumps(e) for e in (SENTINEL, BEGIN, SENTINEL_LEAK, END))
+    )
+    (tmp_path / "logcat.txt").write_text("")
+    (tmp_path / "diagnostics-bundle.txt").write_text(
+        "=== Gatepath diagnostics ===\n"
+        "confinement: tunnelled\n"
+        "(no incident evidence captured)\n"
+    )
+    (tmp_path / "bundle-uri.txt").write_text(GOOD_URI)
+
+    rc = assertions.main(["assertions.py", str(tmp_path), "--vpn-mode", "covering"])
+    assert rc == 1
