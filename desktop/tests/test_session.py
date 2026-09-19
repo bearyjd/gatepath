@@ -9,12 +9,14 @@ import pytest
 
 from gatepath.portal_session import (
     CloseReason,
+    Confinement,
     PortalPhase,
     PortalSession,
     SESSION_TIMEOUT_SECONDS,
     to_active,
     to_aborted_pre_active,
     to_completed,
+    to_confined,
     to_detected,
 )
 
@@ -242,3 +244,43 @@ class TestToAbortedPreActive:
         _ = to_aborted_pre_active(s)
         assert s.phase == PortalPhase.DETECTED
         assert s.close_reason is None
+
+
+class TestToConfined:
+    """`confined` is the security claim the audit log exists to carry, so the
+    only function that can produce it is tested here rather than left inside
+    the GTK-gated launch path in window.py.
+    """
+
+    def test_marks_session_confined_and_changes_nothing_else(self) -> None:
+        opened = datetime(2026, 5, 5, 12, 0, 0, tzinfo=timezone.utc)
+        session = PortalSession(
+            phase=PortalPhase.ACTIVE,
+            ssid="Cafe WiFi",
+            gateway_ip="192.0.2.1",
+            portal_url="http://portal.example/login",
+            portal_domain="portal.example",
+            vpn_interfaces_detected=["tun0"],
+            vpn_warning_shown=True,
+            session_opened_utc=opened,
+            blocked_navigation_attempts=3,
+            blocked_resource_requests=7,
+            tls_cert_errors_bypassed=1,
+        )
+
+        result = to_confined(session)
+
+        assert result.confinement == Confinement.CONFINED
+        # Every other field is carried over untouched. Compared as a whole
+        # dataclass so a field added later cannot quietly escape this check.
+        assert dataclasses.replace(
+            result, confinement=session.confinement
+        ) == session
+        # The input is not mutated — the repo's immutability convention.
+        assert session.confinement == Confinement.UNCONFINED
+
+    def test_fresh_session_defaults_to_unconfined(self) -> None:
+        """The in-process WebView path never calls to_confined, so the default
+        must be the honest one.
+        """
+        assert PortalSession().confinement == Confinement.UNCONFINED

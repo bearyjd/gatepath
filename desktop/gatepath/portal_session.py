@@ -193,6 +193,19 @@ def to_completed(
     )
 
 
+def to_confined(session: PortalSession) -> PortalSession:
+    """Return a copy of *session* marked as having run inside the gatepath netns.
+
+    Called **only** from the netns-isolated launch path in ``window.py``, after
+    the helper has reported a successful engage — never from the in-process
+    WebView fallback, which keeps the default ``UNCONFINED``. It lives here
+    rather than inline at the call site because ``confined`` is the security
+    claim the audit log exists to carry, and the launch path is GTK-gated code
+    that the desktop test suite does not execute.
+    """
+    return dataclasses.replace(session, confinement=Confinement.CONFINED)
+
+
 def to_aborted_pre_active(session: PortalSession) -> PortalSession:
     """Mark a pre-Active session as aborted with a real, non-null close_reason.
 
