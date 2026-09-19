@@ -12,6 +12,32 @@ detailed status lives in [`docs/ROADMAP.md`](docs/ROADMAP.md).
 
 ## [Unreleased]
 
+### Changed
+
+- **Android:** captive incidents are classified into a confinement state
+  (Confined / Tunnelled / Blocked / DnsStrict / Unknown). In-app sign-in is
+  offered only when the Wi-Fi binding is verified; otherwise the app says
+  exactly why and what to do. The `CaptivePending` troubleshooting list and
+  the incorrect "restricted network" explanation are gone.
+- **Audit log schema v2:** `blocked_*` counters renamed to `observed_*`; new
+  required `confinement` field on both platforms. Readers accept v1 lines.
+
+### Added
+
+- **Android:** incident evidence in the diagnostics bundle (probe path,
+  resolver comparison, certificate summary, confinement).
+- **e2e-android:** `covering` and `excluding` VPN modes with a separate
+  test-VPN app, so the harness exercises a VPN Gatepath does not own.
+
+### Fixed
+
+- **Android:** the audit log could record `unconfined` for a confined
+  session — never shipped; found in review while adding the confinement
+  field, not observed in the wild.
+- **e2e-android:** the host-side assertions now fail on absent evidence per
+  mode (audit log, gateway log, VPN sink) instead of treating a missing
+  artifact as an implicit pass.
+
 ## [1.0.1] - 2026-08-06
 
 ### Fixed

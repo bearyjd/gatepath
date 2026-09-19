@@ -179,10 +179,28 @@ proves confinement only of the portal *session* inside the namespace, not of thi
 
 ## Android-specific guarantees
 
-- All **portal-session** traffic — the WebView and the connectivity probe — is bound to the
-  captive portal `Network` object via `ConnectivityManager.bindProcessToNetwork()`, scoping
-  it to the WiFi/Ethernet interface flagged as captive. Gatepath's *diagnostic* requests are
-  deliberately unbound and are not portal-session traffic; see
+- Portal-session traffic is bound to the captive `Network` via
+  `bindProcessToNetwork()`, **and the app verifies on every incident that the
+  binding is honoured.** netd refuses explicit network selection for a UID
+  covered by a secure (non-bypassable) VPN unless the UID can protect sockets
+  (`NetworkController::checkUserNetworkAccessLocked`), so under Tailscale,
+  TorGuard or WireGuard the bound probe fails with `EPERM`. Gatepath then
+  reports **Tunnelled** and does not open a sign-in WebView. The product
+  contract is therefore: **exclude Gatepath in your VPN client's app
+  split-tunnelling.** Only then does the Wi-Fi-bound probe reach the gateway
+  (**Confined**) and in-app sign-in is offered. The state is classified by
+  `ConfinementState.classify` and recorded in the evidence bundle; every
+  audit entry carries `confinement`.
+
+  Costs, stated plainly: an excluded Gatepath is outside the VPN permanently,
+  so its connectivity probe and the diagnostic DoH query leave in the clear
+  over the default network at all times. Gatepath cannot bypass strict
+  Private DNS (that needs `NETWORK_BYPASS_PRIVATE_DNS`), so a hostname portal
+  under strict mode is reported as **DnsStrict** with the instruction to use
+  the system handler or set Private DNS to Automatic for the sign-in.
+
+  Gatepath's *diagnostic* requests are deliberately unbound and are not
+  portal-session traffic; see
   [What Gatepath itself sends](#what-gatepath-itself-sends) for what they are and why.
 
 > This is proven by an eval, not just asserted: the `tests/e2e-android` no-leak
@@ -251,6 +269,11 @@ The binding is undone in three places to defend against process-death leaks:
 
 If the process is killed by the OS without lifecycle callbacks firing, the binding
 ends with the process — Android does not persist it across launches.
+
+A debug-only intent (`gatepath.debug.sentinel_probe`) sends one bound-network
+sentinel probe on demand for the `tests/e2e-android` no-leak proof; it exists
+only in debug builds and is stripped from release, like every other
+`gatepath.debug.*` extra.
 
 ## Desktop-specific limitations (be explicit)
 
@@ -376,6 +399,7 @@ portal-window banner.
 |---|---|
 | Portal operator capturing portal-window traffic | **Out** (unavoidable) |
 | Portal operator capturing your VPN/DNS traffic on Android | In — prevented |
+| Secure VPN covering Gatepath (not excluded) | **Fail-closed**: bound sockets get `EPERM`, no sign-in, no leak; user is told to exclude Gatepath |
 | Portal operator capturing your VPN/DNS traffic on desktop | **Partial** — warned, not prevented |
 | Portal page running tracking scripts | **Partial** — allowed (captive vendors embed GA/GTM in splash pages and break on `gtag is not defined`); observed + counted; persistent state wiped on session close |
 | Portal page persisting cookies / `sessionStorage` / `localStorage` / cache after session | In — wiped via `CookieManager.removeAllCookies` + `WebStorage.deleteAllData` + `clearCache` |

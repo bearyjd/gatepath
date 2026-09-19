@@ -34,11 +34,23 @@ not viable: `CaptivePortalActivity` requires the system-supplied
 `CaptivePortal` parcelable token and `finish()`es immediately if it is
 absent. See `CaptivePortalActivity.kt`.
 
-## Debug intent (BuildConfig.DEBUG only)
+## Debug intents (BuildConfig.DEBUG only)
 
-`MainActivity` accepts a debug-only extra that jumps the ViewModel
-straight to `PortalSession.Active` against a chosen URL, bypassing the
-captive-detection pipeline. Stripped from release builds.
+`MainActivity` accepts several debug-only extras, all stripped from release
+builds:
+
+- `gatepath.debug.portal_url` — jumps the ViewModel straight to
+  `PortalSession.Active` against a chosen URL, bypassing the
+  captive-detection pipeline entirely (so the session is never confined —
+  see the `confinement` audit field below).
+- `gatepath.debug.write_bundle` (+ `gatepath.debug.redact`) — writes the
+  diagnostics bundle to `cache/diagnostics/gatepath-diagnostics.txt` and the
+  share URI to `files/debug-bundle-uri.txt`, without going through the share
+  sheet.
+- `gatepath.debug.sentinel_probe` — fires one bound-network sentinel probe
+  on demand. This is the mechanism the `tests/e2e-android` `covering`-mode
+  no-leak proof uses for its liveness/confinement markers instead of the old
+  UDP burst (see `tests/e2e-android/HARNESS_NOTES.md`).
 
 ```
 adb install -r app-debug.apk
@@ -50,15 +62,29 @@ adb shell am start \
 `PortalScreen` opens; `GatepathWebView` loads the URL; the off-domain
 resource-blocking policy is exercised; `Dismiss` returns to `Idle`.
 
-What this path does **not** exercise:
+What the `portal_url` path does **not** exercise:
 - `PortalSessionManager` state transitions
 - `CaptivePortalMonitor` event handling
 - Audit log writes (PortalCompleted / Dismissed / Timeout)
 - VPN warning / DiagnosticEngine
+- `ConfinementState` classification — the debug-forced session never
+  classifies, so its audit entry (if any) always carries
+  `confinement: unconfined`
 - The system `CAPTIVE_PORTAL` intent dispatch path
 
 For those, use a stock-Android device or an emulator harness against a
 real captive Wi-Fi setup.
+
+To read the live classification off a debug build without waiting on the UI:
+
+```
+adb shell run-as com.ventouxlabs.gatepath cat files/confinement-state.txt
+```
+
+This is the same sidecar `tests/e2e-android/driver/assertions.py` polls; it
+holds one of `confined` / `tunnelled` / `blocked` / `dns_strict` / `unknown`
+(`ConfinementState.schemaName`), written by `MainViewModel.debugStateSink` on
+every classified incident.
 
 ## Mock portal
 
@@ -93,12 +119,60 @@ mockportal reachable via `10.0.2.2:18080`, drives the chooser via
 UIAutomator, and asserts the full path against scenario / audit / gateway
 logs (mirrors `tests/e2e-docker/`'s shape).
 
+The scenario runs in one of two VPN modes (`--vpn-mode`), which now require
+a second APK, the standalone debug-only `android/testvpn/` app
+(`--testvpn-apk-path`, required):
+
+- `covering` — the `:testvpn` app covers Gatepath as a third-party secure
+  VPN. Expect `ConfinementState.Tunnelled`: no portal session opens, no
+  `/portal` request reaches the mock, and the no-leak VPN sink proves
+  confinement across the settled bound window.
+- `excluding` — Gatepath is excluded from the VPN's disallowed-app list,
+  the shipped product contract. Expect `ConfinementState.Confined`: the
+  monitor opens the session on its own (no debug intent), sign-in
+  completes, and the resulting audit entry carries `confinement: confined`.
+
 ```sh
-(cd android && ANDROID_HOME="$ANDROID_HOME" ./gradlew :app:assembleDebug)
+(cd android && ANDROID_HOME="$ANDROID_HOME" ./gradlew :app:assembleDebug :testvpn:assembleDebug)
 cd tests/e2e-android && ./run-e2e.sh
 ```
 
 Requires `/dev/kvm` on the host. CI uses
-`reactivecircus/android-emulator-runner` instead — see
-`.github/workflows/android-e2e.yml`. AOSP only; the GrapheneOS quirk
-above doesn't apply to emulator images.
+`reactivecircus/android-emulator-runner` instead, as a `{covering,
+excluding}` matrix — see `.github/workflows/android-e2e.yml`. AOSP only; the
+GrapheneOS quirk above doesn't apply to emulator images.
+
+## Physical confinement matrix
+
+The emulator harness proves the classification pipeline against a debug VPN
+it controls. It cannot prove real client behaviour — actual VPN apps enforce
+`allowBypass`/split-tunnelling in ways only a physical device and a real
+client exercise. This checklist is manual and unautomated; run it on a
+device before relying on a claim about a specific VPN client.
+
+Read the live classification after each cell with:
+
+```sh
+adb shell run-as com.ventouxlabs.gatepath cat files/confinement-state.txt
+```
+
+and share the evidence bundle (`Share diagnostics` in-app) for any cell that
+doesn't match the expected state.
+
+**VPN client × inclusion, expect `Tunnelled` / `Confined`:**
+
+| VPN client | Gatepath included | Gatepath excluded |
+|---|---|---|
+| Tailscale (tailnet-only) | Tunnelled | Confined |
+| Tailscale (exit node) | Tunnelled | Confined |
+| TorGuard | Tunnelled | Confined |
+
+**Private DNS × portal address form, expect `DnsStrict` only in the
+strict × hostname cell:**
+
+| Private DNS | Hostname portal | IP-literal portal |
+|---|---|---|
+| Automatic | Confined | Confined |
+| Strict | DnsStrict | Confined |
+
+Devices used: Pixel 9 Pro Fold, Pixel 10 Pro Fold.

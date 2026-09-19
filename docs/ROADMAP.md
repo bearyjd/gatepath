@@ -55,6 +55,11 @@ it does:
   it. Green on the CI emulator; release builds provably exclude the apparatus
   (`release-vpn-guard`). (The literal claim in `SECURITY_MODEL.md`.)
 
+  The original proof ran with Gatepath owning the test VPN, which grants
+  protect rights; `covering` mode (2026-09) reruns it with a separate VPN
+  owner and asserts fail-closed `Tunnelled`; `excluding` mode proves the
+  product contract end-to-end.
+
 ### P0.2 — Virtual-radio integration harness (`mac80211_hwsim` + `hostapd`)
 **Status:** **done — validated end-to-end on a `mac80211_hwsim` virtual radio.**
 The `tests/e2e-hwsim/` harness proves the full privileged path and the no-leak
