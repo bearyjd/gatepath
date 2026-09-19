@@ -197,11 +197,12 @@ class MainViewModel @Inject constructor(
                         clearIncidentState()
                         if (_activeNetwork.value == event.network) {
                             _activeNetwork.value = null
-                            // Close only a session that actually opened. Every
-                            // incident sets _activeNetwork, but only Confined
-                            // opens a session, so an unguarded close would take
-                            // a dropped Tunnelled/Blocked/DnsStrict/Unknown
-                            // network and run Monitoring through
+                            // Close only a session that actually opened.
+                            // _activeNetwork is set for every Confined
+                            // incident and by debugForceActiveSession, but a
+                            // rejected `reenter` opens nothing — so an
+                            // unguarded close would take such a network and
+                            // run Monitoring through
                             // PortalSessionManager.error — writing an audit
                             // entry with an empty portal_domain for a session
                             // that never was, and leaving the state machine
@@ -235,7 +236,6 @@ class MainViewModel @Inject constructor(
     private fun handleIncident(event: NetworkEvent.CaptiveIncident) {
         val state = classify(event.inputs)
         _confinement.value = state
-        _activeNetwork.value = event.network
         _networkStatus.value = NetworkStatus.CaptiveDetected
         _diagnosis.value = null
         suspectedNetwork = event.network
@@ -256,6 +256,18 @@ class MainViewModel @Inject constructor(
         debugStateSink?.invoke(state.schemaName)
         Log.i(TAG, "Confinement on ${event.network}: ${state.schemaName}")
         if (state is ConfinementState.Confined) {
+            // Only a session-opening incident retargets the bind. `_activeNetwork`
+            // is the network of the open (or opening) session, never the latest
+            // incident — writing it for every incident let a second
+            // simultaneously-unvalidated network (the monitor watches Wi-Fi *and*
+            // Ethernet) re-key MainActivity's PortalScreen mid-sign-in and made
+            // the `_activeNetwork == event.network` tests on NetworkValidated and
+            // CaptiveNetworkLost fail, losing the portal_completed audit entry.
+            // Set before `reenter`, not inside the transition check: `signInHere`
+            // is gated on Confined and does not set it, so a rejected reenter
+            // still needs the network recorded. `suspectedNetwork` below keeps
+            // the "latest incident" meaning for rerunDiagnostics.
+            _activeNetwork.value = event.network
             // reenter, not portalDetected: after a dismiss or a lost network
             // the session is Completed, which portalDetected rejects, so a
             // second captive network in the same process would never open.
