@@ -197,10 +197,24 @@ class MainViewModel @Inject constructor(
                         clearIncidentState()
                         if (_activeNetwork.value == event.network) {
                             _activeNetwork.value = null
-                            // The manager picks ABORTED_PRE_ACTIVE for pre-Active
-                            // states and ERROR for Active; we always pass ERROR
-                            // and let the manager decide based on phase.
-                            handleClose(CloseReason.ERROR, "Network lost")
+                            // Close only a session that actually opened. Every
+                            // incident sets _activeNetwork, but only Confined
+                            // opens a session, so an unguarded close would take
+                            // a dropped Tunnelled/Blocked/DnsStrict/Unknown
+                            // network and run Monitoring through
+                            // PortalSessionManager.error — writing an audit
+                            // entry with an empty portal_domain for a session
+                            // that never was, and leaving the state machine
+                            // Completed, where portalDetected no longer applies
+                            // and automatic sign-in is dead for the rest of the
+                            // process.
+                            val current = _session.value
+                            if (current is PortalSession.Active || current is PortalSession.Detected) {
+                                // The manager picks ABORTED_PRE_ACTIVE for
+                                // Detected and ERROR for Active; we always pass
+                                // ERROR and let it decide based on phase.
+                                handleClose(CloseReason.ERROR, "Network lost")
+                            }
                         }
                     }
                 }
@@ -242,9 +256,19 @@ class MainViewModel @Inject constructor(
         debugStateSink?.invoke(state.schemaName)
         Log.i(TAG, "Confinement on ${event.network}: ${state.schemaName}")
         if (state is ConfinementState.Confined) {
-            sessionWasConfined = true
-            _session.value = sessionManager.portalDetected(_session.value, state.portalUrl)
-            openPortal()
+            // reenter, not portalDetected: after a dismiss or a lost network
+            // the session is Completed, which portalDetected rejects, so a
+            // second captive network in the same process would never open.
+            val next = sessionManager.reenter(_session.value, state.portalUrl)
+            _session.value = next
+            // Latch only on a transition that actually happened. A rejected
+            // reenter leaves the session untouched and opens nothing, so
+            // claiming the session was confined would attach this incident's
+            // verdict to whatever session is really running.
+            if (next is PortalSession.Detected) {
+                sessionWasConfined = true
+                openPortal()
+            }
         }
         runDiagnosticEngine(event.network, event.diagnostics)
     }
@@ -383,9 +407,14 @@ class MainViewModel @Inject constructor(
     fun signInHere() {
         val state = _confinement.value as? ConfinementState.Confined ?: return
         if (_session.value is PortalSession.Active) return
-        sessionWasConfined = true
-        _session.value = sessionManager.reenter(_session.value, state.portalUrl)
-        openPortal()
+        val next = sessionManager.reenter(_session.value, state.portalUrl)
+        _session.value = next
+        // Same ordering as handleIncident: latch and open only when the
+        // transition succeeded.
+        if (next is PortalSession.Detected) {
+            sessionWasConfined = true
+            openPortal()
+        }
     }
 
     private fun openPortal() {

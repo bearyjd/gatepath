@@ -159,9 +159,10 @@ class CaptivePortalMonitor(
                     network = network,
                     bindError = (bindResult as? ProbeResult.Error)?.message,
                     fallbackError = (fallbackResult as? ProbeResult.Error)?.message,
-                    // Unknown rather than false when the fallback was skipped:
-                    // we did not look, so we cannot claim the default route
-                    // bypasses this gateway.
+                    // False when the fallback was skipped — the field is a
+                    // plain Boolean with no "not measured" value, and a skip
+                    // only happens when the bound probe already found the
+                    // portal, where nothing downstream consults it.
                     defaultRouteBypassesCaptive = fallbackResult is ProbeResult.Validated,
                 )
                 val inputs = ClassificationInputs(
@@ -211,11 +212,19 @@ class CaptivePortalMonitor(
                     // The incident is over either way — leaving the network in
                     // `incidents` would fire a spurious CaptiveNetworkLost when
                     // the user later walks away from a network they signed into.
-                    val hadIncident = incidents.remove(network)
-                    if (captive.remove(network) || hadIncident) {
+                    incidents.remove(network)
+                    if (captive.remove(network)) {
+                        // The bound probe had found a portal here, so reaching
+                        // validated means the user got through it.
                         Log.i(TAG, "Captive network $network became validated — sign-in succeeded")
                         trySend(NetworkEvent.NetworkValidated(network))
                     } else if (reportedNoPortal.add(network)) {
+                        // Includes a network that produced a non-Portal
+                        // incident (Tunnelled, Blocked, DnsStrict, Unknown) and
+                        // has now validated. Nobody signed in — the obstacle
+                        // went away, typically because the VPN dropped — so
+                        // this is "no portal", not "sign-in complete", and it
+                        // must not complete a session as a portal success.
                         Log.d(TAG, "Network $network observed validated, no portal")
                         trySend(NetworkEvent.NetworkObservedNoPortal(network))
                     }
