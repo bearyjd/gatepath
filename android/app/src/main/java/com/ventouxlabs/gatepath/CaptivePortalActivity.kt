@@ -285,6 +285,19 @@ class CaptivePortalActivity : ComponentActivity() {
         if (!reported) {
             captivePortal?.ignoreNetwork()
         }
+        // Undo onCreate's process-global bind. The bind is set on the process,
+        // which this activity shares with MainViewModel, so it outlives the
+        // activity. On the WebView path PortalScreen's own DisposableEffect
+        // clears it; three paths here never compose a WebView at all (the
+        // classification placeholder, the Tunnelled/Blocked/DnsStrict card,
+        // and an Unknown card the user never taps). GatepathApplication's
+        // BindWatchdog is a backstop, but it only fires when the whole app
+        // backgrounds — backing out of a handoff card into MainActivity keeps
+        // the app foregrounded, so without this the process stays bound to the
+        // captive Wi-Fi and the diagnostic engine's deliberately-unbound probes
+        // travel it instead of the default route. Unconditional: a second
+        // null-bind after PortalScreen already disposed is a no-op.
+        connectivityManager.bindProcessToNetwork(null)
     }
 
     @Suppress("DEPRECATION")
