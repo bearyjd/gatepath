@@ -24,12 +24,10 @@ class TestVpnControlActivity : Activity() {
         when (intent.getStringExtra(EXTRA_ACTION)) {
             "start" -> {
                 if (VpnService.prepare(this) != null) { Log.e(TAG, "VPN not authorized"); return }
+                val mode = intent.getStringExtra(GatepathTestVpnService.EXTRA_MODE) ?: "covering"
                 startService(
                     svc(GatepathTestVpnService.ACTION_START)
-                        .putExtra(
-                            GatepathTestVpnService.EXTRA_MODE,
-                            intent.getStringExtra(GatepathTestVpnService.EXTRA_MODE),
-                        ),
+                        .putExtra(GatepathTestVpnService.EXTRA_MODE, mode),
                 )
             }
             "probe" -> sendUnboundProbe()

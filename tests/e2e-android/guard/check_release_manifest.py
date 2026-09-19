@@ -19,12 +19,13 @@ from pathlib import Path
 MARKERS = ("GatepathTestVpnService", "BIND_VPN_SERVICE", "TestVpnControlActivity")
 
 
-def merged_manifest(app_dir: Path, variant: str) -> Path:
+def merged_manifest(module_dir: Path, variant: str) -> Path:
     # AGP path varies by version; glob defensively for the variant's merged manifest.
-    hits = sorted(app_dir.glob(f"build/intermediates/**/{variant}/**/AndroidManifest.xml"))
+    module_name = module_dir.name
+    hits = sorted(module_dir.glob(f"build/intermediates/**/{variant}/**/AndroidManifest.xml"))
     hits = [h for h in hits if "merged" in str(h).lower()]
     if not hits:
-        raise SystemExit(f"no merged manifest found for '{variant}' under {app_dir}/build")
+        raise SystemExit(f"no merged manifest found for '{variant}' under {module_dir}/build")
     # Require the canonical task output (process{Variant}Manifest).  Do NOT fall back
     # to secondary intermediates like process{Variant}MainManifest — CI always runs the
     # exact task, so the canonical output must exist; guessing an intermediate is the
@@ -34,8 +35,8 @@ def merged_manifest(app_dir: Path, variant: str) -> Path:
     canonical = sorted(h for h in hits if task_seg in str(h))
     if not canonical:
         raise SystemExit(
-            f"no '{variant}' merged manifest from {task_seg} under {app_dir}/build"
-            f" — run :app:{task_seg} first"
+            f"no '{variant}' merged manifest from {task_seg} under {module_dir}/build"
+            f" — run :{module_name}:{task_seg} first"
         )
     chosen = canonical[0]
     print(f"[guard] {variant}: using {chosen}", file=sys.stderr)
