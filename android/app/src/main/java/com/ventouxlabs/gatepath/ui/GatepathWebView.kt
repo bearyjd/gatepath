@@ -382,9 +382,11 @@ private fun buildWebViewClient(
         // these navigations; we now match that.
         //
         // We still count off-domain navigations so the audit log records
-        // them, but we let the WebView follow them. Subresource trackers
-        // are still blocked via shouldInterceptRequest below — that's
-        // the layer that does the real privacy work.
+        // them, but we let the WebView follow them. Tracker subresources
+        // are handled the same way by shouldInterceptRequest below:
+        // observed and counted, not blocked. Nothing here cancels a
+        // request — see SECURITY_MODEL.md "Caveat — tracker-resource
+        // requests are logged, not blocked, on both platforms".
         if (!isSameOrigin) {
             Log.d(
                 TAG,
