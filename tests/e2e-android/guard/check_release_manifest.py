@@ -19,22 +19,24 @@ from pathlib import Path
 MARKERS = ("GatepathTestVpnService", "BIND_VPN_SERVICE", "TestVpnControlActivity")
 
 CONTROL_ACTIVITY = "TestVpnControlActivity"
+CONTROL_ACTIVITY_PERMISSION = 'android:permission="android.permission.DUMP"'
 
 
 def control_activity_export_failures(merged_debug_manifest: str) -> list[str]:
     """The control activity can start a packet-logging VPN, so it must stay
-    non-exported: only `adb shell am start` (shell uid) may reach it. A
-    comment in android/testvpn/src/main/AndroidManifest.xml says so; this is
-    the guard, because flipping the attribute back would otherwise pass CI.
+    reachable only by the shell uid: exported behind android.permission.DUMP
+    (shell holds it, third-party apps cannot). A comment in
+    android/testvpn/src/main/AndroidManifest.xml says so; this is the guard,
+    because dropping the attribute would otherwise pass CI.
     """
     start = merged_debug_manifest.find(CONTROL_ACTIVITY)
     if start == -1:
         return []  # already reported by the marker loop above
     element_end = merged_debug_manifest.find(">", start)
     element = merged_debug_manifest[start:element_end if element_end != -1 else None]
-    if 'android:exported="false"' in element:
+    if CONTROL_ACTIVITY_PERMISSION in element:
         return []
-    return [f"testvpn DEBUG manifest exports {CONTROL_ACTIVITY} — it must be android:exported=\"false\""]
+    return [f"testvpn DEBUG manifest leaves {CONTROL_ACTIVITY} reachable by any app — it must carry {CONTROL_ACTIVITY_PERMISSION}"]
 
 
 def merged_manifest(module_dir: Path, variant: str) -> Path:

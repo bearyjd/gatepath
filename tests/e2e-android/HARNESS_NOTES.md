@@ -197,11 +197,14 @@ consent dialog (no root). The apparatus is `android/testvpn/`, a wholly
 separate debug-only application module, never bundled with Gatepath's own
 `app` module and never built for release (the release variant is disabled in
 its `build.gradle.kts`, so `:testvpn:assembleRelease` does not exist). Its
-control activity is `android:exported="false"` and refuses intents unless the
-installed package is debuggable — `adb shell am start` still reaches it because
-the shell uid may start any activity, but no app on the device can; if a
-`_testvpn` step silently does nothing, check `am start`'s stdout for a
-permission denial before suspecting the VPN itself. `release-vpn-guard` CI
+control activity is exported behind `android.permission.DUMP` and refuses
+intents unless the installed package is debuggable. The shell uid holds `DUMP`
+(so `adb shell am start` reaches it) and no third-party app can. It is **not**
+`exported="false"`: the shell does not hold `START_ANY_ACTIVITY`, and the first
+PR #168 CI round proved a non-exported activity is refused for it ("not exported
+from uid"), which surfaced only as `established=False` three steps later.
+`step_start_test_vpn` now records `am_output` and raises on a denial, so a
+refused launch fails at the step that caused it. `release-vpn-guard` CI
 (`tests/e2e-android/guard/check_release_manifest.py`) asserts Gatepath's own
 merged RELEASE manifest contains none of `GatepathTestVpnService`,
 `BIND_VPN_SERVICE`, or `TestVpnControlActivity`, with a positive control

@@ -109,3 +109,42 @@ def test_submit_login_does_not_follow_the_emulator_facing_redirect():
         server.shutdown()
         server.server_close()
         thread.join(timeout=5)
+
+
+def test_start_test_vpn_raises_on_an_am_start_refusal(monkeypatch):
+    """`am start` exits 0 and prints the denial, so `check=` cannot catch it.
+    A swallowed refusal surfaced three steps later as 'VPN never established'
+    (PR #168 CI, after the control activity was made non-exported)."""
+    denial = (
+        "Starting: Intent { cmp=com.ventouxlabs.gatepath.testvpn/.TestVpnControlActivity }\n"
+        "java.lang.SecurityException: Permission Denial: starting Intent { ... } "
+        "from null (pid=1234, uid=2000) not exported from uid 10154"
+    )
+    monkeypatch.setattr(rs.adb_helper, "shell_full", lambda *a, **k: (denial, ""))
+    with pytest.raises(RuntimeError, match="refused"):
+        rs.step_start_test_vpn({"serial": "emulator-fake", "vpn_mode": "covering"})
+
+
+def test_start_test_vpn_records_the_launch_output(monkeypatch):
+    launched = "Starting: Intent { cmp=com.ventouxlabs.gatepath.testvpn/.TestVpnControlActivity }"
+    monkeypatch.setattr(rs.adb_helper, "shell_full", lambda *a, **k: (launched, ""))
+    monkeypatch.setattr(rs.adb_helper, "shell", lambda *a, **k: "test VPN sink established")
+    result = rs.step_start_test_vpn({"serial": "emulator-fake", "vpn_mode": "covering"})
+    assert result["established"] is True
+    assert result["am_output"] == launched
+
+
+@pytest.mark.parametrize(
+    "output",
+    [
+        "Permission Denial: starting Intent ... not exported from uid 10154",
+        "Error: Activity class {x/.Y} does not exist.",
+        "java.lang.SecurityException: ...",
+    ],
+)
+def test_am_start_refusal_markers(output):
+    assert rs._am_start_refused(output)
+
+
+def test_a_plain_launch_is_not_a_refusal():
+    assert not rs._am_start_refused("Starting: Intent { cmp=a/.B }")

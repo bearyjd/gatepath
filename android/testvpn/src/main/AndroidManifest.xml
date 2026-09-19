@@ -11,12 +11,19 @@
                 <action android:name="android.net.VpnService" />
             </intent-filter>
         </service>
-        <!-- Not exported: the harness drives it via `adb shell am start`, which
-             the shell uid may do for any activity. Exporting it would let any
-             app on the device start a packet-logging VPN in "covering" mode. -->
+        <!-- Exported ONLY behind android.permission.DUMP. The harness drives this
+             activity with `adb shell am start`; the shell uid does not hold
+             START_ANY_ACTIVITY, so a non-exported activity is refused with
+             "not exported from uid" (PR #168 CI) — but it does hold DUMP
+             (data/etc/privapp-permissions-platform.xml), which is
+             signature|privileged|development and so unobtainable by any
+             third-party app. Without this permission, any app on the device
+             could start a packet-logging VPN in "covering" mode.
+             check_release_manifest.py asserts the attribute stays. -->
         <activity
             android:name=".TestVpnControlActivity"
-            android:exported="false"
+            android:exported="true"
+            android:permission="android.permission.DUMP"
             android:theme="@android:style/Theme.NoDisplay" />
     </application>
 </manifest>

@@ -16,8 +16,10 @@ import java.net.Socket
  * This activity can start a VPN that logs the destination of every packet
  * Gatepath emits, so it is gated twice rather than by policy alone:
  *
- * - **Not exported.** Only `adb shell am start` (the shell uid holds
- *   `START_ANY_ACTIVITY`) can reach it; no other app on the device can.
+ * - **Guarded by `android.permission.DUMP`.** The shell uid holds it (so
+ *   `adb shell am start` works) and no third-party app can; it is not
+ *   simply non-exported because the shell does not hold `START_ANY_ACTIVITY`
+ *   and a non-exported target is refused for it.
  * - **Debuggable builds only.** `handle` runs only when the installed
  *   package is debuggable — the same `BuildConfig.DEBUG`-style gate the
  *   in-app debug intents use, checked at runtime so it does not depend on

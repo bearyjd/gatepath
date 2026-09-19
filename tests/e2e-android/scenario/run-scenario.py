@@ -63,6 +63,9 @@ APP_PACKAGE = "com.ventouxlabs.gatepath"
 # shipped configuration, rather than being the VPN owner itself.
 TESTVPN_PACKAGE = "com.ventouxlabs.gatepath.testvpn"
 TESTVPN_ACTIVITY = f"{TESTVPN_PACKAGE}/.TestVpnControlActivity"
+# What `am start` prints (exit 0) when ActivityManager refuses the launch:
+# a non-exported target, a missing android:permission, or a bad component.
+AM_START_REFUSAL_MARKERS = ("Permission Denial", "SecurityException", "Error:")
 VPN_SINK_RELATIVE = "files/vpn-sink.jsonl"          # now under TESTVPN_PACKAGE
 # Written by MainViewModel's debug sink on every classification (Task 9).
 CONFINEMENT_STATE_RELATIVE = "files/confinement-state.txt"
@@ -98,13 +101,30 @@ SENTINEL_PORT = 18081
 PROBE_DRAIN_SEC = 4.5
 
 
-def _testvpn(serial: str, action: str, label: str | None = None, mode: str | None = None) -> None:
+def _testvpn(serial: str, action: str, label: str | None = None, mode: str | None = None) -> str:
+    """Drive the :testvpn control activity; return `am start`'s combined output.
+
+    Raises RuntimeError on an explicit refusal. `am start` exits 0 and prints
+    the denial to stdout/stderr, so `check=` cannot catch it — and a swallowed
+    refusal reads as "VPN never established" three steps later, indistinguishable
+    from a slow emulator (the control activity's export/permission gate makes
+    this the first thing to rule out).
+    """
     cmd = f"am start -n {TESTVPN_ACTIVITY} --es gatepath.testvpn.action {action}"
     if label:
         cmd += f" --es gatepath.testvpn.label {label}"
     if action == "start" and mode:
         cmd += f" --es gatepath.testvpn.mode {mode}"
-    adb_helper.shell(serial, cmd, timeout=20, check=False)
+    out, err = adb_helper.shell_full(serial, cmd, timeout=20, check=False)
+    combined = "\n".join(part for part in (out, err) if part)
+    if _am_start_refused(combined):
+        raise RuntimeError(f"am start of {TESTVPN_ACTIVITY} ({action}) refused: {combined}")
+    return combined
+
+
+def _am_start_refused(am_output: str) -> bool:
+    """True when `am start` output reports a denial rather than a launch."""
+    return any(marker in am_output for marker in AM_START_REFUSAL_MARKERS)
 
 
 def _mark(serial: str, label: str) -> None:
@@ -258,7 +278,7 @@ def step_start_test_vpn(state: dict) -> dict:
     wait for the service to log that the TUN is established before returning — a
     fixed sleep raced establish() on slower emulators and false-failed D1."""
     serial = state["serial"]
-    _testvpn(serial, "start", mode=state["vpn_mode"])
+    am_output = _testvpn(serial, "start", mode=state["vpn_mode"])
     deadline = time.monotonic() + 20
     established = False
     while time.monotonic() < deadline:
@@ -267,7 +287,7 @@ def step_start_test_vpn(state: dict) -> dict:
             established = True
             break
         time.sleep(1)
-    return {"started": True, "established": established}
+    return {"started": True, "established": established, "am_output": am_output}
 
 
 def step_liveness_probe(state: dict) -> dict:
