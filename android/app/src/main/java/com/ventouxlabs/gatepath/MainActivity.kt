@@ -12,6 +12,7 @@ import androidx.activity.viewModels
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.lifecycle.lifecycleScope
+import com.ventouxlabs.gatepath.diag.IncidentEvidence
 import com.ventouxlabs.gatepath.session.PortalSession
 import com.ventouxlabs.gatepath.share.DiagnosticsSharer
 import com.ventouxlabs.gatepath.ui.MainScreen
@@ -37,14 +38,22 @@ class MainActivity : ComponentActivity() {
 
         maybeApplyDebugIntent(intent)
 
+        // The monitor runs from the ViewModel's init, so a classification can
+        // land before this Activity exists. The setter replays the current
+        // state, so the harness artefact is written for that case too.
+        if (BuildConfig.DEBUG) {
+            viewModel.debugStateSink = { name ->
+                File(filesDir, DEBUG_STATE_FILE).writeText(name)
+            }
+        }
+
         setContent {
             GatepathTheme {
                 val session by viewModel.session.collectAsState()
                 val activeNetwork by viewModel.activeNetwork.collectAsState()
                 val networkStatus by viewModel.networkStatus.collectAsState()
-                val diagnostics by viewModel.latestDiagnostics.collectAsState()
                 val diagnosis by viewModel.diagnosis.collectAsState()
-                val probeCapture by viewModel.latestProbeCapture.collectAsState()
+                val evidence by viewModel.evidence.collectAsState()
 
                 when (val s = session) {
                     is PortalSession.Active -> {
@@ -63,22 +72,20 @@ class MainActivity : ComponentActivity() {
                             MainScreen(
                                 session = s,
                                 networkStatus = networkStatus,
-                                diagnostics = diagnostics,
                                 diagnosis = diagnosis,
                                 onDismiss = viewModel::onDismiss,
                                 onRunDiagnostics = viewModel::rerunDiagnostics,
-                                onShareDiagnostics = { redact -> shareDiagnostics(redact, probeCapture) },
+                                onShareDiagnostics = { redact -> shareDiagnostics(redact, evidence) },
                             )
                         }
                     }
                     else -> MainScreen(
                         session = s,
                         networkStatus = networkStatus,
-                        diagnostics = diagnostics,
                         diagnosis = diagnosis,
                         onDismiss = viewModel::onDismiss,
                         onRunDiagnostics = viewModel::rerunDiagnostics,
-                        onShareDiagnostics = { redact -> shareDiagnostics(redact, probeCapture) },
+                        onShareDiagnostics = { redact -> shareDiagnostics(redact, evidence) },
                     )
                 }
             }
@@ -98,16 +105,13 @@ class MainActivity : ComponentActivity() {
      * File I/O runs off the main thread inside [DiagnosticsSharer.writeBundle];
      * the chooser is launched on the resulting URI.
      */
-    private fun shareDiagnostics(
-        redact: Boolean,
-        probeCapture: com.ventouxlabs.gatepath.network.PortalProbeCapture?,
-    ) {
+    private fun shareDiagnostics(redact: Boolean, evidence: IncidentEvidence?) {
         lifecycleScope.launch {
             try {
                 val uri = DiagnosticsSharer.writeBundle(
                     context = this@MainActivity,
                     diagnosis = viewModel.diagnosis.value,
-                    probeCapture = probeCapture,
+                    evidence = evidence,
                     redact = redact,
                 )
                 val sendIntent =
@@ -177,7 +181,7 @@ class MainActivity : ComponentActivity() {
                 val uri = DiagnosticsSharer.writeBundle(
                     context = this@MainActivity,
                     diagnosis = viewModel.diagnosis.value,
-                    probeCapture = viewModel.latestProbeCapture.value,
+                    evidence = viewModel.evidence.value,
                     redact = redact,
                 )
                 // Signal completion through a FILE, not logcat. The harness
@@ -207,5 +211,11 @@ class MainActivity : ComponentActivity() {
 
         /** The e2e harness polls for this via run-as; keep in sync with run-scenario.py. */
         private const val DEBUG_BUNDLE_URI_FILE = "debug-bundle-uri.txt"
+
+        /**
+         * Debug-only artefact holding the latest `ConfinementState.schemaName`.
+         * The harness reads it via run-as; keep in sync with run-scenario.py.
+         */
+        private const val DEBUG_STATE_FILE = "confinement-state.txt"
     }
 }
