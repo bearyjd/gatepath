@@ -11,6 +11,19 @@ import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.dp
 import androidx.lifecycle.lifecycleScope
 import com.ventouxlabs.gatepath.network.CONNECTIVITY_CHECK_URL
 import com.ventouxlabs.gatepath.network.CaptivePortalMonitor
@@ -120,6 +133,13 @@ class CaptivePortalActivity : ComponentActivity() {
             "Handling captive portal for network $network at $portalUrl",
         )
 
+        // Classification below can take tens of seconds against a gateway that
+        // black-holes the probe (5s connect + 5s read, plus the VPN detector's
+        // 2s+2s Tailscale localapi call). Put something on screen first: the
+        // system just handed this activity the foreground, and a blank window
+        // reads as a crash.
+        setContent { GatepathTheme { ConfinementProbePlaceholder() } }
+
         lifecycleScope.launch {
             val bound = withContext(Dispatchers.IO) { probe.probe(network, testUrl = monitor.probeUrl) }
             val vpn = withContext(Dispatchers.IO) { VpnDetector.detect() }
@@ -162,20 +182,53 @@ class CaptivePortalActivity : ComponentActivity() {
                     val kind = (state as? ConfinementState.Tunnelled)?.vpnKind
                         ?: (state as? ConfinementState.Blocked)?.vpnKind ?: VpnKind.NONE
                     val (label, launch) = VpnAppLauncher.resolve(this, kind)
-                    ConfinementCard(
-                        state = state,
-                        vpnAppLabel = label,
-                        onAction = { action ->
-                            when (action) {
-                                ConfinementAction.OPEN_VPN_APP -> startActivity(launch)
-                                ConfinementAction.OPEN_NETWORK_SETTINGS ->
-                                    startActivity(Intent(Settings.ACTION_WIRELESS_SETTINGS))
-                                ConfinementAction.SIGN_IN_HERE, ConfinementAction.SHARE_EVIDENCE -> Unit
-                            }
-                        },
-                        onShareEvidence = { /* no bundle on this entry; MainActivity owns sharing */ },
-                    )
+                    // Scaffold, not a bare card: enableEdgeToEdge() is active,
+                    // so without innerPadding the card draws under the status
+                    // and navigation bars.
+                    Scaffold { innerPadding ->
+                        ConfinementCard(
+                            state = state,
+                            vpnAppLabel = label,
+                            onAction = { action ->
+                                when (action) {
+                                    ConfinementAction.OPEN_VPN_APP -> startActivity(launch)
+                                    ConfinementAction.OPEN_NETWORK_SETTINGS ->
+                                        startActivity(Intent(Settings.ACTION_WIRELESS_SETTINGS))
+                                    ConfinementAction.SIGN_IN_HERE, ConfinementAction.SHARE_EVIDENCE -> Unit
+                                }
+                            },
+                            onShareEvidence = { /* no bundle on this entry; MainActivity owns sharing */ },
+                            modifier = Modifier.padding(innerPadding),
+                        )
+                    }
                 }
+            }
+        }
+    }
+
+    /**
+     * What the user looks at while the network is being classified. Deliberately
+     * says nothing about the outcome — at this point Gatepath does not yet know
+     * whether it can reach the gateway.
+     */
+    @Composable
+    private fun ConfinementProbePlaceholder() {
+        Scaffold { innerPadding ->
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(innerPadding)
+                    .padding(24.dp),
+                verticalArrangement = Arrangement.Center,
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                CircularProgressIndicator()
+                Text(
+                    text = "Checking this network…",
+                    style = MaterialTheme.typography.bodyLarge,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.padding(top = 16.dp),
+                )
             }
         }
     }

@@ -24,7 +24,12 @@ data class AuditEntry(
     @SerialName("duration_seconds") val durationSeconds: Int,
     @SerialName("observed_navigation_attempts") val observedNavigationAttempts: Int,
     @SerialName("observed_resource_requests") val observedResourceRequests: Int,
-    /** `confined` or `unconfined` — see docs/audit_log_schema.json `confinement_enum`. Android always writes `confined`. */
+    /**
+     * `confined` or `unconfined` — see docs/audit_log_schema.json
+     * `confinement_enum`. Android writes `confined` only for a session opened
+     * from a classified `Confined` state; the debug-force path writes
+     * `unconfined`.
+     */
     @SerialName("confinement") val confinement: String = "unconfined",
     /**
      * Certificate errors proceeded past on the portal host (see

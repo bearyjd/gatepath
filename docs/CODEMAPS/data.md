@@ -21,7 +21,9 @@ close_reason: "portal_completed" | "user_dismissed" | "timeout" | "error" | "abo
 duration_seconds: int
 observed_navigation_attempts: int   (off-domain navigations observed + counted, allowed to load)
 observed_resource_requests: int    (tracker-domain subresource requests observed + counted, allowed to load)
-confinement: "confined" | "unconfined"  (android: always confined. desktop: confined if netns-isolated,
+confinement: "confined" | "unconfined"  (android: confined only when the session opened from a classified
+                                         Confined state, else unconfined (e.g. the debug-force path).
+                                         desktop: confined if netns-isolated,
                                          unconfined if in-process / Flatpak default route)
 tls_cert_errors_bypassed: int    (optional field; android: cert errors proceeded past on
                                   the portal host only. desktop: cert errors counted from

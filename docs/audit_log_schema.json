@@ -78,7 +78,7 @@
       "desktop": "Count of TLS certificate errors proceeded past on the portal host (load-failed-with-tls-errors, gated by ssl_error_policy — same host-scoped rule as Android). Off-domain certificate errors are refused and NOT counted here. A non-zero value means the session rendered a page whose certificate did not validate. The portal WebView runs in a subprocess, so the count reaches this entry through the observation channel (portal_observations); if that file is missing or unreadable the field is 0, since losing a count must not cost the session record."
     },
     "confinement": {
-      "android": "Always 'confined': an Android session opens only when the Wi-Fi-bound probe reached the gateway, which netd permits only when no secure VPN covers Gatepath (or Gatepath is excluded from it). See SECURITY_MODEL.md.",
+      "android": "'confined' only for a session opened from a classified Confined state, which requires the Wi-Fi-bound probe to have reached the gateway — netd permits that only when no secure VPN covers Gatepath (or Gatepath is excluded from it). The debug-force path opens a session without classifying and writes 'unconfined'. See SECURITY_MODEL.md.",
       "desktop": "'confined' when the netns helper launched the portal WebView inside the gatepath namespace; 'unconfined' for the in-process (Flatpak-only) path, where WebKitGTK traffic follows the system default route."
     }
   }

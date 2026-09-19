@@ -501,7 +501,11 @@ class MainViewModel @Inject constructor(
             durationSeconds = durationSeconds,
             observedNavigationAttempts = finalState.blockedNavigationAttempts,
             observedResourceRequests = finalState.blockedResourceRequests,
-            confinement = "confined",
+            // Derived, not asserted. A hardcoded "confined" could never
+            // disagree with the code writing it, which is no evidence at all —
+            // and it would be a lie on the debug-force path, which opens a
+            // session without ever classifying the network.
+            confinement = if (_confinement.value is ConfinementState.Confined) "confined" else "unconfined",
             tlsCertErrorsBypassed = finalState.tlsCertErrorsBypassed,
         )
 
