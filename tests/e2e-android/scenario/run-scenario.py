@@ -5,26 +5,23 @@ Mirrors tests/e2e-docker/client/run-scenario.py in spirit: each step is a
 function returning {"name", "ok", "data", "error"}; all steps aggregated
 into scenario-report.json under the artifacts dir.
 
-Step sequence:
-    1.  connect            — adb connect + wait for boot_completed=1
-    2.  reset_settings     — clear stale captive_portal_* globals
-    3.  install            — adb install -r <apk>
-    4.  reset_gateway      — POST /reset on the mockportal /log + counter
-    5.  set_probe_urls     — settings put global captive_portal_*_url <url>
-    6.  cycle_wifi         — svc wifi disable; sleep; svc wifi enable
-    7.  wait_for_captive   — poll dumpsys for the CAPTIVE_PORTAL capability
-    8.  launch_debug_portal— am start the PR #34 debug intent (deterministic;
-                             tapping the system notification is unworkable on a
-                             headless emulator — see the step docstring)
-    9.  wait_portal_screen — confirm the launch log, then wait for the WebView's
-                             /portal GET (Android UA) in the mock's request log
-    10. submit_login       — host-post mode: POST /login (authenticates the mock)
-    11. wait_validated     — poll dumpsys connectivity for IS_VALIDATED
-    12. pull_logcat        — adb logcat -d > artifacts/logcat.txt
-    13. pull_audit_log     — run-as cat files/audit.jsonl → artifacts/
-    14. fetch_gateway_log  — curl /log → artifacts/gateway-log.json
-    15. cleanup_settings   — settings delete captive_portal_*
-    16. disconnect         — adb disconnect
+Two mode-specific step lists (Task 14), selected via --vpn-mode:
+    STEPS_COVERING  — the standalone :testvpn app covers Gatepath: the bound
+                       probe gets EPERM, MainViewModel classifies TUNNELLED,
+                       and no portal session ever opens. Proven via the
+                       app-private confinement-state.txt sidecar plus the
+                       no-leak VPN sink (D1 liveness via Gatepath's own debug
+                       sentinel-probe intent, D2 confinement across a settled
+                       bound window).
+    STEPS_EXCLUDING — Gatepath is excluded from the VPN (the shipped
+                       contract): MainViewModel classifies CONFINED, the
+                       monitor opens the portal session on its own (no debug
+                       intent), and sign-in completes end-to-end.
+Both share a common head (connect/install/bring the network captive/install
+and start the test VPN) and tail (pull artefacts, clean up, disconnect); see
+COMMON_HEAD / COMMON_TAIL and the two list definitions below for the exact
+per-mode step order. step_names() exposes each list's step names for the
+host-side driver (driver/assertions.py, Task 15) to check against.
 
 A failed step short-circuits the rest with rc=1. scenario-report.json is
 written in a finally block regardless of failure.
@@ -61,8 +58,22 @@ CAPTIVE_KEYS = (
 # the app is debuggable and the file lives in app-private storage.
 AUDIT_LOG_RELATIVE = "files/audit.jsonl"
 APP_PACKAGE = "com.ventouxlabs.gatepath"
-TESTVPN_ACTIVITY = f"{APP_PACKAGE}/.testvpn.TestVpnControlActivity"
-VPN_SINK_RELATIVE = "files/vpn-sink.jsonl"
+# The standalone leak-detector VPN app (Task 13) — a separate package so
+# Gatepath is a covered/excluded app under a third-party VPN, matching the
+# shipped configuration, rather than being the VPN owner itself.
+TESTVPN_PACKAGE = "com.ventouxlabs.gatepath.testvpn"
+TESTVPN_ACTIVITY = f"{TESTVPN_PACKAGE}/.TestVpnControlActivity"
+VPN_SINK_RELATIVE = "files/vpn-sink.jsonl"          # now under TESTVPN_PACKAGE
+# Written by MainViewModel's debug sink on every classification (Task 9).
+CONFINEMENT_STATE_RELATIVE = "files/confinement-state.txt"
+# Debug-only intent extra on Gatepath's OWN MainActivity. NOT the testvpn
+# app's `probe` action (Task 13): that fires from the VPN-owning process,
+# whose own outbound traffic bypasses the tunnel it creates (standard
+# VpnService behaviour), so it can no longer prove the sink intercepts a
+# COVERED app's default route. Firing from Gatepath — an ordinary,
+# non-owner app under the VPN — is what proves D1 in `covering` mode.
+# Keep in sync with MainActivity.kt's EXTRA_DEBUG_SENTINEL_PROBE.
+EXTRA_DEBUG_SENTINEL_PROBE = "gatepath.debug.sentinel_probe"
 # DiagnosticsSharer writes here (CACHE_SUBDIR/FILE_NAME). App-private, so it
 # comes out via run-as like the audit log does.
 BUNDLE_RELATIVE = "cache/diagnostics/gatepath-diagnostics.txt"
@@ -77,19 +88,22 @@ BUNDLE_URI_RELATIVE = "files/debug-bundle-uri.txt"
 # the assertion (PR #55).
 SENTINEL_DST = "10.0.2.2"
 SENTINEL_PORT = 18081
-# Mirrors TestVpnControlActivity.PROBE_COUNT (3) * CONNECT_TIMEOUT_MS (1500ms).
-# `am start` returns once the activity is launched, not once its onCreate()
-# (which spawns and `.join()`s the probe thread) returns — so a "probe" action
-# can still be mid-flight for up to this long after the shell command
-# completes. Single source of truth, same rule as SENTINEL_DST/SENTINEL_PORT:
-# keep in sync with TestVpnControlActivity.kt.
+# Mirrors MainActivity.kt's PROBE_COUNT (3) * CONNECT_TIMEOUT_MS (1500ms) for
+# its debug sentinel-probe intent (EXTRA_DEBUG_SENTINEL_PROBE). `am start`
+# returns once the activity is launched, not once the background probe thread
+# it spawns (fire-and-forget, no `.join()`) finishes — so the probe can still
+# be mid-flight for up to this long after the shell command completes. Single
+# source of truth, same rule as SENTINEL_DST/SENTINEL_PORT: keep in sync with
+# MainActivity.kt.
 PROBE_DRAIN_SEC = 4.5
 
 
-def _testvpn(serial: str, action: str, label: str | None = None) -> None:
+def _testvpn(serial: str, action: str, label: str | None = None, mode: str | None = None) -> None:
     cmd = f"am start -n {TESTVPN_ACTIVITY} --es gatepath.testvpn.action {action}"
     if label:
         cmd += f" --es gatepath.testvpn.label {label}"
+    if action == "start" and mode:
+        cmd += f" --es gatepath.testvpn.mode {mode}"
     adb_helper.shell(serial, cmd, timeout=20, check=False)
 
 
@@ -108,7 +122,7 @@ def _mark(serial: str, label: str) -> None:
     b64 = base64.b64encode(line.encode()).decode()
     adb_helper.shell(
         serial,
-        f"run-as {APP_PACKAGE} sh -c 'echo {b64} | base64 -d >> {VPN_SINK_RELATIVE}'",
+        f"run-as {TESTVPN_PACKAGE} sh -c 'echo {b64} | base64 -d >> {VPN_SINK_RELATIVE}'",
         timeout=10,
         check=False,
     )
@@ -119,7 +133,7 @@ def _pull_sink(serial: str) -> list[dict]:
     Blank lines and unparseable lines are skipped (the sink is appended to
     concurrently, so a partial trailing line can appear mid-read)."""
     raw = adb_helper.shell(
-        serial, f"run-as {APP_PACKAGE} cat {VPN_SINK_RELATIVE}", timeout=10, check=False
+        serial, f"run-as {TESTVPN_PACKAGE} cat {VPN_SINK_RELATIVE}", timeout=10, check=False
     )
     entries: list[dict] = []
     for line in raw.splitlines():
@@ -151,6 +165,7 @@ def step(name: str, fn: Callable[[dict], dict]) -> Callable[[dict], dict]:
                 "error": f"{type(e).__name__}: {e}",
             }
 
+    runner.step_name = name  # type: ignore[attr-defined]
     return runner
 
 
@@ -220,7 +235,7 @@ def step_grant_vpn(state: dict) -> dict:
     """Pre-authorize the VpnService so establish() needs no consent dialog.
     appops runs as the adb shell uid — no root required on the emulator."""
     adb_helper.shell(
-        state["serial"], f"appops set {APP_PACKAGE} ACTIVATE_VPN allow", timeout=10
+        state["serial"], f"appops set {TESTVPN_PACKAGE} ACTIVATE_VPN allow", timeout=10
     )
     return {"granted": "ACTIVATE_VPN"}
 
@@ -230,7 +245,7 @@ def step_start_test_vpn(state: dict) -> dict:
     wait for the service to log that the TUN is established before returning — a
     fixed sleep raced establish() on slower emulators and false-failed D1."""
     serial = state["serial"]
-    _testvpn(serial, "start")
+    _testvpn(serial, "start", mode=state["vpn_mode"])
     deadline = time.monotonic() + 20
     established = False
     while time.monotonic() < deadline:
@@ -245,18 +260,38 @@ def step_start_test_vpn(state: dict) -> dict:
 def step_liveness_probe(state: dict) -> dict:
     """Poll-until-captured, THEN open the bound window.
 
+    Only meaningful in `covering` mode (STEPS_EXCLUDING omits this step
+    entirely — Gatepath is outside the VPN there, so the sink is not an
+    oracle for it).
+
     Each pass fires the unbound TCP sentinel probe, settles, and pulls the sink;
     it breaks once an entry with the sentinel dst:port is present. Only then is
     the bound_begin marker laid. This deterministically guarantees the unbound
     sentinel packet is in the sink BEFORE the bound window opens (fixing issue
     #2 — the probe was previously absent / raced). If the sentinel is never
     captured within the window, captured=False surfaces it to the assertion
-    rather than silently opening a vacuous bound window."""
+    rather than silently opening a vacuous bound window.
+
+    The probe fires as a debug intent on Gatepath's OWN MainActivity, not the
+    testvpn app's `probe` action (Task 13). The testvpn app owns the VPN, and
+    a VpnService app's own outbound traffic bypasses the tunnel it creates —
+    so probing from within :testvpn can no longer prove the sink intercepts a
+    COVERED app's default route. Gatepath is an ordinary, non-owner app under
+    the VPN, so firing from its own process is what actually proves D1 here.
+    MainActivity isn't running yet at this point in STEPS_COVERING (launch_app
+    comes after), so the plain `am start` form works, but --activity-single-top
+    is used defensively (harmless when there's no existing top instance)."""
     serial = state["serial"]
     deadline = time.monotonic() + 25
     captured = False
     while time.monotonic() < deadline:
-        _testvpn(serial, "probe")
+        adb_helper.shell(
+            serial,
+            f"am start --activity-single-top -n {APP_PACKAGE}/.MainActivity "
+            f"--ez {EXTRA_DEBUG_SENTINEL_PROBE} true",
+            timeout=20,
+            check=False,
+        )
         time.sleep(1.5)
         if any(
             e.get("dst") == SENTINEL_DST and e.get("port") == SENTINEL_PORT
@@ -264,11 +299,12 @@ def step_liveness_probe(state: dict) -> dict:
         ):
             captured = True
             break
-    # The loop above fires a new "probe" action every 1.5s and can break the
-    # moment capture is detected — but `am start` is fire-and-forget: it does
-    # not wait for the activity's onCreate() (which runs up to PROBE_COUNT
-    # sequential connect() attempts) to finish. So the LAST probe fired can
-    # still be sending SYNs for up to PROBE_DRAIN_SEC after this loop exits.
+    # The loop above fires a new debug sentinel-probe intent every 1.5s and can
+    # break the moment capture is detected — but `am start` is fire-and-forget:
+    # it does not wait for the debug-intent handler (which runs up to
+    # PROBE_COUNT sequential connect() attempts) to finish. So the LAST probe
+    # fired can still be sending SYNs for up to PROBE_DRAIN_SEC after this loop
+    # exits.
     # Drain that straggler before measuring quiescence below, or its packets
     # can land after bound_begin and read as a leak that never happened (the
     # android-e2e false failure on PR #154: 4 sentinel packets inside the
@@ -329,7 +365,7 @@ def step_pull_vpn_sink(state: dict) -> dict:
     bound_end_seen = False
     while True:
         contents = adb_helper.shell(
-            serial, f"run-as {APP_PACKAGE} cat {VPN_SINK_RELATIVE}", timeout=10, check=False
+            serial, f"run-as {TESTVPN_PACKAGE} cat {VPN_SINK_RELATIVE}", timeout=10, check=False
         )
         for line in contents.splitlines():
             line = line.strip()
@@ -363,6 +399,13 @@ def _foreground(serial: str) -> str:
 
 def step_launch_debug_portal(state: dict) -> dict:
     """Open PortalScreen deterministically via the PR #34 debug intent.
+
+    Not part of STEPS_COVERING or STEPS_EXCLUDING (Task 14): both now use
+    step_launch_app, which starts MainActivity with no debug extras so the
+    real CaptivePortalMonitor path classifies and (in `excluding` mode) opens
+    the session on its own. Retained as a manual smoke-testing entry point for
+    the WebView/PortalScreen code path on devices whose system captive
+    detection is unreachable — see docs/TESTING_ANDROID.md (GrapheneOS).
 
     Tapping the system captive notification proved unachievable on a headless
     emulator (grouped/collapsed notifications, input tap never registers a
@@ -406,7 +449,17 @@ def _gateway_has_portal_hit(state: dict) -> bool:
 
 
 def step_wait_portal_screen(state: dict) -> dict:
-    """Confirm the debug intent opened PortalScreen.
+    """Confirm PortalScreen opened, then wait for the WebView's real load.
+
+    Two ways in, gated on `state["vpn_mode"]`:
+      - `excluding`: no debug intent is fired (STEPS_EXCLUDING has no
+        launch_debug_portal step) — CaptivePortalMonitor opens the session on
+        its own once wait_confinement_state observes CONFINED. There is no
+        "Debug portal intent: opening" log line to wait for, so `accepted` is
+        seeded True and this step degrades to "wait for the /portal GET".
+      - `covering` never reaches this step at all (STEPS_COVERING has no
+        wait_portal_screen); the branch below only matters if a future mode
+        reintroduces the debug intent path.
 
     MainActivity logs `GatepathMain` "Debug portal intent: opening <url> on
     <net>" (MainActivity.kt:99) once it accepts the extra and forces the
@@ -421,6 +474,8 @@ def step_wait_portal_screen(state: dict) -> dict:
     # before submit_login/wait_validated can tear the session down.
     deadline = time.monotonic() + 60
     accepted = False
+    if state["vpn_mode"] == "excluding":
+        accepted = True
     while time.monotonic() < deadline:
         if not accepted:
             log = adb_helper.shell(serial, "logcat -d", timeout=20, check=False)
@@ -684,31 +739,87 @@ def step_disconnect(state: dict) -> dict:
     return {"disconnected": True}
 
 
-STEPS: list[Callable[[dict], dict]] = [
-    step("connect", step_connect),
-    step("reset_settings", step_reset_settings),
-    step("install", step_install),
-    step("reset_gateway", step_reset_gateway),
-    step("set_probe_urls", step_set_probe_urls),
-    step("cycle_wifi", step_cycle_wifi),
-    step("wait_for_captive", step_wait_for_captive),
-    step("grant_vpn", step_grant_vpn),
-    step("start_test_vpn", step_start_test_vpn),
-    step("liveness_probe", step_liveness_probe),
-    step("launch_debug_portal", step_launch_debug_portal),
-    step("wait_portal_screen", step_wait_portal_screen),
-    step("submit_login", step_submit_login),
-    step("wait_validated", step_wait_validated),
-    step("mark_bound_end", step_mark_bound_end),
-    step("pull_vpn_sink", step_pull_vpn_sink),
-    step("write_bundle", step_write_bundle),
-    step("pull_bundle", step_pull_bundle),
-    step("pull_logcat", step_pull_logcat),
-    step("pull_audit_log", step_pull_audit_log),
-    step("fetch_gateway_log", step_fetch_gateway_log),
-    step("cleanup_settings", step_cleanup_settings),
+def step_install_testvpn(state: dict) -> dict:
+    adb_helper.install_apk(state["serial"], state["testvpn_apk_path"])
+    return {"apk_path": state["testvpn_apk_path"]}
+
+
+def step_clear_confinement_state(state: dict) -> dict:
+    """Delete the sidecar first so a stale file cannot read as this run's result."""
+    adb_helper.shell(
+        state["serial"], f"run-as {APP_PACKAGE} rm -f {CONFINEMENT_STATE_RELATIVE}", timeout=10, check=False
+    )
+    return {"cleared": CONFINEMENT_STATE_RELATIVE}
+
+
+def step_launch_app(state: dict) -> dict:
+    """Start MainActivity with NO debug extras: the monitor path must classify on its own."""
+    serial = state["serial"]
+    adb_helper.shell(serial, "logcat -G 8M", timeout=10, check=False)
+    adb_helper.shell(serial, "logcat -c", timeout=10, check=False)
+    out, err = adb_helper.shell_full(serial, f"am start -n {APP_PACKAGE}/.MainActivity", timeout=20, check=False)
+    return {"am_output": (out or err).strip()[:200]}
+
+
+def step_wait_confinement_state(state: dict) -> dict:
+    """Poll the app-private sidecar the debug ViewModel writes; a file, not a log line."""
+    serial = state["serial"]
+    deadline = time.monotonic() + 60
+    while time.monotonic() < deadline:
+        got = adb_helper.shell(
+            serial, f"run-as {APP_PACKAGE} cat {CONFINEMENT_STATE_RELATIVE}", timeout=10, check=False
+        ).strip()
+        if got:
+            return {"state": got, "expected": state["expected_state"]}
+        time.sleep(2)
+    raise RuntimeError(f"{CONFINEMENT_STATE_RELATIVE} never appeared within 60s")
+
+
+def step_pull_confinement_state(state: dict) -> dict:
+    got = adb_helper.shell(
+        state["serial"], f"run-as {APP_PACKAGE} cat {CONFINEMENT_STATE_RELATIVE}", timeout=10, check=False
+    )
+    (state["artifacts_dir"] / "confinement-state.txt").write_text(got)
+    return {"bytes": len(got)}
+
+
+def step_settle_covering(state: dict) -> dict:
+    """Give a Tunnelled app time to misbehave. Nothing should reach the gateway."""
+    time.sleep(20)
+    _mark(state["serial"], "bound_end")
+    return {"slept_sec": 20}
+
+
+COMMON_HEAD: list[Callable[[dict], dict]] = [
+    step("connect", step_connect), step("reset_settings", step_reset_settings),
+    step("install", step_install), step("install_testvpn", step_install_testvpn),
+    step("reset_gateway", step_reset_gateway), step("set_probe_urls", step_set_probe_urls),
+    step("cycle_wifi", step_cycle_wifi), step("wait_for_captive", step_wait_for_captive),
+    step("grant_vpn", step_grant_vpn), step("start_test_vpn", step_start_test_vpn),
+    step("clear_confinement_state", step_clear_confinement_state),
+]
+COMMON_TAIL: list[Callable[[dict], dict]] = [
+    step("pull_vpn_sink", step_pull_vpn_sink), step("write_bundle", step_write_bundle),
+    step("pull_bundle", step_pull_bundle), step("pull_logcat", step_pull_logcat),
+    step("pull_audit_log", step_pull_audit_log), step("pull_confinement_state", step_pull_confinement_state),
+    step("fetch_gateway_log", step_fetch_gateway_log), step("cleanup_settings", step_cleanup_settings),
     step("disconnect", step_disconnect),
 ]
+# Third-party VPN covers Gatepath: EPERM on the bound probe → TUNNELLED, no session.
+STEPS_COVERING: list[Callable[[dict], dict]] = COMMON_HEAD + [
+    step("liveness_probe", step_liveness_probe), step("launch_app", step_launch_app),
+    step("wait_confinement_state", step_wait_confinement_state), step("settle_covering", step_settle_covering),
+] + COMMON_TAIL
+# Gatepath excluded from the VPN: CONFINED, monitor opens the session, sign-in completes.
+STEPS_EXCLUDING: list[Callable[[dict], dict]] = COMMON_HEAD + [
+    step("launch_app", step_launch_app), step("wait_confinement_state", step_wait_confinement_state),
+    step("wait_portal_screen", step_wait_portal_screen), step("submit_login", step_submit_login),
+    step("wait_validated", step_wait_validated), step("mark_bound_end", step_mark_bound_end),
+] + COMMON_TAIL
+
+
+def step_names(steps: list[Callable[[dict], dict]]) -> list[str]:
+    return [s.step_name for s in steps]  # type: ignore[attr-defined]
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
@@ -717,6 +828,8 @@ STEPS: list[Callable[[dict], dict]] = [
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser()
     p.add_argument("--apk-path", required=True)
+    p.add_argument("--testvpn-apk-path", required=True,
+                   help="path to the standalone :testvpn app's debug APK (Task 13)")
     p.add_argument("--emulator-addr", default="localhost:5555",
                    help="adb target: 'localhost:5555' for Docker, 'emulator-5554' for GHA")
     p.add_argument("--mockportal-host-url", default="http://10.0.2.2:18080",
@@ -727,6 +840,10 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--mode", choices=("host-post", "ui"), default="host-post",
                    help="how to submit /login — host-post is deterministic; "
                         "ui drives the WebView via input (brittle at API 34)")
+    p.add_argument("--vpn-mode", choices=("covering", "excluding"), default="excluding",
+                   help="covering: third-party VPN covers Gatepath (expect TUNNELLED, "
+                        "no session); excluding: Gatepath excluded from the VPN, the "
+                        "shipped contract (expect CONFINED, sign-in completes)")
     return p.parse_args()
 
 
@@ -735,16 +852,20 @@ def main() -> int:
     state: dict[str, Any] = {
         "emulator_addr": args.emulator_addr,
         "apk_path": args.apk_path,
+        "testvpn_apk_path": args.testvpn_apk_path,
         "mockportal_host_url": args.mockportal_host_url.rstrip("/"),
         "mockportal_from_host_url": args.mockportal_from_host_url.rstrip("/"),
         "artifacts_dir": Path(args.artifacts_dir),
         "mode": args.mode,
+        "vpn_mode": args.vpn_mode,
+        "expected_state": {"covering": "tunnelled", "excluding": "confined"}[args.vpn_mode],
     }
     state["artifacts_dir"].mkdir(parents=True, exist_ok=True)
+    steps = STEPS_COVERING if args.vpn_mode == "covering" else STEPS_EXCLUDING
 
     report: dict[str, Any] = {"rc": 0, "steps": []}
     try:
-        for step_fn in STEPS:
+        for step_fn in steps:
             result = step_fn(state)
             report["steps"].append(result)
             print(

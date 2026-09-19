@@ -29,6 +29,8 @@ import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 import java.io.File
+import java.net.InetSocketAddress
+import java.net.Socket
 import javax.inject.Inject
 
 @AndroidEntryPoint
@@ -192,6 +194,10 @@ class MainActivity : ComponentActivity() {
         // how the e2e harness learned `am start` was resuming the task without
         // calling onNewIntent — see run-scenario.py's --activity-single-top.
         Log.i(TAG, "Debug intent received: extras=${intent.extras?.keySet()}")
+        if (intent.getBooleanExtra(EXTRA_DEBUG_SENTINEL_PROBE, false)) {
+            sendSentinelProbe()
+            return
+        }
         if (intent.getBooleanExtra(EXTRA_DEBUG_WRITE_BUNDLE, false)) {
             debugWriteDiagnosticsBundle(intent.getBooleanExtra(EXTRA_DEBUG_REDACT, true))
             return
@@ -203,6 +209,46 @@ class MainActivity : ComponentActivity() {
         }
         Log.i(TAG, "Debug portal intent: opening $url on $net")
         viewModel.debugForceActiveSession(url, net)
+    }
+
+    /**
+     * Debug-only: fire an unbound TCP connect volley at the e2e harness's
+     * no-leak sentinel, from Gatepath's OWN process, off the main thread.
+     *
+     * The android-e2e harness's leak-detector VPN lives in a standalone app,
+     * `:testvpn` (`com.ventouxlabs.gatepath.testvpn`), so that Gatepath is a
+     * covered/excluded app under a third-party VPN rather than the VPN owner
+     * itself — matching the shipped configuration. That app's own
+     * `TestVpnControlActivity.probe` action used to prove the sink intercepts
+     * the default route (D1), but a VpnService app's own outbound traffic
+     * bypasses the tunnel it creates, so probing from within `:testvpn` can no
+     * longer prove that for a COVERED app. Firing the same probe from
+     * Gatepath's own process — an ordinary, non-owner app under the VPN — is
+     * what actually proves D1 in the harness's `covering` mode.
+     *
+     * Never touches the ViewModel: this is a pure network side effect for the
+     * harness to observe in the VPN sink, not a captive-portal state change.
+     *
+     * Constants mirror run-scenario.py's SENTINEL_DST / SENTINEL_PORT /
+     * PROBE_DRAIN_SEC — single source of truth, same rule as
+     * EXTRA_DEBUG_PORTAL_URL and the other debug-intent constants below.
+     */
+    private fun sendSentinelProbe() {
+        Thread {
+            repeat(PROBE_COUNT) {
+                try {
+                    Socket().use { sock ->
+                        sock.connect(
+                            InetSocketAddress(SENTINEL_HOST, SENTINEL_PORT),
+                            CONNECT_TIMEOUT_MS,
+                        )
+                    }
+                } catch (_: Exception) {
+                    // Expected: nothing listens at the sentinel — the SYN is the signal.
+                }
+            }
+            Log.i(TAG, "sent sentinel probe to $SENTINEL_HOST:$SENTINEL_PORT")
+        }.start()
     }
 
     /**
@@ -251,6 +297,19 @@ class MainActivity : ComponentActivity() {
         private const val EXTRA_DEBUG_PORTAL_URL = "gatepath.debug.portal_url"
         private const val EXTRA_DEBUG_WRITE_BUNDLE = "gatepath.debug.write_bundle"
         private const val EXTRA_DEBUG_REDACT = "gatepath.debug.redact"
+        private const val EXTRA_DEBUG_SENTINEL_PROBE = "gatepath.debug.sentinel_probe"
+
+        /**
+         * Mirror run-scenario.py's SENTINEL_DST / SENTINEL_PORT / PROBE_DRAIN_SEC
+         * (single source of truth rule stated there). The dedicated sentinel
+         * host:port is one the captive monitor itself never probes (it hits
+         * 10.0.2.2:18080), so the e2e harness's VPN sink can attribute a packet
+         * here unambiguously to this probe rather than to captive-detection noise.
+         */
+        private const val SENTINEL_HOST = "10.0.2.2"
+        private const val SENTINEL_PORT = 18081
+        private const val PROBE_COUNT = 3
+        private const val CONNECT_TIMEOUT_MS = 1500
 
         /** Also logged, but only as a human breadcrumb — the harness reads the file below. */
         private const val DEBUG_BUNDLE_MARKER = "debug_bundle_written"
