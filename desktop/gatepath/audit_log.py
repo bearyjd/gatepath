@@ -21,6 +21,17 @@ logger = logging.getLogger(__name__)
 
 _LOCK = threading.Lock()
 
+# schema_version 1 spelled the two counters `blocked_*`; v2 renamed them to
+# `observed_*` (see docs/AUDIT_LOG_SCHEMA.md, "v1 -> v2"). Readers must map old
+# lines so pre-rename sessions keep their counts. Names are duplicated from
+# docs/audit_log_schema.json `v1_key_renames` because the schema file is not
+# shipped in the Flatpak; tests/test_audit_log.py pins the two in sync, the
+# same way AuditSchemaParityTest does for the Android reader.
+_V1_KEY_RENAMES: dict[str, str] = {
+    "blocked_navigation_attempts": "observed_navigation_attempts",
+    "blocked_resource_requests": "observed_resource_requests",
+}
+
 
 def _default_log_path() -> Path:
     xdg = os.environ.get("XDG_DATA_HOME") or str(Path.home() / ".local" / "share")
@@ -110,8 +121,29 @@ def write_session(
     logger.debug("Audit entry written to %s", path)
 
 
+def _upgrade_v1(entry: dict) -> dict:
+    """Return *entry* with v1 counter keys renamed to their v2 spelling.
+
+    Non-v1 lines come back unchanged. A new dict is built rather than the
+    input mutated. This matches Android's `AuditLogWriter.upgradeV1` step
+    exactly: `schema_version` stays 1 and no `confinement` field is added —
+    the line is upgraded only as far as the schema's `v1_key_renames`
+    contract asks. (Android then decodes into a typed entry whose v2-only
+    fields carry defaults; this reader returns the raw dict, so a v1 line
+    still lacks those keys — use `.get()` for them.)
+    """
+    if entry.get("schema_version") != 1:
+        return entry
+    return {_V1_KEY_RENAMES.get(key, key): value for key, value in entry.items()}
+
+
 def read_all(*, log_path: Optional[Path] = None) -> list[dict]:
-    """Return all audit entries in chronological (file) order."""
+    """Return all audit entries in chronological (file) order.
+
+    schema_version 1 lines are returned with their counters under the v2
+    `observed_*` names (see `_upgrade_v1`), so callers only ever see one
+    spelling.
+    """
     path = log_path or _default_log_path()
     if not path.exists():
         return []
@@ -122,7 +154,12 @@ def read_all(*, log_path: Optional[Path] = None) -> list[dict]:
             if not raw:
                 continue
             try:
-                entries.append(json.loads(raw))
+                decoded = json.loads(raw)
             except json.JSONDecodeError as exc:
                 logger.warning("Corrupt audit log line %d: %s", lineno, exc)
+                continue
+            if not isinstance(decoded, dict):
+                logger.warning("Audit log line %d is not a JSON object; skipped", lineno)
+                continue
+            entries.append(_upgrade_v1(decoded))
     return entries

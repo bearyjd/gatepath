@@ -327,3 +327,45 @@ class TestSchemaConformance:
         from gatepath.portal_session import Confinement
         for c in Confinement:
             assert c.value in set(_SCHEMA["confinement_enum"])
+
+
+class TestReadV1Lines:
+    """The reader half of the v1 -> v2 contract, mirroring Android's
+    AuditLogTest / AuditSchemaParityTest so both platforms are pinned."""
+
+    _V1_LINE = (
+        '{"schema_version":1,"timestamp_utc":"2026-05-06T12:34:56.000Z",'
+        '"platform":"desktop","ssid":null,"gateway_ip":null,'
+        '"portal_domain":"p.example","vpn_interfaces_detected":[],'
+        '"vpn_warning_shown":false,'
+        '"session_opened_utc":"2026-05-06T12:34:00.000Z",'
+        '"session_closed_utc":"2026-05-06T12:36:42.000Z",'
+        '"close_reason":"portal_completed","duration_seconds":162,'
+        '"blocked_navigation_attempts":4,"blocked_resource_requests":9}'
+    )
+
+    def test_v1_line_reads_back_with_observed_counters(self, tmp_path: Path) -> None:
+        log = tmp_path / "audit.jsonl"
+        log.write_text(self._V1_LINE + "\n", encoding="utf-8")
+        entry = read_all(log_path=log)[0]
+        assert entry["observed_navigation_attempts"] == 4
+        assert entry["observed_resource_requests"] == 9
+        assert "blocked_navigation_attempts" not in entry
+        assert "blocked_resource_requests" not in entry
+
+    def test_v2_line_is_untouched(self, tmp_path: Path) -> None:
+        log = tmp_path / "audit.jsonl"
+        write_session(_make_completed_session(), log_path=log)
+        raw = json.loads(log.read_text(encoding="utf-8").splitlines()[0])
+        assert read_all(log_path=log)[0] == raw
+
+    def test_reader_renames_match_the_schema(self) -> None:
+        from gatepath.audit_log import _V1_KEY_RENAMES
+        assert _V1_KEY_RENAMES == _SCHEMA["v1_key_renames"]
+
+    def test_non_object_line_is_skipped_not_raised(self, tmp_path: Path) -> None:
+        log = tmp_path / "audit.jsonl"
+        log.write_text('[1,2,3]\n' + self._V1_LINE + "\n", encoding="utf-8")
+        entries = read_all(log_path=log)
+        assert len(entries) == 1
+        assert entries[0]["observed_navigation_attempts"] == 4
