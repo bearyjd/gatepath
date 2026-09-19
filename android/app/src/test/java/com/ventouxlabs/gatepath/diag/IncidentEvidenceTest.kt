@@ -50,6 +50,8 @@ class IncidentEvidenceTest {
         assertTrue(out.contains("probe_path: BOUND_WIFI"))
         assertTrue(out.contains("vpn_kind: TAILSCALE"))
         assertTrue(out.contains("cert_self_signed: true"))
+        assertTrue(out.contains("probe_http_status: 302"))
+        assertTrue(out.contains("probe_redirect_signal: LOCATION_HEADER"))
     }
 
     @Test
@@ -61,6 +63,32 @@ class IncidentEvidenceTest {
         assertFalse(out.contains("10.0.0.1"))
         assertFalse(out.contains("93.184.216.34"))
         assertTrue(out.contains("EPERM"))
+    }
+
+    @Test
+    fun `redaction masks ipv6 resolver answers and error literals`() {
+        val out = DiagnosticsBundle.build(
+            meta, emptyList(), null,
+            evidence = evidence(bindError = "connect to [fe80::1]:80 failed: EPERM").copy(
+                resolverWifi = listOf("fe80::1"),
+                resolverDoh = listOf("2001:db8::1", "2001:0db8:85a3:0000:0000:8a2e:0370:7334"),
+            ),
+            redact = true,
+        )
+        assertFalse(out.contains("fe80::1"))
+        assertFalse(out.contains("2001:db8::1"))
+        assertFalse(out.contains("2001:0db8:85a3:0000:0000:8a2e:0370:7334"))
+        assertTrue(out.contains("REDACTED"))
+    }
+
+    @Test
+    fun `redaction leaves timestamps and port-like text alone`() {
+        val out = DiagnosticsBundle.build(
+            meta, emptyList(), null,
+            evidence = evidence(bindError = "at 2026-09-19T00:00:00Z port 80:443 failed"), redact = true,
+        )
+        assertTrue(out.contains("2026-09-19T00:00:00Z"))
+        assertTrue(out.contains("80:443"))
     }
 
     @Test
