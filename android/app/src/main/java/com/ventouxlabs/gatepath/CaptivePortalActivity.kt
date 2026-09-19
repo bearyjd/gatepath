@@ -13,6 +13,7 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.lifecycle.lifecycleScope
 import com.ventouxlabs.gatepath.network.CONNECTIVITY_CHECK_URL
+import com.ventouxlabs.gatepath.network.CaptivePortalMonitor
 import com.ventouxlabs.gatepath.network.ClassificationInputs
 import com.ventouxlabs.gatepath.network.ConfinementState
 import com.ventouxlabs.gatepath.network.PortalProbe
@@ -67,6 +68,17 @@ class CaptivePortalActivity : ComponentActivity() {
     @Inject
     lateinit var probe: PortalProbe
 
+    /**
+     * Injected only for [CaptivePortalMonitor.probeUrl]. This entry point must
+     * probe the same endpoint the monitor does — in debug builds `AppModule`
+     * resolves that from `Settings.Global.captive_portal_http_url`, so a
+     * hardcoded gstatic URL here would answer 204 over the emulator's real NAT
+     * and classify a genuinely captive network as Unknown. See
+     * `tests/e2e-android/HARNESS_NOTES.md` §2.
+     */
+    @Inject
+    lateinit var monitor: CaptivePortalMonitor
+
     private var captivePortal: CaptivePortal? = null
     private var reported = false
 
@@ -109,7 +121,7 @@ class CaptivePortalActivity : ComponentActivity() {
         )
 
         lifecycleScope.launch {
-            val bound = withContext(Dispatchers.IO) { probe.probe(network, testUrl = CONNECTIVITY_CHECK_URL) }
+            val bound = withContext(Dispatchers.IO) { probe.probe(network, testUrl = monitor.probeUrl) }
             val vpn = withContext(Dispatchers.IO) { VpnDetector.detect() }
             val strict = connectivityManager.getLinkProperties(network)?.privateDnsServerName != null
             val resolved = (bound as? ProbeResult.Portal)?.let { p ->
