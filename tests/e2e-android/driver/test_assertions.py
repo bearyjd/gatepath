@@ -222,9 +222,10 @@ GOOD_BUNDLE = (
     "=== Gatepath diagnostics ===\n"
     "redacted: true\n"
     '{"ssid":"REDACTED","gateway_ip":"REDACTED","portal_domain":"REDACTED"}\n'
-    "confinement: confined\n"
     "--- Latest portal probe capture ---\n"
     "(no intercepted response captured)\n"
+    "--- Incident evidence ---\n"
+    "(no incident evidence captured)\n"
 )
 
 
@@ -280,9 +281,33 @@ def test_resurrected_body_field_fails():
     assert any("bundle.no_body_evidence" in f for f in _run(bundle=revived))
 
 
-def test_bundle_requires_confinement_field():
-    no_confinement = GOOD_BUNDLE.replace("confinement: confined\n", "")
-    assert any("bundle.confinement" in f for f in _run(bundle=no_confinement))
+def test_excluding_mode_evidence_outliving_validation_fails():
+    # excluding mode: NetworkValidated's clearIncidentState() clears
+    # `_evidence` before this bundle is pulled, so the bundle must show the
+    # cleared prose. A bundle that still carries `confinement: confined`
+    # here means a previous incident's evidence outlived the incident it
+    # describes — the evidence-block analog of
+    # test_capture_that_outlived_its_incident_fails above.
+    stale = GOOD_BUNDLE.replace(
+        "(no incident evidence captured)", "confinement: confined\n"
+    )
+    assert any("bundle.evidence_cleared" in f for f in _run(bundle=stale))
+
+
+def test_covering_mode_missing_confinement_field_fails():
+    # covering mode: nothing ever validates, so nothing ever clears
+    # `_evidence` — a bundle showing the CLEARED prose here means
+    # confinement was never classified/rendered at all, which must fail
+    # rather than pass quietly (the #134/#135 lesson).
+    no_confinement = (
+        "=== Gatepath diagnostics ===\n"
+        "--- Incident evidence ---\n"
+        "(no incident evidence captured)\n"
+    )
+    assert any(
+        "bundle.confinement" in f
+        for f in _run(bundle=no_confinement, mode="covering")
+    )
 
 
 def test_covering_mode_bundle_does_not_require_capture_cleared():

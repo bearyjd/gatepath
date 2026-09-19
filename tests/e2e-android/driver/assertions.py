@@ -637,14 +637,26 @@ def check_diagnostics_bundle(
     Written to fail on absent evidence rather than pass quietly: an assertion
     that cannot fail is the defect this driver exists to prevent (#134/#135).
 
-    Extended for the confinement-state harness (Task 15): every bundle must
-    carry a `confinement: ` field (DiagnosticsBundle.renderEvidence always
-    writes it — both modes), but the capture-cleared AND redaction checks
-    below only apply in `excluding` mode. `covering` mode never opens a
-    session, so there is no probe capture to have outlived its incident, and
-    the audit log DiagnosticsBundle.redactEntry scrubs is always empty there
-    by design (not an edge case this run happened to hit) — there is no PII
-    in the picture to prove was or wasn't leaked.
+    Extended for the confinement-state harness (Task 15): DiagnosticsBundle.
+    renderEvidence renders exactly ONE of two things, never both —
+    `confinement: <state>` plus the rest of the incident evidence when
+    `_evidence` is non-null, or the literal `(no incident evidence
+    captured)` when it is null. Which one a real bundle must show depends on
+    mode, so this check is mode-specific rather than a single "field present"
+    test that both modes shared before. `excluding` validates, and
+    NetworkValidated's clearIncidentState() nulls `_evidence` BEFORE this
+    bundle is pulled — so the bundle must show the CLEARED prose, and a
+    `confinement: ` line here means a previous incident's evidence outlived
+    the incident it describes (bundle.evidence_cleared, mirroring
+    bundle.capture_cleared below). `covering` never validates anything, so
+    nothing ever clears `_evidence` — the bundle must still carry
+    `confinement: tunnelled` (bundle.confinement). The capture-cleared AND
+    redaction checks below only apply in `excluding` mode for a related
+    reason: `covering` mode never opens a session, so there is no probe
+    capture to have outlived its incident, and the audit log
+    DiagnosticsBundle.redactEntry scrubs is always empty there by design (not
+    an edge case this run happened to hit) — there is no PII in the picture
+    to prove was or wasn't leaked.
     """
     if not bundle.strip():
         fail("bundle.file", "diagnostics-bundle.txt missing or empty", failures)
@@ -694,13 +706,39 @@ def check_diagnostics_bundle(
             else:
                 ok("bundle.redacted", f"{len(identifiers)} identifier(s) scrubbed")
 
-    # Both modes: the bundle's confinement-state schema field must be present.
-    # DiagnosticsBundle.renderEvidence writes it unconditionally, so its
-    # absence means the evidence section itself never rendered.
-    if "confinement: " in bundle:
-        ok("bundle.confinement", "confinement field present")
+    # Evidence-cleared / confinement schema check — mode-specific, per the
+    # docstring above. `excluding` validates and clearIncidentState() clears
+    # `_evidence` before this bundle is pulled, so the bundle must show the
+    # cleared prose; a `confinement: ` line here is the evidence-block analog
+    # of bundle.capture_cleared below — it means the evidence outlived the
+    # incident it describes. `covering` never validates anything, so nothing
+    # ever clears `_evidence`, and the classified state must still be there.
+    if mode == "excluding":
+        if "(no incident evidence captured)" in bundle:
+            ok("bundle.evidence_cleared", "evidence cleared on the validated transition")
+        else:
+            fail(
+                "bundle.evidence_cleared",
+                "expected '(no incident evidence captured)' after validation; the "
+                "retained incident evidence outlived the incident it describes",
+                failures,
+            )
     else:
-        fail("bundle.confinement", "bundle missing a 'confinement: ' field", failures)
+        if "confinement: tunnelled" in bundle:
+            ok("bundle.confinement", "confinement field present (tunnelled)")
+        elif "(no incident evidence captured)" in bundle:
+            fail(
+                "bundle.confinement",
+                "bundle shows '(no incident evidence captured)' but covering mode "
+                "never validates anything — the evidence must still be there",
+                failures,
+            )
+        else:
+            fail(
+                "bundle.confinement",
+                "bundle missing a 'confinement: tunnelled' field",
+                failures,
+            )
 
     # The capture must not outlive its incident. Only meaningful in `excluding`
     # mode: this bundle is taken after wait_validated, which clears the
