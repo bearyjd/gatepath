@@ -157,6 +157,8 @@ MAIN_SOURCES=(
     "$SRC_MAIN/com/ventouxlabs/gatepath/diag/HttpsOnlyProbe.kt"
     "$SRC_MAIN/com/ventouxlabs/gatepath/diag/DnsHijackProbe.kt"
     "$SRC_MAIN/com/ventouxlabs/gatepath/diag/DiagnosticsBundle.kt"
+    "$SRC_MAIN/com/ventouxlabs/gatepath/diag/CertSummary.kt"
+    "$SRC_MAIN/com/ventouxlabs/gatepath/diag/IncidentEvidence.kt"
     "$SRC_MAIN/com/ventouxlabs/gatepath/BindWatchdog.kt"
 )
 
@@ -242,6 +244,8 @@ TEST_SOURCES=(
     "$SRC_TEST/com/ventouxlabs/gatepath/diag/HttpsOnlyProbeTest.kt"
     "$SRC_TEST/com/ventouxlabs/gatepath/diag/DnsHijackProbeTest.kt"
     "$SRC_TEST/com/ventouxlabs/gatepath/diag/DiagnosticsBundleTest.kt"
+    "$SRC_TEST/com/ventouxlabs/gatepath/diag/CertSummaryTest.kt"
+    "$SRC_TEST/com/ventouxlabs/gatepath/diag/IncidentEvidenceTest.kt"
 )
 
 TEST_CP="$MAIN_CP:$CLASSES_MAIN:$ANDROID_STUB:$JUNIT_JAR:$HAMCREST_JAR:$COROUTINES_TEST"

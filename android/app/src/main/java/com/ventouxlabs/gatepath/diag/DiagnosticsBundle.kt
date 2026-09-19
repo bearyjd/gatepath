@@ -54,11 +54,15 @@ object DiagnosticsBundle {
     // Bare IPv4 literal — probe errors / DNS answers echo these verbatim.
     private val IPV4 = Regex("""\b(?:\d{1,3}\.){3}\d{1,3}\b""")
 
+    // Bare IPv6 literal — resolver answers can be v6 too.
+    private val IPV6 = Regex("""\b(?:[0-9a-fA-F]{0,4}:){2,7}[0-9a-fA-F]{0,4}\b""")
+
     fun build(
         meta: BundleMeta,
         entries: List<AuditEntry>,
         diagnosis: DiagnosisResult?,
         probeCapture: PortalProbeCapture? = null,
+        evidence: IncidentEvidence? = null,
         unreadableEntries: Int = 0,
         redact: Boolean,
     ): String = buildString {
@@ -82,6 +86,11 @@ object DiagnosticsBundle {
 
         appendLine("--- Latest portal probe capture ---")
         appendLine(renderProbeCapture(probeCapture))
+        appendLine()
+
+        appendLine("--- Incident evidence ---")
+        val evidenceText = renderEvidence(evidence)
+        appendLine(if (redact) redactDiagnosisText(evidenceText, entries) else evidenceText)
         appendLine()
 
         appendLine("--- Audit log (audit.jsonl) ---")
@@ -119,7 +128,7 @@ object DiagnosticsBundle {
         for (value in known) {
             out = out.replace(value, REDACTED)
         }
-        return out.replace(IPV4, REDACTED)
+        return out.replace(IPV4, REDACTED).replace(IPV6, REDACTED)
     }
 
     private fun renderDiagnosis(diagnosis: DiagnosisResult?): String {
@@ -147,6 +156,31 @@ object DiagnosticsBundle {
             appendLine("http_status: ${capture.httpStatus}")
             appendLine("content_type: ${capture.contentType ?: "(absent)"}")
             append("redirect_signal: ${capture.redirectSignal}")
+        }
+    }
+
+    private fun renderEvidence(e: IncidentEvidence?): String {
+        if (e == null) return "(no incident evidence captured)"
+        return buildString {
+            appendLine("confinement: ${e.confinement}")
+            appendLine("probe_path: ${e.probePath}")
+            appendLine("vpn_kind: ${e.vpnKind}")
+            appendLine("vpn_interfaces: ${if (e.vpnInterfaces.isEmpty()) "(none)" else e.vpnInterfaces.joinToString(", ")}")
+            appendLine("private_dns_strict: ${e.privateDnsStrict}")
+            appendLine("resolver_wifi: ${if (e.resolverWifi.isEmpty()) "(none)" else e.resolverWifi.joinToString(", ")}")
+            appendLine("resolver_doh: ${if (e.resolverDoh.isEmpty()) "(none)" else e.resolverDoh.joinToString(", ")}")
+            val c = e.certSummary
+            if (c == null) {
+                appendLine("cert: (no certificate error observed)")
+            } else {
+                appendLine("cert_primary_error: ${c.primaryError}")
+                appendLine("cert_not_before_epoch_ms: ${c.notBeforeEpochMillis ?: "(absent)"}")
+                appendLine("cert_not_after_epoch_ms: ${c.notAfterEpochMillis ?: "(absent)"}")
+                appendLine("cert_self_signed: ${c.selfSigned}")
+                appendLine("cert_sha256: ${c.sha256Fingerprint.ifEmpty { "(absent)" }}")
+            }
+            appendLine("bind_error: ${e.bindError ?: "(none)"}")
+            append("fallback_error: ${e.fallbackError ?: "(none)"}")
         }
     }
 
