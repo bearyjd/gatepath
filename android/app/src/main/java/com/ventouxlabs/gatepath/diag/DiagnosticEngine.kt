@@ -29,7 +29,7 @@ data class DiagnosisResult(
  *
  * Engine is pure — no Android dependencies — so its ranking and
  * deadline-enforcement logic is JVM-testable directly. The platform glue lives
- * in `MainViewModel`, which calls [run] on each `CaptivePortalSuspected`
+ * in `MainViewModel`, which calls [run] on each `CaptiveIncident`
  * event from `CaptivePortalMonitor`.
  *
  * Single source of truth for severity ordering: [rankOf]. UI rendering MUST
