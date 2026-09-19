@@ -1,26 +1,50 @@
 #!/usr/bin/env python3
 """Host-side assertions for the Gatepath Android e2e harness.
 
-Runs AFTER the scenario completes. Reads three artefacts from the
-directory passed on argv:
+Runs AFTER the scenario completes. Reads artefacts from the directory passed
+on argv, and takes a `--vpn-mode {covering,excluding}` matching the scenario
+run (Task 14; see scenario/run-scenario.py's STEPS_COVERING/STEPS_EXCLUDING):
 
-    scenario-report.json   — written by run-scenario.py
-    audit_log.jsonl        — pulled from /data/data/com.ventouxlabs.gatepath/files/
-    gateway-log.json       — fetched from mockportal's /log endpoint
+    scenario-report.json    — written by run-scenario.py
+    confinement-state.txt   — the app's classified state (both modes)
+    audit_log.jsonl         — pulled from /data/data/com.ventouxlabs.gatepath/files/
+    gateway-log.json        — fetched from mockportal's /log endpoint
+    vpn-sink.jsonl          — the leak-detector VPN's captured packets + markers
+    logcat.txt              — full post-clear device log
+    diagnostics-bundle.txt  — the redacted bundle the app can share
 
-Buckets, all hard-fail:
+Buckets, all hard-fail. Which run depends on `--vpn-mode`:
 
-  A. Scenario report  — every step ok, rc=0, key step outputs sane.
-  B. App audit log    — at least one Completed entry with reason
-                        'portal_completed' (PR #33 close reason).
-  C. Gateway log      — /portal was requested from an Android UA.
-  D. VPN sink         — the no-leak confinement proof (ROADMAP P0.1),
-                        gated on its own positive control.
-  E. Off-domain       — off-domain traffic is ALLOWED and COUNTED, which is
-                        what the design claims since #119; and it must
-                        actually have been exercised. "Nothing happened" is
-                        a failure here, not a pass — see check_off_domain
-                        for why the previous version of this could not fail.
+  A.  Scenario report  — every step ok, rc=0, key step outputs sane. The
+                         expected step list is mode-specific (imported from
+                         run-scenario.py by name, not hand-duplicated).
+  G.  Confinement state — the app classified the state the mode requires.
+  B.  App audit log (excluding) — at least one Completed entry with reason
+                         'portal_completed' (PR #33 close reason).
+  B.  Audit absent (covering)   — NO portal_completed entry; a Tunnelled
+                         session never opens one, so an empty/missing audit
+                         log is a PASS here, not a failure.
+  B'. Audit confinement (excluding) — every portal_completed entry carries
+                         confinement == 'confined' (schema v2).
+  C.  Gateway log (excluding)   — /portal was requested from an Android UA.
+  C'. Gateway silent (covering) — /portal was NEVER requested: no WebView
+                         ever opens while Tunnelled.
+  D.  VPN sink          — the no-leak confinement proof (ROADMAP P0.1).
+                         excluding: gated on its own positive control (the
+                         WebView actually attempted the sentinel). covering:
+                         no WebView exists, so silence alone is the proof —
+                         see check_vpn_silent_while_tunnelled.
+  E.  Off-domain (excluding only) — off-domain traffic is ALLOWED and
+                         COUNTED, which is what the design claims since #119;
+                         and it must actually have been exercised. "Nothing
+                         happened" is a failure here, not a pass — see
+                         check_off_domain for why the previous version of
+                         this could not fail. Not run in covering mode: no
+                         WebView ever opens there.
+  F.  Diagnostics bundle (both modes) — the shared artefact; both modes
+                         require a `confinement: ` field, only excluding
+                         mode requires the cleared-capture check (covering
+                         never validates anything).
 
 Exit 0 only if every check passes. Mirrors tests/e2e-docker/driver/assertions.py
 in tone, layout, and exit semantics.
@@ -28,10 +52,27 @@ in tone, layout, and exit semantics.
 
 from __future__ import annotations
 
+import argparse
+import importlib.util
 import json
 import sys
 from pathlib import Path
 from typing import Any
+
+# Load the scenario module by path, not `import` — driver/ and scenario/ are
+# separate non-package directories. Mirrors
+# scenario/test_liveness_probe_drain.py's own loading of run-scenario.py.
+# scenario/ is inserted onto sys.path FIRST so run-scenario.py's own `import
+# adb_helper` resolves regardless of whether pytest already put it there
+# (running `pytest driver scenario` together) or not (`pytest driver` alone).
+_SCENARIO_DIR = Path(__file__).resolve().parent.parent / "scenario"
+if str(_SCENARIO_DIR) not in sys.path:
+    sys.path.insert(0, str(_SCENARIO_DIR))
+_scenario_spec = importlib.util.spec_from_file_location(
+    "run_scenario", _SCENARIO_DIR / "run-scenario.py"
+)
+run_scenario = importlib.util.module_from_spec(_scenario_spec)
+_scenario_spec.loader.exec_module(run_scenario)
 
 OFF_DOMAIN_HOSTNAMES = frozenset(
     {
@@ -43,34 +84,12 @@ OFF_DOMAIN_HOSTNAMES = frozenset(
 # The no-leak sentinel: a dedicated host:port the captive monitor never probes
 # (it hits 10.0.2.2:18080). The unbound liveness probe and the bound WebView's
 # <img> both target it, so they are distinguishable from captive-monitor noise
-# in the VPN sink. Single source of truth — must match the Kotlin probe, the
-# scenario harness, and the mock's injected URL (PR #55).
-SENTINEL_DST = "10.0.2.2"
-SENTINEL_PORT = 18081
-
-EXPECTED_STEPS = [
-    "connect",
-    "reset_settings",
-    "install",
-    "reset_gateway",
-    "set_probe_urls",
-    "cycle_wifi",
-    "wait_for_captive",
-    "grant_vpn",
-    "start_test_vpn",
-    "liveness_probe",
-    "launch_debug_portal",
-    "wait_portal_screen",
-    "submit_login",
-    "wait_validated",
-    "mark_bound_end",
-    "pull_vpn_sink",
-    "pull_logcat",
-    "pull_audit_log",
-    "fetch_gateway_log",
-    "cleanup_settings",
-    "disconnect",
-]
+# in the VPN sink. Single source of truth lives in run-scenario.py now that
+# this module loads it directly — must still match the Kotlin probe and the
+# mock's injected URL (PR #55), but there is no longer a second hand-copied
+# constant here to drift out of sync with the scenario harness.
+SENTINEL_DST = run_scenario.SENTINEL_DST
+SENTINEL_PORT = run_scenario.SENTINEL_PORT
 
 
 def fail(label: str, msg: str, failures: list[str]) -> None:
@@ -82,7 +101,15 @@ def ok(label: str, msg: str = "") -> None:
     print(f"  ✓ {label}{(' — ' + msg) if msg else ''}")
 
 
-def check_scenario(report: dict[str, Any], failures: list[str]) -> None:
+def check_scenario(
+    report: dict[str, Any],
+    expected_steps: list[str],
+    mode: str,
+    failures: list[str],
+) -> None:
+    """A. Every step in `expected_steps` (the mode's own step list, from
+    run-scenario.py's step_names(STEPS_COVERING)/step_names(STEPS_EXCLUDING))
+    ran and reported ok, plus spot-checks on a few key outputs."""
     print("A. Scenario report")
     if report.get("rc") != 0:
         fail("scenario.rc", f"expected 0, got {report.get('rc')}", failures)
@@ -90,7 +117,7 @@ def check_scenario(report: dict[str, Any], failures: list[str]) -> None:
         ok("scenario.rc", "0")
 
     steps = {s["name"]: s for s in report.get("steps", [])}
-    for name in EXPECTED_STEPS:
+    for name in expected_steps:
         s = steps.get(name)
         if s is None:
             fail(f"scenario.{name}", "step missing from report", failures)
@@ -100,7 +127,8 @@ def check_scenario(report: dict[str, Any], failures: list[str]) -> None:
             continue
         ok(f"scenario.{name}", _summarise(s.get("data") or {}))
 
-    # Spot-checks on key outputs.
+    # Spot-checks on key outputs. connect/set_probe_urls are in COMMON_HEAD,
+    # so both modes run them.
     connect = steps.get("connect", {}).get("data", {})
     if not connect.get("serial"):
         fail("scenario.connect.serial", "empty serial", failures)
@@ -109,9 +137,12 @@ def check_scenario(report: dict[str, Any], failures: list[str]) -> None:
     if not probes.get("probe_url"):
         fail("scenario.probe.url", "no probe_url recorded", failures)
 
-    validated = steps.get("wait_validated", {}).get("data", {})
-    if not isinstance(validated.get("validated_in_sec"), int):
-        fail("scenario.validated", "no validated_in_sec recorded", failures)
+    # wait_validated only exists in STEPS_EXCLUDING — covering mode never
+    # signs in, so there is nothing to spot-check here.
+    if mode == "excluding":
+        validated = steps.get("wait_validated", {}).get("data", {})
+        if not isinstance(validated.get("validated_in_sec"), int):
+            fail("scenario.validated", "no validated_in_sec recorded", failures)
 
 
 def check_app_audit(entries: list[dict[str, Any]], failures: list[str]) -> None:
@@ -137,6 +168,40 @@ def check_app_audit(entries: list[dict[str, Any]], failures: list[str]) -> None:
             f"got reasons: {sorted({e.get('close_reason') for e in entries})}",
             failures,
         )
+
+
+def check_audit_confined(entries: list[dict[str, Any]], failures: list[str]) -> None:
+    """B' (excluding). The completed session must carry confinement=confined
+    (schema v2) — the excluding-mode contract is that Gatepath signed in
+    while CONFINED, not merely that some session closed."""
+    print("B'. Audit confinement")
+    completed = [e for e in entries if e.get("close_reason") == "portal_completed"]
+    if not completed:
+        fail("audit.confined", "no portal_completed entry", failures)
+        return
+    bad = [e.get("confinement") for e in completed if e.get("confinement") != "confined"]
+    if bad:
+        fail("audit.confined", f"portal_completed entries with confinement={bad}", failures)
+    else:
+        ok("audit.confined", f"{len(completed)} entry/entries confined")
+
+
+def check_audit_absent(entries: list[dict[str, Any]], failures: list[str]) -> None:
+    """B (covering). A Tunnelled app never opens a session, so it must never
+    close one either. An empty or missing audit log is exactly what this mode
+    should produce — a PASS here, unlike the 'session never completed?'
+    failure [check_app_audit] raises on the same input in excluding mode."""
+    print("B. Audit log (no portal_completed)")
+    completed = [e for e in entries if e.get("close_reason") == "portal_completed"]
+    if completed:
+        fail(
+            "audit.absent",
+            f"{len(completed)} portal_completed entry/entries found while "
+            "Tunnelled — a session opened and closed when none should have",
+            failures,
+        )
+    else:
+        ok("audit.absent", f"no portal_completed entry ({len(entries)} total entries)")
 
 
 def check_gateway_log(
@@ -168,6 +233,27 @@ def check_gateway_log(
     # Off-domain traffic is asserted separately, in check_off_domain — it needs
     # the audit log and logcat as well as this one, and the old version here
     # could not fail. See that function for the full story.
+
+
+def check_gateway_silent(entries: list[dict[str, Any]], failures: list[str]) -> None:
+    """C' (covering). A Tunnelled app must never load the portal: MainViewModel
+    classifies TUNNELLED before any session opens, so the mock must never see
+    a /portal request from an Android UA at all."""
+    print("C'. Gateway must be silent")
+    hits = [
+        e for e in entries
+        if str(e.get("path", "")).startswith("/portal")
+        and "Android" in (e.get("headers") or {}).get("User-Agent", "")
+    ]
+    if hits:
+        fail(
+            "gateway.silent",
+            f"{len(hits)} /portal hit(s) from an Android UA while Tunnelled — "
+            "a WebView opened",
+            failures,
+        )
+    else:
+        ok("gateway.silent", "no /portal request from an Android UA")
 
 
 # Chromium error codes that mean "something short-circuited this request before
@@ -343,31 +429,30 @@ def _webview_attempted_sentinel(logcat: str) -> bool:
     return False
 
 
-def check_vpn_confinement(
-    lines: list[dict[str, Any]], failures: list[str], sentinel_attempted: bool
-) -> None:
-    """D. The network-level no-leak proof over the VPN sink (ROADMAP P0.1).
-
-    The bound window is delimited by 'bound_begin'/'bound_end' marker lines the
-    test VpnService wrote into the sink (append-order, so no host/device clock
-    comparison is needed). D1 (liveness) must hold before D2 (confinement) means
-    anything: if the sink never saw the unbound probe it is not intercepting the
-    default route, and a silent bound window is vacuous. D2 additionally requires
-    `sentinel_attempted` (the WebView actually tried the sentinel) so a silent
-    window can't pass when the page simply never loaded the sentinel <img>.
-    """
-    print("D. VPN sink (no-leak confinement)")
+def _find_bound_window(
+    lines: list[dict[str, Any]], failures: list[str]
+) -> tuple[int, int] | None:
+    """Locate and order-validate the 'bound_begin'/'bound_end' marker lines
+    the test VpnService wrote into the sink (append-order, so no host/device
+    clock comparison is needed). Shared by [check_vpn_confinement] and
+    [check_vpn_silent_while_tunnelled] — both delimit the same window, only
+    what counts as a leak inside it differs."""
     begin = next((i for i, e in enumerate(lines) if e.get("marker") == "bound_begin"), None)
     end = next((i for i, e in enumerate(lines) if e.get("marker") == "bound_end"), None)
     if begin is None or end is None:
         fail("vpn.markers", f"missing bound-window markers (begin={begin}, end={end})", failures)
-        return
+        return None
     if end < begin:
         fail("vpn.markers", f"bound_end ({end}) precedes bound_begin ({begin})", failures)
-        return
+        return None
+    return begin, end
 
-    # D1 — liveness gate: an unbound sentinel packet (dst:port) must appear
-    # BEFORE bound_begin, proving the sink intercepts the default route.
+
+def _check_liveness(lines: list[dict[str, Any]], begin: int, failures: list[str]) -> bool:
+    """D1 — liveness gate: an unbound sentinel packet (dst:port) must appear
+    BEFORE bound_begin, proving the sink intercepts the default route. If it
+    never does, the sink isn't proven to be watching anything, and a silent
+    bound window afterward proves nothing either way."""
     pre = [
         e for e in lines[:begin]
         if e.get("dst") == SENTINEL_DST and e.get("port") == SENTINEL_PORT
@@ -380,8 +465,30 @@ def check_vpn_confinement(
             "proves nothing",
             failures,
         )
-        return
+        return False
     ok("vpn.liveness", f"{len(pre)} unbound sentinel packet(s) captured")
+    return True
+
+
+def check_vpn_confinement(
+    lines: list[dict[str, Any]], failures: list[str], sentinel_attempted: bool
+) -> None:
+    """D (excluding). The network-level no-leak proof over the VPN sink
+    (ROADMAP P0.1).
+
+    D1 (liveness, [_check_liveness]) must hold before D2 (confinement) means
+    anything. D2 additionally requires `sentinel_attempted` (the WebView
+    actually tried the sentinel) so a silent window can't pass when the page
+    simply never loaded the sentinel <img> — see [check_vpn_silent_while_tunnelled]
+    for why `covering` mode doesn't need this same positive control.
+    """
+    print("D. VPN sink (no-leak confinement)")
+    window = _find_bound_window(lines, failures)
+    if window is None:
+        return
+    begin, end = window
+    if not _check_liveness(lines, begin, failures):
+        return
 
     # D2 — confinement: the bound WebView must NOT reach the sentinel via the
     # default (VPN) network. Only the dedicated sentinel port counts — the
@@ -419,13 +526,90 @@ def check_vpn_confinement(
         )
 
 
+def check_vpn_silent_while_tunnelled(
+    lines: list[dict[str, Any]], failures: list[str]
+) -> None:
+    """D (covering). The no-leak proof for a session that never opens.
+
+    Same D1 liveness gate and bound-window delimiting as
+    [check_vpn_confinement], but WITHOUT its D2 positive control
+    (`sentinel_attempted`). In `covering` mode there is no WebView to have
+    attempted the sentinel at all: MainViewModel classifies TUNNELLED before
+    any portal session opens, and the covered probe's own connect() fails
+    with EPERM before a single packet leaves the device. So a silent bound
+    window here is not ambiguous the way an untried WebView would make it in
+    `excluding` mode — there is nothing else that COULD have produced
+    sentinel traffic in this window, so silence alone is the confinement
+    proof and no positive control is needed to rule out a vacuous pass.
+    """
+    print("D. VPN sink (silent while tunnelled)")
+    window = _find_bound_window(lines, failures)
+    if window is None:
+        return
+    begin, end = window
+    if not _check_liveness(lines, begin, failures):
+        return
+
+    leaks = [
+        e for e in lines[begin + 1:end]
+        if e.get("dst") == SENTINEL_DST and e.get("port") == SENTINEL_PORT
+    ]
+    if leaks:
+        s = leaks[0]
+        fail(
+            "vpn.confinement",
+            f"LEAK: bound-phase traffic reached the sentinel "
+            f"{s.get('dst')}:{s.get('port')} via the default (VPN) network "
+            f"({len(leaks)} packet(s)) while the app was classified TUNNELLED "
+            "— EPERM should have stopped every attempt before a packet left "
+            "the device",
+            failures,
+        )
+    else:
+        ok(
+            "vpn.confinement",
+            "bound window silent — a TUNNELLED app produced no sentinel "
+            "traffic (no WebView exists to attempt it, and the covered "
+            "probe's own connect() fails with EPERM before any packet)",
+        )
+
+
+def check_confinement(text: str, mode: str, failures: list[str]) -> None:
+    """G. The state the app classified, read from the pulled sidecar
+    (files/confinement-state.txt, written by MainViewModel's debug sink on
+    every classification — Task 9).
+
+    Absent evidence is a failure: an empty file means the ViewModel never
+    classified at all, which is the silent short-circuit this harness exists
+    to catch, not a vacuous pass.
+    """
+    print("G. Confinement state")
+    expected = {"covering": "tunnelled", "excluding": "confined"}[mode]
+    got = text.strip()
+    if not got:
+        fail(
+            "confinement.file",
+            "confinement-state.txt missing or empty — nothing was classified",
+            failures,
+        )
+    elif got != expected:
+        fail(
+            "confinement.state",
+            f"expected {expected!r} in {mode} mode, app classified {got!r}",
+            failures,
+        )
+    else:
+        ok("confinement.state", got)
+
+
 def check_diagnostics_bundle(
     bundle: str,
     audit_entries: list[dict[str, Any]],
     uri: str,
+    mode: str,
     failures: list[str],
 ) -> None:
-    """F. The bundle the user actually shares.
+    """F (both modes). The bundle the user actually shares.
 
     Everything upstream of this is verified by unit tests against a bundle
     STRING. This is the only pass that looks at a bundle a real device wrote to
@@ -434,6 +618,15 @@ def check_diagnostics_bundle(
 
     Written to fail on absent evidence rather than pass quietly: an assertion
     that cannot fail is the defect this driver exists to prevent (#134/#135).
+
+    Extended for the confinement-state harness (Task 15): every bundle must
+    carry a `confinement: ` field (DiagnosticsBundle.renderEvidence always
+    writes it — both modes), but the capture-cleared AND redaction checks
+    below only apply in `excluding` mode. `covering` mode never opens a
+    session, so there is no probe capture to have outlived its incident, and
+    the audit log DiagnosticsBundle.redactEntry scrubs is always empty there
+    by design (not an edge case this run happened to hit) — there is no PII
+    in the picture to prove was or wasn't leaked.
     """
     if not bundle.strip():
         fail("bundle.file", "diagnostics-bundle.txt missing or empty", failures)
@@ -453,40 +646,59 @@ def check_diagnostics_bundle(
         ok("bundle.uri", "FileProvider minted a content:// URI")
 
     # Redaction, checked against the identifiers this run actually produced.
-    identifiers = {
-        str(e[k])
-        for e in audit_entries
-        for k in ("ssid", "gateway_ip", "portal_domain")
-        if e.get(k)
-    }
-    if not identifiers:
-        fail(
-            "bundle.redacted",
-            "no ssid/gateway_ip/portal_domain in the audit log to test redaction "
-            "against — cannot conclude the bundle is scrubbed",
-            failures,
-        )
-    else:
-        leaked = sorted(v for v in identifiers if v in bundle)
-        if leaked:
-            fail("bundle.redacted", f"redacted bundle still contains {leaked}", failures)
-        elif "REDACTED" not in bundle:
-            fail("bundle.redacted", "no REDACTED token — was redaction applied at all?", failures)
+    # `excluding` only: DiagnosticsBundle.redactEntry scrubs ssid/gateway_ip/
+    # portal_domain off AuditEntry objects, and `covering` mode's audit log is
+    # ALWAYS empty by design (no session ever opens there — see
+    # check_audit_absent) — not merely an edge case this run happened to hit.
+    # Gating on absent `identifiers` alone would make this check fail on
+    # EVERY real covering-mode run, which is a false positive, not a #134/#135
+    # catch: there is no PII in the picture there at all to have leaked.
+    if mode == "excluding":
+        identifiers = {
+            str(e[k])
+            for e in audit_entries
+            for k in ("ssid", "gateway_ip", "portal_domain")
+            if e.get(k)
+        }
+        if not identifiers:
+            fail(
+                "bundle.redacted",
+                "no ssid/gateway_ip/portal_domain in the audit log to test redaction "
+                "against — cannot conclude the bundle is scrubbed",
+                failures,
+            )
         else:
-            ok("bundle.redacted", f"{len(identifiers)} identifier(s) scrubbed")
+            leaked = sorted(v for v in identifiers if v in bundle)
+            if leaked:
+                fail("bundle.redacted", f"redacted bundle still contains {leaked}", failures)
+            elif "REDACTED" not in bundle:
+                fail("bundle.redacted", "no REDACTED token — was redaction applied at all?", failures)
+            else:
+                ok("bundle.redacted", f"{len(identifiers)} identifier(s) scrubbed")
 
-    # The capture must not outlive its incident. This bundle is taken after
-    # wait_validated, which clears it, so a populated capture block here means a
-    # previous gateway's evidence is riding along in a report about this one.
-    if "(no intercepted response captured)" in bundle:
-        ok("bundle.capture_cleared", "capture cleared on the validated transition")
+    # Both modes: the bundle's confinement-state schema field must be present.
+    # DiagnosticsBundle.renderEvidence writes it unconditionally, so its
+    # absence means the evidence section itself never rendered.
+    if "confinement: " in bundle:
+        ok("bundle.confinement", "confinement field present")
     else:
-        fail(
-            "bundle.capture_cleared",
-            "expected '(no intercepted response captured)' after validation; the "
-            "retained capture outlived the incident it describes",
-            failures,
-        )
+        fail("bundle.confinement", "bundle missing a 'confinement: ' field", failures)
+
+    # The capture must not outlive its incident. Only meaningful in `excluding`
+    # mode: this bundle is taken after wait_validated, which clears the
+    # retained capture, so a populated capture block here means a previous
+    # gateway's evidence is riding along in a report about this one. `covering`
+    # mode never validates anything — there is no incident to have outlived.
+    if mode == "excluding":
+        if "(no intercepted response captured)" in bundle:
+            ok("bundle.capture_cleared", "capture cleared on the validated transition")
+        else:
+            fail(
+                "bundle.capture_cleared",
+                "expected '(no intercepted response captured)' after validation; the "
+                "retained capture outlived the incident it describes",
+                failures,
+            )
 
     # Body-derived fields were removed because a gateway controls them. Guard
     # the removal end-to-end, not just in the unit test.
@@ -505,15 +717,33 @@ def _summarise(data: dict[str, Any]) -> str:
     return ", ".join(parts)
 
 
-def main(argv: list[str]) -> int:
-    if len(argv) != 2:
-        print("usage: assertions.py <artifacts-dir>", file=sys.stderr)
-        return 2
+def parse_args(argv: list[str]) -> argparse.Namespace:
+    p = argparse.ArgumentParser(
+        description="Host-side assertions for the Gatepath Android e2e harness."
+    )
+    p.add_argument("artifacts_dir", help="directory containing the pulled artefacts")
+    p.add_argument(
+        "--vpn-mode",
+        choices=("covering", "excluding"),
+        default="excluding",
+        help=(
+            "covering: a third-party VPN covers Gatepath — expect TUNNELLED, "
+            "no session, a silent sink. excluding: Gatepath is excluded from "
+            "the VPN, the shipped contract — expect CONFINED, sign-in "
+            "completes end-to-end. Default matches the pre-Task-14 CI shape."
+        ),
+    )
+    return p.parse_args(argv)
 
-    root = Path(argv[1])
+
+def main(argv: list[str]) -> int:
+    args = parse_args(argv[1:])
+    mode = args.vpn_mode
+    root = Path(args.artifacts_dir)
     failures: list[str] = []
-    # Read once, up front: sections D and E both need logcat, and E needs the
-    # audit and gateway entries the sections below parse for their own use.
+    # Read once, up front: several sections below need logcat, the audit
+    # entries and the gateway entries regardless of which mode branch uses
+    # them.
     logcat_path = root / "logcat.txt"
     logcat_text = (
         logcat_path.read_text(errors="replace") if logcat_path.exists() else ""
@@ -526,19 +756,26 @@ def main(argv: list[str]) -> int:
         print(f"scenario-report.json missing in {root}", file=sys.stderr)
         return 1
     report = json.loads(scenario_path.read_text())
-    check_scenario(report, failures)
+    expected_steps = run_scenario.step_names(
+        run_scenario.STEPS_COVERING if mode == "covering" else run_scenario.STEPS_EXCLUDING
+    )
+    check_scenario(report, expected_steps, mode, failures)
+
+    # G. The state MainViewModel actually classified — required in both modes.
+    state_path = root / "confinement-state.txt"
+    state_text = (
+        state_path.read_text(errors="replace") if state_path.exists() else ""
+    )
+    check_confinement(state_text, mode, failures)
 
     audit_path = root / "audit_log.jsonl"
-    if not audit_path.exists() or audit_path.stat().st_size == 0:
-        failures.append("audit.file: audit_log.jsonl missing or empty")
-        print(f"  ✗ audit_log.jsonl missing or empty in {root}", file=sys.stderr)
-    else:
+    audit_file_present = audit_path.exists() and audit_path.stat().st_size > 0
+    if audit_file_present:
         audit_entries = [
             json.loads(line)
             for line in audit_path.read_text().splitlines()
             if line.strip()
         ]
-        check_app_audit(audit_entries, failures)
 
     gateway_path = root / "gateway-log.json"
     if not gateway_path.exists():
@@ -546,37 +783,69 @@ def main(argv: list[str]) -> int:
         print(f"  ✗ gateway-log.json missing in {root}", file=sys.stderr)
     else:
         gateway_entries = json.loads(gateway_path.read_text())
-        check_gateway_log(gateway_entries, report, failures)
-
-    # E. Off-domain traffic — needs the gateway log, the audit log AND logcat,
-    # so it runs after both have been read. Missing artifacts leave their lists
-    # empty, which check_off_domain correctly treats as "no evidence" rather
-    # than as a pass.
-    check_off_domain(gateway_entries, audit_entries, logcat_text, failures)
 
     sink_path = root / "vpn-sink.jsonl"
-    if not sink_path.exists() or sink_path.stat().st_size == 0:
-        failures.append("vpn.file: vpn-sink.jsonl missing or empty")
-        print(f"  ✗ vpn-sink.jsonl missing or empty in {root}", file=sys.stderr)
-    else:
+    sink_present = sink_path.exists() and sink_path.stat().st_size > 0
+    sink_lines: list[dict[str, Any]] = []
+    if sink_present:
         sink_lines = [
             json.loads(line)
             for line in sink_path.read_text().splitlines()
             if line.strip()
         ]
-        # D2 positive control: did the WebView actually attempt the sentinel?
-        sentinel_attempted = _webview_attempted_sentinel(logcat_text)
-        check_vpn_confinement(sink_lines, failures, sentinel_attempted)
+    else:
+        failures.append("vpn.file: vpn-sink.jsonl missing or empty")
+        print(f"  ✗ vpn-sink.jsonl missing or empty in {root}", file=sys.stderr)
 
-    # F. The shared bundle — needs the pulled URI sidecar and the audit entries
-    # (for the identifiers redaction is checked against).
+    if mode == "covering":
+        # B. A Tunnelled session must never complete. An empty/missing audit
+        # log is exactly what this mode should produce — a PASS here, unlike
+        # the "session never completed?" failure excluding mode raises on the
+        # same input (see check_audit_absent vs. check_app_audit).
+        check_audit_absent(audit_entries, failures)
+        # C'. No WebView ever opens while Tunnelled, so the mock must never
+        # see a /portal hit from an Android UA.
+        check_gateway_silent(gateway_entries, failures)
+        # D. The bound window must be silent: the covered probe's connect()
+        # fails with EPERM before a packet leaves the device.
+        if sink_present:
+            check_vpn_silent_while_tunnelled(sink_lines, failures)
+    else:
+        # B / B'. At least one completed session, and it must be confined.
+        if not audit_file_present:
+            failures.append("audit.file: audit_log.jsonl missing or empty")
+            print(f"  ✗ audit_log.jsonl missing or empty in {root}", file=sys.stderr)
+        else:
+            check_app_audit(audit_entries, failures)
+            check_audit_confined(audit_entries, failures)
+
+        # C. The portal must actually have been requested by an Android UA.
+        if gateway_path.exists():
+            check_gateway_log(gateway_entries, report, failures)
+
+        # E. Off-domain traffic — needs the gateway log, the audit log AND
+        # logcat, so it runs after all three have been read. Missing
+        # artifacts leave their lists empty, which check_off_domain correctly
+        # treats as "no evidence" rather than as a pass. Not run in `covering`
+        # mode: no WebView ever opens there, so there is nothing to exercise.
+        check_off_domain(gateway_entries, audit_entries, logcat_text, failures)
+
+        # D. The no-leak confinement proof, gated on its own positive control.
+        if sink_present:
+            sentinel_attempted = _webview_attempted_sentinel(logcat_text)
+            check_vpn_confinement(sink_lines, failures, sentinel_attempted)
+
+    # F. The shared bundle — needs the pulled URI sidecar and the audit
+    # entries (for the identifiers redaction is checked against). Runs in
+    # both modes; check_diagnostics_bundle itself gates the capture-cleared
+    # check on `mode`.
     bundle_path = root / "diagnostics-bundle.txt"
     bundle_text = (
         bundle_path.read_text(errors="replace") if bundle_path.exists() else ""
     )
     uri_path = root / "bundle-uri.txt"
     uri_text = uri_path.read_text(errors="replace") if uri_path.exists() else ""
-    check_diagnostics_bundle(bundle_text, audit_entries, uri_text, failures)
+    check_diagnostics_bundle(bundle_text, audit_entries, uri_text, mode, failures)
 
     if failures:
         print(f"\n{len(failures)} failure(s):", file=sys.stderr)

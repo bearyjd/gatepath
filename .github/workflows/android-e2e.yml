@@ -12,9 +12,15 @@ on:
 
 jobs:
   emulator-e2e:
-    name: Android emulator captive-portal E2E
+    name: Android emulator E2E (${{ matrix.vpn_mode }})
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        vpn_mode: [covering, excluding]
+    env:
+      GATEPATH_E2E_VPN_MODE: ${{ matrix.vpn_mode }}
     steps:
       - uses: actions/checkout@v7
 
@@ -81,7 +87,7 @@ jobs:
       - name: Run host-side assertions
         if: always()
         working-directory: tests/e2e-android
-        run: python3 driver/assertions.py artifacts
+        run: python3 driver/assertions.py artifacts/${{ matrix.vpn_mode }} --vpn-mode ${{ matrix.vpn_mode }}
 
       - name: Teardown mockportal-host
         if: always()
@@ -92,8 +98,8 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: e2e-android-artifacts
-          path: tests/e2e-android/artifacts/
+          name: e2e-android-artifacts-${{ matrix.vpn_mode }}
+          path: tests/e2e-android/artifacts/${{ matrix.vpn_mode }}/
           if-no-files-found: warn
 
   release-vpn-guard:

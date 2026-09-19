@@ -220,15 +220,16 @@ GOOD_BUNDLE = (
     "=== Gatepath diagnostics ===\n"
     "redacted: true\n"
     '{"ssid":"REDACTED","gateway_ip":"REDACTED","portal_domain":"REDACTED"}\n'
+    "confinement: confined\n"
     "--- Latest portal probe capture ---\n"
     "(no intercepted response captured)\n"
 )
 
 
-def _run(bundle=GOOD_BUNDLE, audit=None, uri=GOOD_URI):
+def _run(bundle=GOOD_BUNDLE, audit=None, uri=GOOD_URI, mode="excluding"):
     failures: list[str] = []
     assertions.check_diagnostics_bundle(
-        bundle, AUDIT if audit is None else audit, uri, failures
+        bundle, AUDIT if audit is None else audit, uri, mode, failures
     )
     return failures
 
@@ -275,3 +276,107 @@ def test_capture_that_outlived_its_incident_fails():
 def test_resurrected_body_field_fails():
     revived = GOOD_BUNDLE + "body_sha256: abc123\n"
     assert any("bundle.no_body_evidence" in f for f in _run(bundle=revived))
+
+
+def test_bundle_requires_confinement_field():
+    no_confinement = GOOD_BUNDLE.replace("confinement: confined\n", "")
+    assert any("bundle.confinement" in f for f in _run(bundle=no_confinement))
+
+
+def test_covering_mode_bundle_does_not_require_capture_cleared():
+    # Nothing was ever validated in `covering` mode — MainViewModel classifies
+    # TUNNELLED before any session or probe capture exists, so there is no
+    # "outlived its incident" question to ask, unlike in `excluding` mode
+    # (test_capture_that_outlived_its_incident_fails above).
+    stale = GOOD_BUNDLE.replace(
+        "(no intercepted response captured)", "http_status: 200\ncontent_type: text/html"
+    )
+    assert not any("bundle.capture_cleared" in f for f in _run(bundle=stale, mode="covering"))
+
+
+def test_covering_mode_bundle_does_not_require_redaction_evidence():
+    # `covering` mode's audit log is ALWAYS empty (no session ever opens),
+    # so there are never any ssid/gateway_ip/portal_domain identifiers to
+    # check redaction against. In `excluding` mode that same absence is a
+    # real #134/#135-style failure (test_no_identifiers_to_check_against_...
+    # above); in `covering` mode it is simply the expected shape of every
+    # real run and must not fail.
+    assert not any(
+        "bundle.redacted" in f for f in _run(audit=[], mode="covering")
+    )
+
+
+# ── Confinement state, per-mode checks (Task 15) ──────────────────────────
+#
+# The two-mode CI matrix (Task 14) needs assertions that a Tunnelled run
+# never opens a session and stays silent, and that a Confined run's session
+# actually carries confinement=confined. These mirror the positive/negative
+# discipline used throughout this file: each new check gets one case that
+# passes and one that fails, so a check that can never go red doesn't slip in
+# unnoticed (the #134/#135 lesson).
+
+GW_PORTAL_ANDROID = {
+    "path": "/portal",
+    "headers": {"Host": "10.0.2.2:18080", "User-Agent": "Mozilla/5.0 (Linux; Android 14)"},
+}
+
+
+def test_covering_mode_requires_tunnelled_and_no_portal_hit():
+    failures: list[str] = []
+    assertions.check_confinement("tunnelled\n", "covering", failures)
+    assert not failures
+    assertions.check_confinement("confined\n", "covering", failures)
+    assert failures and "confinement" in failures[-1]
+
+
+def test_covering_mode_fails_on_any_android_portal_hit():
+    failures: list[str] = []
+    assertions.check_gateway_silent([GW_PORTAL_ANDROID], failures)
+    assert failures
+    failures.clear()
+    assertions.check_gateway_silent([], failures)
+    assert not failures
+
+
+def test_excluding_mode_requires_confined_audit_entry():
+    failures: list[str] = []
+    assertions.check_audit_confined(
+        [{"close_reason": "portal_completed", "confinement": "confined"}], failures
+    )
+    assert not failures
+    assertions.check_audit_confined(
+        [{"close_reason": "portal_completed", "confinement": "unconfined"}], failures
+    )
+    assert failures
+
+
+def test_empty_state_file_is_a_failure_not_a_pass():
+    failures: list[str] = []
+    assertions.check_confinement("", "excluding", failures)
+    assert failures
+
+
+def test_covering_mode_audit_absent_passes_when_empty_or_missing():
+    failures: list[str] = []
+    assertions.check_audit_absent([], failures)
+    assert not failures
+
+
+def test_covering_mode_audit_absent_fails_on_portal_completed():
+    failures: list[str] = []
+    assertions.check_audit_absent(
+        [{"close_reason": "portal_completed", "confinement": "confined"}], failures
+    )
+    assert failures
+
+
+def test_vpn_silent_while_tunnelled_passes_when_silent():
+    failures: list[str] = []
+    assertions.check_vpn_silent_while_tunnelled([SENTINEL, BEGIN, END], failures)
+    assert failures == []
+
+
+def test_vpn_silent_while_tunnelled_fails_on_leak():
+    failures: list[str] = []
+    assertions.check_vpn_silent_while_tunnelled([SENTINEL, BEGIN, SENTINEL_LEAK, END], failures)
+    assert any("LEAK" in f for f in failures)
