@@ -23,7 +23,11 @@ def adb(
     if serial:
         cmd += ["-s", serial]
     cmd += list(args)
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+    # logcat output is not guaranteed valid UTF-8 (binary log payloads can leak
+    # through); a single bad byte must not kill a step with UnicodeDecodeError.
+    result = subprocess.run(
+        cmd, capture_output=True, text=True, errors="replace", timeout=timeout
+    )
     if check and result.returncode != 0:
         raise RuntimeError(
             f"adb {' '.join(args)} failed (rc={result.returncode}): "

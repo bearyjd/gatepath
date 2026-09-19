@@ -71,6 +71,20 @@ the old counter behaviour, so this stays backward compatible.
 
 ## 3. Emulator / harness gotchas
 
+- **The mock must advertise `10.0.2.2`, not its own `0.0.0.0` bind address.**
+  `mockportal-host` binds `0.0.0.0:18080` so the emulator's connection is
+  accepted, but the confinement-state monitor path (unlike the old
+  debug-intent path, which handed Gatepath the portal URL directly) follows
+  the mock's own `Location` header from `/generate_204`. An advertised
+  `0.0.0.0` sends the WebView to `http://0.0.0.0:18080/portal`, which the
+  emulator cannot connect to (`net::ERR_CONNECTION_REFUSED`). Fixed via
+  `build_server(..., advertised_host="10.0.2.2")` (`PORTAL_ADVERTISED_HOST` in
+  `compose.yml` / `entrypoint.sh`), kept independent of the bind host in
+  `mockportal/server.py` so `PORTAL_HOST`'s loopback safeguard is untouched.
+- **`adb_helper.adb()` decodes with `errors="replace"`.** `logcat -d` output is
+  not guaranteed valid UTF-8; one bad byte previously killed
+  `step_start_test_vpn` with `UnicodeDecodeError` rather than surfacing a real
+  step failure.
 - **logcat boot spam buries app logs.** After boot the emulator emits hundreds
   of `AiAiEcho ... package is updated` lines/sec — enough that even a `-t 3000`
   tail contains zero app lines, and the ring buffer rotates them out. Before
