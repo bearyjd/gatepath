@@ -28,6 +28,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.viewinterop.AndroidView
 import com.ventouxlabs.gatepath.BuildConfig
+import com.ventouxlabs.gatepath.diag.CertSummary
 import com.ventouxlabs.gatepath.network.BlockedDomains
 import java.net.URI
 
@@ -73,6 +74,7 @@ fun GatepathWebView(
     onBlockedNavigation: () -> Unit,
     onBlockedResource: () -> Unit,
     onTlsCertErrorBypassed: () -> Unit,
+    onCertSummary: (CertSummary) -> Unit,
     onLoadStarted: () -> Unit,
     onLoadError: (PortalLoadError) -> Unit,
     reloadToken: Int,
@@ -142,6 +144,7 @@ fun GatepathWebView(
                 onBlockedNavigation,
                 onBlockedResource,
                 onTlsCertErrorBypassed,
+                onCertSummary,
                 onLoadStarted,
                 onLoadError,
             )
@@ -235,11 +238,35 @@ private fun clearPortalSessionState(webView: WebView) {
     WebStorage.getInstance().deleteAllData()
 }
 
+/**
+ * Everything about the certificate that is safe to export: the error class,
+ * validity window, whether it is self-signed, and a SHA-256 fingerprint. The
+ * subject and issuer are gateway-authored text and stay on the device.
+ */
+private fun summarise(error: SslError): CertSummary {
+    val cert = error.certificate
+        ?: return CertSummary.of(error.primaryError, null, null, false, null)
+    val x509 = runCatching { cert.x509Certificate }.getOrNull()
+    val subject = runCatching { cert.issuedTo?.dName }.getOrNull()
+    val issuer = runCatching { cert.issuedBy?.dName }.getOrNull()
+    return CertSummary.of(
+        primaryError = error.primaryError,
+        notBefore = cert.validNotBeforeDate?.time,
+        notAfter = cert.validNotAfterDate?.time,
+        // Two absent names are not evidence of self-signing — only a real
+        // subject that equals the issuer is. Comparing nulls would report
+        // `selfSigned` for a certificate we learned nothing about.
+        subjectEqualsIssuer = subject != null && subject == issuer,
+        derEncoded = runCatching { x509?.encoded }.getOrNull(),
+    )
+}
+
 private fun buildWebViewClient(
     portalHost: String,
     onBlockedNavigation: () -> Unit,
     onBlockedResource: () -> Unit,
     onTlsCertErrorBypassed: () -> Unit,
+    onCertSummary: (CertSummary) -> Unit,
     onLoadStarted: () -> Unit,
     onLoadError: (PortalLoadError) -> Unit,
 ): WebViewClient = object : WebViewClient() {
@@ -319,6 +346,9 @@ private fun buildWebViewClient(
             "onReceivedSslError ${error.url.urlForLog()}: primaryError=${error.primaryError} " +
                 "— ${if (proceed) "proceeding (portal host, cert errors expected)" else "cancelling (off-domain host=$errorHost, portal host=$portalHost)"}",
         )
+        // Recorded whether or not we proceed: a refused certificate is the
+        // more interesting one to have in the evidence bundle.
+        onCertSummary(summarise(error))
         if (proceed) {
             onTlsCertErrorBypassed()
             handler.proceed()

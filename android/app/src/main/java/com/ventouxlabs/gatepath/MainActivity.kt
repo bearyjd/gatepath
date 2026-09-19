@@ -88,6 +88,7 @@ class MainActivity : ComponentActivity() {
                                 onBlockedNavigation = viewModel::onBlockedNavigation,
                                 onBlockedResource = viewModel::onBlockedResource,
                                 onTlsCertErrorBypassed = viewModel::onTlsCertErrorBypassed,
+                                onCertSummary = viewModel::onCertSummary,
                             )
                         } else {
                             MainScreen(

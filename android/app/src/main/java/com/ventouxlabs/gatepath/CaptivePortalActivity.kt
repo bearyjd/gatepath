@@ -143,6 +143,8 @@ class CaptivePortalActivity : ComponentActivity() {
                         onBlockedNavigation = {},
                         onBlockedResource = {},
                         onTlsCertErrorBypassed = {},
+                        // No evidence record on this entry point — see render's KDoc.
+                        onCertSummary = {},
                     )
                 } else {
                     val kind = (state as? ConfinementState.Tunnelled)?.vpnKind
