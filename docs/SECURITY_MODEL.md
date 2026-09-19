@@ -90,8 +90,9 @@ authenticated caller UID rather than accepting it from the client; if it is
 absent, Gatepath declines to write the file rather than falling back to a
 world-writable location where the counts could be forged. A missing or
 unreadable file leaves the counters at 0 — losing a count must not cost the
-session record. The same channel carries `blocked_navigation_attempts` and
-`blocked_resource_requests`, which were previously always 0 on desktop.
+session record. The same channel carries `observed_navigation_attempts` and
+`observed_resource_requests` (schema v2; `blocked_*` in v1), which were
+previously always 0 on desktop.
 
 ## What Gatepath itself sends
 
@@ -368,18 +369,29 @@ reaches the user cleanly from a Flatpak-confined caller, and what subject
 unconfined path exactly as before — the grant cannot make things worse than the
 status quo it replaces.
 
-### Caveat — desktop tracker-resource requests are logged, not blocked
+### Caveat — tracker-resource requests are logged, not blocked, on both platforms
 
-On Android, `WebViewClient.shouldInterceptRequest` lets Gatepath cancel requests to
-known tracker domains before they leave the device. On desktop, WebKitGTK's
-`resource-load-started` signal is informational — Gatepath observes the request and
-increments the counter, but the request still completes. The
-`blocked_resource_requests` audit-log field on desktop should be read as
-*"observed tracker requests"*, not *"blocked tracker requests"*. See
-[AUDIT_LOG_SCHEMA.md](AUDIT_LOG_SCHEMA.md) for the platform-specific semantics.
+Neither platform cancels tracker-domain subresource requests. Since PR #33 both
+observe them, increment a counter, and let the request complete. The difference
+is only in the API, not the outcome: Android's
+`WebViewClient.shouldInterceptRequest` *could* cancel, but Gatepath's
+implementation counts and returns `null`, which hands the request back to the
+WebView unchanged; desktop's WebKitGTK `resource-load-started` signal is purely
+informational and could not cancel even if we wanted it to.
 
-This is a WebKitGTK API limitation and is honestly disclosed to the user in the
-portal-window banner.
+The counters are therefore `observed_resource_requests` and
+`observed_navigation_attempts` (schema v2, both platforms) — read them as
+*"observed"*, never *"blocked"*. They were named `blocked_*` in v1, which is
+exactly the misreading the rename exists to stop. See
+[AUDIT_LOG_SCHEMA.md](AUDIT_LOG_SCHEMA.md) for the field semantics.
+
+Why not block: on desktop the API cannot. On Android it could, but returning an
+empty response for an embedded analytics script made the portal page's own
+inline init throw on the first `gtag(...)` call, killing every later statement
+in that `<script>` — including the Continue button's click handler. The captive
+session is short-lived and cookies and web storage are cleared on dispose, so
+the exposure is bounded to the sign-in flow. See `GatepathWebView`'s
+`shouldInterceptRequest` for the full note.
 
 ## What neither platform protects against
 
