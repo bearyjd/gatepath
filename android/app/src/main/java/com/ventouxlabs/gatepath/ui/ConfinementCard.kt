@@ -29,6 +29,13 @@ fun ConfinementCard(
     onAction: (ConfinementAction) -> Unit,
     onShareEvidence: () -> Unit,
     modifier: Modifier = Modifier,
+    /**
+     * Replaces the primary button's label without changing which
+     * [ConfinementAction] it dispatches. Exists for the system-handoff
+     * carve-out in `CaptivePortalActivity`, where `Unknown` offers to open the
+     * WebView anyway; leave it null everywhere else.
+     */
+    actionLabelOverride: String? = null,
 ) {
     val action = ConfinementStateText.action(state)
     Surface(
@@ -38,7 +45,9 @@ fun ConfinementCard(
     ) {
         Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Text(ConfinementStateText.sentence(state, vpnAppLabel), style = MaterialTheme.typography.bodyLarge)
-            Button(onClick = { onAction(action) }) { Text(ConfinementStateText.actionLabel(action)) }
+            Button(onClick = { onAction(action) }) {
+                Text(actionLabelOverride ?: ConfinementStateText.actionLabel(action))
+            }
             if (action != ConfinementAction.SHARE_EVIDENCE) {
                 TextButton(onClick = onShareEvidence) {
                     Text(ConfinementStateText.actionLabel(ConfinementAction.SHARE_EVIDENCE))

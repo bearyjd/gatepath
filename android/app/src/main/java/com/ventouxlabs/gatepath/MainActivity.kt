@@ -49,6 +49,10 @@ class MainActivity : ComponentActivity() {
         // land before this Activity exists. The setter replays the current
         // state, so the harness artefact is written for that case too.
         if (BuildConfig.DEBUG) {
+            // applicationContext, not the Activity: the sink is held by the
+            // ViewModel, which outlives this Activity across a rotation, and
+            // capturing `filesDir` here would capture `this` with it.
+            val filesDir = applicationContext.filesDir
             viewModel.debugStateSink = { name ->
                 File(filesDir, DEBUG_STATE_FILE).writeText(name)
             }

@@ -111,6 +111,11 @@ class CaptivePortalMonitor(
         // both NetworkValidated (success signal) and CaptiveNetworkLost
         // (don't emit Lost for non-captive networks the caller never cared about).
         val captive = java.util.concurrent.ConcurrentHashMap.newKeySet<Network>()
+        // Every network that produced a CaptiveIncident, whatever it classified
+        // as. `captive` holds only the bound-Portal ones, so gating
+        // CaptiveNetworkLost on it would leave a Tunnelled/Blocked/DnsStrict
+        // card on screen after the Wi-Fi went away.
+        val incidents = java.util.concurrent.ConcurrentHashMap.newKeySet<Network>()
         // Networks we have already reported as validated/no-portal so the UI
         // doesn't get spammed with NetworkObservedNoPortal events as
         // capabilities churn.
@@ -137,7 +142,16 @@ class CaptivePortalMonitor(
                 }
                 // The default-route probe is evidence, never the decision: it
                 // shows whether some other path (VPN, cellular) has internet.
-                val fallbackResult = probe.probe(network = null, testUrl = probeUrl)
+                // Skipped entirely when the bound probe already found the
+                // portal — the answer cannot change the classification, and it
+                // would delay the sign-in window by up to ten seconds of probe
+                // timeouts on the one path where the user is waiting for it.
+                // `classify` accepts a null fallback.
+                val fallbackResult = if (bindResult is ProbeResult.Portal) {
+                    null
+                } else {
+                    probe.probe(network = null, testUrl = probeUrl)
+                }
                 val linkProps = runCatching { connectivityManager.getLinkProperties(network) }.getOrNull()
                 val privateDnsStrict = linkProps?.privateDnsServerName != null
                 val resolved = (bindResult as? ProbeResult.Portal)?.let { resolvePortalHostOnWifi(network, it.locationUrl) }
@@ -145,6 +159,9 @@ class CaptivePortalMonitor(
                     network = network,
                     bindError = (bindResult as? ProbeResult.Error)?.message,
                     fallbackError = (fallbackResult as? ProbeResult.Error)?.message,
+                    // Unknown rather than false when the fallback was skipped:
+                    // we did not look, so we cannot claim the default route
+                    // bypasses this gateway.
                     defaultRouteBypassesCaptive = fallbackResult is ProbeResult.Validated,
                 )
                 val inputs = ClassificationInputs(
@@ -155,6 +172,7 @@ class CaptivePortalMonitor(
                     portalHostResolvedOnWifi = resolved,
                 )
                 if (bindResult is ProbeResult.Portal) captive.add(network)
+                incidents.add(network)
                 Log.i(TAG, "Captive incident on $network: bound=${bindResult::class.simpleName}")
                 trySend(NetworkEvent.CaptiveIncident(network, inputs, ProbePath.BOUND_WIFI, diagnostics))
                 // Allow re-probing on the next capability change unless we found the portal.
@@ -190,7 +208,11 @@ class CaptivePortalMonitor(
                     // 1. We previously identified this network as captive →
                     //    user just signed in. Surface NetworkValidated.
                     // 2. First-time validated observation → emit NoPortal.
-                    if (captive.remove(network)) {
+                    // The incident is over either way — leaving the network in
+                    // `incidents` would fire a spurious CaptiveNetworkLost when
+                    // the user later walks away from a network they signed into.
+                    val hadIncident = incidents.remove(network)
+                    if (captive.remove(network) || hadIncident) {
                         Log.i(TAG, "Captive network $network became validated — sign-in succeeded")
                         trySend(NetworkEvent.NetworkValidated(network))
                     } else if (reportedNoPortal.add(network)) {
@@ -209,10 +231,13 @@ class CaptivePortalMonitor(
                 probed.remove(network)
                 lastCaps.remove(network)
                 reportedNoPortal.remove(network)
-                // Only emit Lost for networks we previously identified as
-                // captive. A regular WiFi disconnect with no portal in flight
-                // is not a session event.
-                if (captive.remove(network)) {
+                captive.remove(network)
+                // Emit Lost for any network that produced an incident, not just
+                // the ones whose bound probe found the portal: a Tunnelled or
+                // Blocked card describes a network too, and it must come down
+                // when that network goes away. A regular Wi-Fi disconnect with
+                // no incident behind it is still not a session event.
+                if (incidents.remove(network)) {
                     trySend(NetworkEvent.CaptiveNetworkLost(network))
                 }
             }

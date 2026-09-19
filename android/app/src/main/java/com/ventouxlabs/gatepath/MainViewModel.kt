@@ -26,6 +26,7 @@ import com.ventouxlabs.gatepath.session.CloseReason
 import com.ventouxlabs.gatepath.session.PortalSession
 import com.ventouxlabs.gatepath.session.PortalSessionManager
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -33,6 +34,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.net.InetAddress
 import java.net.URI
 import java.time.Instant
@@ -143,6 +145,20 @@ class MainViewModel @Inject constructor(
     private var lastDiagnostics: NetworkDiagnostics? = null
 
     /**
+     * Was the session that is currently open opened from a classified
+     * [ConfinementState.Confined] state?
+     *
+     * Latched when the session opens, **not** read live at audit time. Every
+     * path that ends a session clears the incident state first — the success
+     * path nulls `_confinement` in `clearIncidentState()` before
+     * `handleSignInSuccess()` reaches `writeAuditLog`, and `CaptiveNetworkLost`
+     * does the same — so reading `_confinement.value` from the writer reports
+     * `unconfined` for exactly the sessions that were confined. Reset after
+     * each write.
+     */
+    private var sessionWasConfined: Boolean = false
+
+    /**
      * Handle to the in-flight session-timeout coroutine. Cancelled when the
      * user dismisses, the network drops, or a new session begins. Without this
      * cancellation the coroutine would survive a dismiss and fire 10 minutes
@@ -226,6 +242,7 @@ class MainViewModel @Inject constructor(
         debugStateSink?.invoke(state.schemaName)
         Log.i(TAG, "Confinement on ${event.network}: ${state.schemaName}")
         if (state is ConfinementState.Confined) {
+            sessionWasConfined = true
             _session.value = sessionManager.portalDetected(_session.value, state.portalUrl)
             openPortal()
         }
@@ -276,14 +293,20 @@ class MainViewModel @Inject constructor(
                 // answer from whatever path currently owns the default route
                 // and the answer would describe the wrong network.
                 resolveHost = { host ->
-                    runCatching {
-                        val addrs = if (_confinement.value is ConfinementState.Confined) {
-                            network.getAllByName(host)
-                        } else {
-                            InetAddress.getAllByName(host)
-                        }
-                        addrs.mapNotNull { it.hostAddress }
-                    }.getOrElse { emptyList() }.also { answers ->
+                    // Both resolvers block. The engine invokes this from the
+                    // viewModelScope coroutine, i.e. Dispatchers.Main.immediate,
+                    // where a blocking lookup throws NetworkOnMainThreadException
+                    // and every answer comes back empty.
+                    withContext(Dispatchers.IO) {
+                        runCatching {
+                            val addrs = if (_confinement.value is ConfinementState.Confined) {
+                                network.getAllByName(host)
+                            } else {
+                                InetAddress.getAllByName(host)
+                            }
+                            addrs.mapNotNull { it.hostAddress }
+                        }.getOrElse { emptyList() }
+                    }.also { answers ->
                         _evidence.update { it?.copy(resolverWifi = answers) }
                     }
                 },
@@ -349,11 +372,19 @@ class MainViewModel @Inject constructor(
         _evidence.update { it?.copy(certSummary = summary) }
     }
 
-    /** User pressed "Sign in here". Only meaningful from Confined; otherwise a no-op. */
+    /**
+     * User pressed "Sign in here". Only meaningful from Confined; otherwise a
+     * no-op.
+     *
+     * Uses [PortalSessionManager.reenter] rather than `portalDetected`: this
+     * button is reachable after a dismiss, which leaves the session
+     * `Completed`, and `portalDetected` accepts only `Monitoring`.
+     */
     fun signInHere() {
         val state = _confinement.value as? ConfinementState.Confined ?: return
         if (_session.value is PortalSession.Active) return
-        _session.value = sessionManager.portalDetected(_session.value, state.portalUrl)
+        sessionWasConfined = true
+        _session.value = sessionManager.reenter(_session.value, state.portalUrl)
         openPortal()
     }
 
@@ -374,6 +405,7 @@ class MainViewModel @Inject constructor(
                 val next = sessionManager.timeout(current, utcNow())
                 _session.value = next
                 writeAuditLog(next)
+                sessionWasConfined = false
             }
         }
     }
@@ -385,6 +417,9 @@ class MainViewModel @Inject constructor(
         val next = sessionManager.dismiss(current, utcNow())
         _session.value = next
         writeAuditLog(next)
+        sessionWasConfined = false
+        // The confinement card deliberately stays on screen: the user can press
+        // "Sign in here" again, which is what PortalSessionManager.reenter is for.
     }
 
     /**
@@ -403,6 +438,7 @@ class MainViewModel @Inject constructor(
         val next = sessionManager.completePortal(current, utcNow())
         _session.value = next
         writeAuditLog(next)
+        sessionWasConfined = false
     }
 
     fun onBlockedNavigation() {
@@ -427,6 +463,9 @@ class MainViewModel @Inject constructor(
      * Idle without persisting anything. Callers must gate on BuildConfig.DEBUG.
      */
     fun debugForceActiveSession(portalUrl: String, network: Network) {
+        // This path never classifies, so the session is not confined — and the
+        // latch could still be set from an earlier real session.
+        sessionWasConfined = false
         _activeNetwork.value = network
         _session.value = PortalSession.Active(
             portalUrl = portalUrl,
@@ -450,6 +489,7 @@ class MainViewModel @Inject constructor(
         }
         _session.value = next
         writeAuditLog(next)
+        sessionWasConfined = false
     }
 
     /**
@@ -501,11 +541,10 @@ class MainViewModel @Inject constructor(
             durationSeconds = durationSeconds,
             observedNavigationAttempts = finalState.blockedNavigationAttempts,
             observedResourceRequests = finalState.blockedResourceRequests,
-            // Derived, not asserted. A hardcoded "confined" could never
-            // disagree with the code writing it, which is no evidence at all —
-            // and it would be a lie on the debug-force path, which opens a
-            // session without ever classifying the network.
-            confinement = if (_confinement.value is ConfinementState.Confined) "confined" else "unconfined",
+            // Latched at session open, not read live: every close path clears
+            // the incident state before the write, so reading _confinement here
+            // would report "unconfined" for precisely the confined sessions.
+            confinement = if (sessionWasConfined) "confined" else "unconfined",
             tlsCertErrorsBypassed = finalState.tlsCertErrorsBypassed,
         )
 

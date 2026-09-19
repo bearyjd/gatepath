@@ -100,8 +100,11 @@ class CaptivePortalActivity : ComponentActivity() {
         enableEdgeToEdge()
 
         captivePortal = readCaptivePortalExtra(intent)
-        val portalUrl = intent.getStringExtra(ConnectivityManager.EXTRA_CAPTIVE_PORTAL_URL)
-            ?: CONNECTIVITY_CHECK_URL
+        // Nullable on purpose. Substituting the constant here would make the
+        // system's absent URL indistinguishable from a real one, and the
+        // probe's own discovered location — a better answer — would never be
+        // consulted. Resolution happens after classification, below.
+        val intentPortalUrl = intent.getStringExtra(ConnectivityManager.EXTRA_CAPTIVE_PORTAL_URL)
 
         val portal = captivePortal
         if (portal == null) {
@@ -130,7 +133,7 @@ class CaptivePortalActivity : ComponentActivity() {
 
         Log.i(
             TAG,
-            "Handling captive portal for network $network at $portalUrl",
+            "Handling captive portal for network $network at ${intentPortalUrl ?: "(no url in intent)"}",
         )
 
         // Classification below can take tens of seconds against a gateway that
@@ -151,9 +154,14 @@ class CaptivePortalActivity : ComponentActivity() {
             }
             val state = classify(ClassificationInputs(bound, null, vpn.interfaces, strict, resolved))
             Log.i(TAG, "System handoff confinement: ${state.schemaName}")
-            // The system delivered a URL; prefer it over the probe's when confined.
-            val url = if (state is ConfinementState.Confined) portalUrl else null
-            render(state, url, network)
+            // Best available sign-in URL, in descending order of authority:
+            // the system's extra, then the location the probe actually found,
+            // then the check URL itself — which the gateway is intercepting
+            // anyway, so loading it yields the same login page.
+            val handoffUrl = intentPortalUrl
+                ?: (state as? ConfinementState.Confined)?.portalUrl
+                ?: CONNECTIVITY_CHECK_URL
+            render(state, if (state is ConfinementState.Confined) handoffUrl else null, network, handoffUrl)
         }
     }
 
@@ -162,8 +170,19 @@ class CaptivePortalActivity : ComponentActivity() {
      * this confinement state allows. Sharing is absent on purpose: the
      * evidence bundle belongs to the ViewModel in `MainActivity`, and this
      * entry point has no session of its own to attach it to.
+     *
+     * **Unknown carve-out, this entry point only.** From
+     * [ConfinementState.Unknown] the card's action opens the WebView at
+     * [handoffUrl] rather than doing nothing. Reaching this activity at all
+     * means the system handed Gatepath a `CaptivePortal` token because *its*
+     * probe saw a portal, which is a stronger signal than our own
+     * inconclusive one — so the honest offer is "try anyway", not a dead end.
+     * [ConfinementState.Tunnelled], [ConfinementState.Blocked] and
+     * [ConfinementState.DnsStrict] keep their existing actions and never open
+     * the WebView: for those we know *why* the page cannot load, and opening
+     * it would reproduce the blank screen this flow exists to prevent.
      */
-    private fun render(state: ConfinementState, url: String?, network: Network) {
+    private fun render(state: ConfinementState, url: String?, network: Network, handoffUrl: String) {
         setContent {
             GatepathTheme {
                 if (url != null) {
@@ -194,11 +213,21 @@ class CaptivePortalActivity : ComponentActivity() {
                                     ConfinementAction.OPEN_VPN_APP -> startActivity(launch)
                                     ConfinementAction.OPEN_NETWORK_SETTINGS ->
                                         startActivity(Intent(Settings.ACTION_WIRELESS_SETTINGS))
-                                    ConfinementAction.SIGN_IN_HERE, ConfinementAction.SHARE_EVIDENCE -> Unit
+                                    // Unknown's action, repurposed here — see
+                                    // the carve-out in this function's KDoc.
+                                    ConfinementAction.SHARE_EVIDENCE ->
+                                        if (state is ConfinementState.Unknown) {
+                                            render(state, handoffUrl, network, handoffUrl)
+                                        } else {
+                                            Unit
+                                        }
+                                    ConfinementAction.SIGN_IN_HERE -> Unit
                                 }
                             },
                             onShareEvidence = { /* no bundle on this entry; MainActivity owns sharing */ },
                             modifier = Modifier.padding(innerPadding),
+                            actionLabelOverride =
+                                if (state is ConfinementState.Unknown) "Try signing in anyway" else null,
                         )
                     }
                 }
