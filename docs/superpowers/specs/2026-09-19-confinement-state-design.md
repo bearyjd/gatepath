@@ -12,14 +12,18 @@ target user (a full-tunnel VPN, see `docs/RATIONALE.md` §1) that claim is
 false, and the reason is the platform, not a bug in this repo. Verified against
 AOSP `main` on 2026-09-18:
 
-1. **A secure VPN overrides explicit network selection.** netd's
-   `RULE_PRIORITY_SECURE_VPN` (13000) sorts before
-   `RULE_PRIORITY_EXPLICIT_NETWORK` (16000) and matches regardless of the
-   `explicitlySelected` fwmark bit (`system/netd/server/RouteController.cpp`,
-   `modifyVpnUidRangeRule`). A VPN that did not call `allowBypass()` therefore
-   carries a Wi-Fi-bound socket into the tunnel. Neither Tailscale nor WireGuard
-   for Android calls `allowBypass()`. Under always-on lockdown with the tunnel
-   down, `Vpn.setVpnForcedLocked` installs a PROHIBIT rule instead.
+1. **A secure VPN forbids explicit network selection.** netd's
+   `NetworkController::checkUserNetworkAccessLocked` returns `-EPERM` when a
+   secure (non-`allowBypass`) VPN applies to the calling UID and that UID
+   cannot protect sockets (`isProtectableLocked`: only the VPN's owner UID or
+   system UIDs). `FwmarkServer` runs this check on every `SELECT_NETWORK`, so
+   `bindProcessToNetwork(wifi)` makes every `connect()` fail with
+   `EPERM (Operation not permitted)`. This is the EPERM the repo has been
+   attributing to "restricted captive networks". It applies to Tailscale in
+   tailnet-only mode as well as exit-node mode, to TorGuard, and to WireGuard,
+   none of which call `allowBypass()`. Under always-on lockdown with the tunnel
+   down, `Vpn.setVpnForcedLocked` installs a PROHIBIT rule instead and the
+   error is `EACCES`.
 2. **There is no "restricted captive network" for third-party apps.** The
    `CaptivePortal` token delivered with `ACTION_CAPTIVE_PORTAL_SIGN_IN` is a
    binder for `appResponse`; `ConnectivityService.startCaptivePortalAppInternal`
@@ -71,17 +75,17 @@ compiles under `run-jvm-tests.sh`; add it to `MAIN_SOURCES`). Sealed interface:
 | State | Inputs that produce it | User sentence (one line) | Primary action |
 |---|---|---|---|
 | `Confined(portalUrl, capture)` | Wi-Fi-bound probe returned a redirect or a 200 intercept | "Gatepath is confined to this Wi-Fi. You can sign in here." | Sign in here |
-| `Tunnelled(vpnKind)` | Bound probe returned 204, or errored, while a VPN interface is up | "Your VPN is carrying Gatepath's traffic. Exclude Gatepath in {VPN app} to sign in here, or use the system notification." | Open VPN app |
-| `Blocked(errno)` | Bound probe failed with a permission error (`EPERM`/`EACCES`). Always-on lockdown state is not readable by a third-party app, so the errno alone decides; a detected VPN interface only fills in `{VPN app}` | "Your VPN's kill switch is blocking Gatepath. Exclude Gatepath in {VPN app} or use the system notification." | Open VPN app |
+| `Tunnelled(vpnKind)` | Bound probe error message contains `EPERM` | "Your VPN is carrying Gatepath's traffic. Exclude Gatepath in {VPN app} to sign in here, or use the system notification." | Open VPN app |
+| `Blocked(vpnKind)` | Bound probe error message contains `EACCES` | "Your VPN's kill switch is blocking Gatepath. Exclude Gatepath in {VPN app} or use the system notification." | Open VPN app |
 | `DnsStrict(portalHost)` | Bound probe reached the gateway, redirect names a hostname, `network.getAllByName(host)` fails, `LinkProperties.isPrivateDnsActive` is true | "Private DNS is strict, so {host} cannot be resolved on this Wi-Fi. Set Private DNS to Automatic for this sign-in, or use the system notification." | Open network settings |
 | `Unknown(bindError, fallbackError)` | none of the above | "Gatepath could not work out what this network is doing. Share the evidence." | Share evidence |
 
-`vpnKind` is `TailscaleExitNode`, `TailscaleTailnetOnly`, `Other(packageOrIface)`,
-derived from the existing `VpnDetector` / `VpnHeuristics`. `TailscaleTailnetOnly`
-is a partial-route VPN: netd falls through to the bound Wi-Fi for non-tailnet
-destinations, so it normally classifies as `Confined`; it appears in
-`Tunnelled` only when the bound probe still failed, and the sentence then says
-"exit node or route conflict".
+`vpnKind` is `TAILSCALE`, `TORGUARD`, `OTHER` or `NONE`, derived from interface
+names by `VpnKind.fromInterfaces`. Tailscale tailnet-only mode is a secure VPN
+and produces `Tunnelled` exactly like an exit node; the only path to
+`Confined` under any of these clients is excluding Gatepath in the client's
+app split-tunnelling. A bound probe returning 204 means the Wi-Fi itself is
+validated, which is not an incident.
 
 Rules:
 
@@ -183,12 +187,16 @@ evidence records. The audit log remains a session log.
   redaction test asserting `cert_summary` carries no free-text fields.
   `PortalProbeTest` gains the `probe_path` label. New files are added to
   `MAIN_SOURCES` / `TEST_SOURCES`.
-- **Emulator (`tests/e2e-android/`).** Reuse the debug `VpnService`: (a) VPN
-  covering the app → assert `Tunnelled`, no WebView request reaches the mock
-  gateway; (b) app in the VPN's disallowed list
-  (`VpnService.Builder.addDisallowedApplication`) → assert `Confined`, sign-in
-  completes, audit entry carries `confinement: confined`. Both are host-side
-  assertions in `driver/assertions.py` over pulled artefacts.
+- **Emulator (`tests/e2e-android/`).** The current in-package test VPN proves
+  the bind escapes a VPN only because Gatepath *owns* that VPN (protect
+  rights). A separate debug-only APK, `android/testvpn/`, becomes the VPN
+  owner so the harness can run three modes: `owner` (today's leak oracle,
+  unchanged semantics), `covering` (third-party VPN covers Gatepath → assert
+  `TUNNELLED`, no `/portal` hit from an Android UA, no `portal_completed`),
+  `excluding` (Gatepath in the VPN's disallowed list → assert `CONFINED`,
+  sign-in via the monitor path, audit entry with `confinement: confined`).
+  The app writes `files/confinement-state.txt` in debug builds so the state is
+  a pulled artefact. Assertions live in `driver/assertions.py`.
 - **Physical (manual, documented).** Pixel 9 Pro Fold and Pixel 10 Pro Fold:
   Tailscale tailnet-only, Tailscale exit node, TorGuard, each with Gatepath
   included and excluded; Private DNS strict and automatic; a hostname portal
@@ -215,3 +223,6 @@ evidence records. The audit log remains a session log.
   tab; Gatepath cannot observe that session. The evidence record still covers
   the probe stage.
 - Schema v2 readers must not reject v1 files already on users' devices.
+- ROADMAP P0.1's "proven" no-leak result was obtained with Gatepath as the VPN
+  owner. It remains a valid proof of the binding mechanism but not of the
+  production configuration; the `covering` mode closes that gap.
