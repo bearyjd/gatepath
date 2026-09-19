@@ -62,24 +62,28 @@ portal uses the `BuildConfig.DEBUG` debug intent, not the system notification
 ## Quick start
 
 ```sh
-# Build the debug APK first.
-(cd ../../android && ANDROID_HOME="$ANDROID_HOME" ./gradlew :app:assembleDebug)
+# Build both debug APKs first — the scenario installs the app and the
+# standalone test VPN, and :testvpn is required, not optional.
+(cd ../../android && ANDROID_HOME="$ANDROID_HOME" ./gradlew :app:assembleDebug :testvpn:assembleDebug)
 
-# Run the harness.
+# Run the harness. VPN_MODE defaults to `excluding`, the shipped contract.
 cd tests/e2e-android
 ./run-e2e.sh
+
+# The other half of the CI matrix: a VPN that covers Gatepath.
+VPN_MODE=covering ./run-e2e.sh
 ```
 
 Requires `/dev/kvm` on the host. If your machine doesn't have KVM, use
 the CI workflow path (`.github/workflows/android-e2e.yml`) instead.
 
 The script:
-1. Cleans `./artifacts/`.
+1. Cleans `./artifacts/$VPN_MODE/`.
 2. `docker compose build` (mockportal-host image).
 3. `docker compose up -d` (mockportal-host + budtmo emulator).
 4. Waits for `sys.boot_completed=1`, runs the scenario, exits with its rc.
-5. Pulls logcat + audit log + gateway request log into `./artifacts/`.
-6. Runs `driver/assertions.py` over the artifacts.
+5. Pulls logcat + audit log + gateway request log into `./artifacts/$VPN_MODE/`.
+6. Runs `driver/assertions.py` over the artifacts, in the same mode.
 
 Exit 0 only if the scenario AND every host-side assertion pass.
 
