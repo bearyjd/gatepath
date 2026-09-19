@@ -195,7 +195,13 @@ separate VPN owner closes that gap. The harness runs two VPN modes:
 `appops set com.ventouxlabs.gatepath.testvpn ACTIVATE_VPN allow` suppresses the
 consent dialog (no root). The apparatus is `android/testvpn/`, a wholly
 separate debug-only application module, never bundled with Gatepath's own
-`app` module and never built for release; `release-vpn-guard` CI
+`app` module and never built for release (the release variant is disabled in
+its `build.gradle.kts`, so `:testvpn:assembleRelease` does not exist). Its
+control activity is `android:exported="false"` and refuses intents unless the
+installed package is debuggable — `adb shell am start` still reaches it because
+the shell uid may start any activity, but no app on the device can; if a
+`_testvpn` step silently does nothing, check `am start`'s stdout for a
+permission denial before suspecting the VPN itself. `release-vpn-guard` CI
 (`tests/e2e-android/guard/check_release_manifest.py`) asserts Gatepath's own
 merged RELEASE manifest contains none of `GatepathTestVpnService`,
 `BIND_VPN_SERVICE`, or `TestVpnControlActivity`, with a positive control

@@ -2,6 +2,7 @@ package com.ventouxlabs.gatepath.testvpn
 
 import android.app.Activity
 import android.content.Intent
+import android.content.pm.ApplicationInfo
 import android.net.VpnService
 import android.os.Bundle
 import android.util.Log
@@ -10,15 +11,32 @@ import java.net.Socket
 
 /**
  * Control surface for the standalone `:testvpn` app, driven by
- * `am start … --es gatepath.testvpn.action <a>`. The whole app is test-only
- * (never installed on a real device), so no debug-build gate is needed here.
+ * `am start … --es gatepath.testvpn.action <a>` from the e2e harness.
+ *
+ * This activity can start a VPN that logs the destination of every packet
+ * Gatepath emits, so it is gated twice rather than by policy alone:
+ *
+ * - **Not exported.** Only `adb shell am start` (the shell uid holds
+ *   `START_ANY_ACTIVITY`) can reach it; no other app on the device can.
+ * - **Debuggable builds only.** `handle` runs only when the installed
+ *   package is debuggable — the same `BuildConfig.DEBUG`-style gate the
+ *   in-app debug intents use, checked at runtime so it does not depend on
+ *   a generated BuildConfig. The release variant is disabled in
+ *   `build.gradle.kts` as well, so a non-debuggable build cannot exist.
  */
 class TestVpnControlActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        handle(intent)
+        if (isDebuggable()) {
+            handle(intent)
+        } else {
+            Log.e(TAG, "refusing control intent: package is not debuggable")
+        }
         finish()
     }
+
+    private fun isDebuggable(): Boolean =
+        (applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0
 
     private fun handle(intent: Intent) {
         when (intent.getStringExtra(EXTRA_ACTION)) {

@@ -16,17 +16,21 @@ android {
         versionName = "e2e"
     }
 
-    buildTypes {
-        // Debug only by policy: this app exists solely for the android-e2e no-leak
-        // proof and is never installed on a real device or published. `release` is
-        // declared only so `:testvpn:processReleaseManifest` resolves like any other
-        // module — the android-e2e workflow never assembles or ships it.
-        release { isMinifyEnabled = false }
-    }
-
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_21
         targetCompatibility = JavaVersion.VERSION_21
+    }
+}
+
+// Debug only, enforced rather than by policy: this app exists solely for the
+// android-e2e no-leak proof and must never produce a shippable APK. AGP always
+// registers a `release` build type, so merely not declaring one is not enough —
+// `:testvpn:assembleRelease` would still build a real VPN. Disabling the variant
+// removes those tasks entirely. Nothing needs it: android-e2e.yml runs
+// `:testvpn:assembleDebug` and `:testvpn:processDebugManifest` only.
+androidComponents {
+    beforeVariants(selector().withBuildType("release")) { variant ->
+        variant.enable = false
     }
 }
 

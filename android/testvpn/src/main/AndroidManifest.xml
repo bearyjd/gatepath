@@ -11,9 +11,12 @@
                 <action android:name="android.net.VpnService" />
             </intent-filter>
         </service>
+        <!-- Not exported: the harness drives it via `adb shell am start`, which
+             the shell uid may do for any activity. Exporting it would let any
+             app on the device start a packet-logging VPN in "covering" mode. -->
         <activity
             android:name=".TestVpnControlActivity"
-            android:exported="true"
+            android:exported="false"
             android:theme="@android:style/Theme.NoDisplay" />
     </application>
 </manifest>
