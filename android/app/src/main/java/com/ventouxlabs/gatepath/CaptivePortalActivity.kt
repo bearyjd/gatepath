@@ -224,10 +224,14 @@ class CaptivePortalActivity : ComponentActivity() {
                                     ConfinementAction.SIGN_IN_HERE -> Unit
                                 }
                             },
-                            onShareEvidence = { /* no bundle on this entry; MainActivity owns sharing */ },
+                            onShareEvidence = {},
                             modifier = Modifier.padding(innerPadding),
                             actionLabelOverride =
                                 if (state is ConfinementState.Unknown) "Try signing in anyway" else null,
+                            // No bundle on this entry point — MainActivity owns
+                            // sharing. Rendering the button here would show a
+                            // control that silently does nothing.
+                            showShareEvidence = false,
                         )
                     }
                 }

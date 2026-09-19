@@ -36,6 +36,13 @@ fun ConfinementCard(
      * WebView anyway; leave it null everywhere else.
      */
     actionLabelOverride: String? = null,
+    /**
+     * Whether to offer the secondary "Share evidence" button at all. False on
+     * entry points that own no evidence bundle — `CaptivePortalActivity` has no
+     * session, so the button would be a visible control that does nothing.
+     * Leave it true wherever [onShareEvidence] actually shares something.
+     */
+    showShareEvidence: Boolean = true,
 ) {
     val action = ConfinementStateText.action(state)
     Surface(
@@ -48,7 +55,7 @@ fun ConfinementCard(
             Button(onClick = { onAction(action) }) {
                 Text(actionLabelOverride ?: ConfinementStateText.actionLabel(action))
             }
-            if (action != ConfinementAction.SHARE_EVIDENCE) {
+            if (showShareEvidence && action != ConfinementAction.SHARE_EVIDENCE) {
                 TextButton(onClick = onShareEvidence) {
                     Text(ConfinementStateText.actionLabel(ConfinementAction.SHARE_EVIDENCE))
                 }
