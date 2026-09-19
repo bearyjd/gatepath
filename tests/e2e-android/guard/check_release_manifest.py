@@ -1,12 +1,15 @@
 #!/usr/bin/env python3
 """Guard: the no-leak test VPN apparatus must never ship.
 
-Asserts the merged RELEASE manifest contains none of the markers below, and the
-merged DEBUG manifest contains all of them (positive control — proves the guard
-is actually looking at real manifests, not vacuously passing).
+Asserts the app's merged RELEASE manifest contains none of the markers below,
+and the standalone `:testvpn` app's merged DEBUG manifest contains all of them
+(positive control — proves the guard is actually looking at real manifests,
+not vacuously passing). The test VPN no longer lives inside the app's own
+debug source set — it is a separate application module so Gatepath is never
+the VPN owner (see android/testvpn).
 
-Usage: check_release_manifest.py <android/app dir>
-Run after: ./gradlew :app:processDebugManifest :app:processReleaseManifest
+Usage: check_release_manifest.py <android dir>
+Run after: ./gradlew :app:processReleaseManifest :testvpn:processDebugManifest
 """
 from __future__ import annotations
 
@@ -41,9 +44,11 @@ def merged_manifest(app_dir: Path, variant: str) -> Path:
 
 def main(argv: list[str]) -> int:
     if len(argv) != 2:
-        print("usage: check_release_manifest.py <android/app dir>", file=sys.stderr)
+        print("usage: check_release_manifest.py <android dir>", file=sys.stderr)
         return 2
-    app_dir = Path(argv[1])
+    android_dir = Path(argv[1])
+    app_dir = android_dir / "app"
+    testvpn_dir = android_dir / "testvpn"
     failures: list[str] = []
 
     release = merged_manifest(app_dir, "release").read_text()
@@ -51,10 +56,12 @@ def main(argv: list[str]) -> int:
         if m in release:
             failures.append(f"RELEASE manifest leaks the test VPN marker: {m}")
 
-    debug = merged_manifest(app_dir, "debug").read_text()
+    debug = merged_manifest(testvpn_dir, "debug").read_text()
     for m in MARKERS:
         if m not in debug:
-            failures.append(f"DEBUG manifest unexpectedly missing {m} — guard may be vacuous")
+            failures.append(
+                f"testvpn DEBUG manifest unexpectedly missing {m} — guard may be vacuous"
+            )
 
     if failures:
         for f in failures:

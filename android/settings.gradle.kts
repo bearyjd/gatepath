@@ -26,3 +26,4 @@ dependencyResolutionManagement {
 
 rootProject.name = "gatepath"
 include(":app")
+include(":testvpn")

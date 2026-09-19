@@ -48,7 +48,7 @@ jobs:
 
       - name: assembleDebug
         working-directory: android
-        run: ./gradlew --no-daemon :app:assembleDebug
+        run: ./gradlew --no-daemon :app:assembleDebug :testvpn:assembleDebug
 
       - name: Start mockportal-host
         # The emulator-runner step that follows needs mockportal reachable
@@ -119,6 +119,6 @@ jobs:
           key: gradle-${{ hashFiles('android/**/*.gradle*', 'android/gradle/libs.versions.toml') }}
       - name: Process manifests
         working-directory: android
-        run: ./gradlew --no-daemon :app:processDebugManifest :app:processReleaseManifest
+        run: ./gradlew --no-daemon :app:processReleaseManifest :testvpn:processDebugManifest
       - name: Assert release excludes the test VPN
-        run: python3 tests/e2e-android/guard/check_release_manifest.py android/app
+        run: python3 tests/e2e-android/guard/check_release_manifest.py android

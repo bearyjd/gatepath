@@ -1,9 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
-    <!-- DEBUG-ONLY: no-leak sentinel test VPN (ROADMAP P0.1). Merged into debug builds only. -->
-    <application>
+    <!-- e2e-only: the no-leak sentinel VPN, owned by a package that is NOT Gatepath so
+         netd treats Gatepath like any app under a third-party VPN. Never shipped. -->
+    <application android:label="Gatepath test VPN" android:allowBackup="false">
         <service
-            android:name=".testvpn.GatepathTestVpnService"
+            android:name=".GatepathTestVpnService"
             android:exported="false"
             android:permission="android.permission.BIND_VPN_SERVICE">
             <intent-filter>
@@ -11,7 +12,7 @@
             </intent-filter>
         </service>
         <activity
-            android:name=".testvpn.TestVpnControlActivity"
+            android:name=".TestVpnControlActivity"
             android:exported="true"
             android:theme="@android:style/Theme.NoDisplay" />
     </application>

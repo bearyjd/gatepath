@@ -5,15 +5,18 @@ import android.content.Intent
 import android.net.VpnService
 import android.os.Bundle
 import android.util.Log
-import com.ventouxlabs.gatepath.BuildConfig
 import java.net.InetSocketAddress
 import java.net.Socket
 
-/** DEBUG-ONLY harness control surface, driven by `am start … --es gatepath.testvpn.action <a>`. */
+/**
+ * Control surface for the standalone `:testvpn` app, driven by
+ * `am start … --es gatepath.testvpn.action <a>`. The whole app is test-only
+ * (never installed on a real device), so no debug-build gate is needed here.
+ */
 class TestVpnControlActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        if (BuildConfig.DEBUG) handle(intent)
+        handle(intent)
         finish()
     }
 
@@ -21,7 +24,13 @@ class TestVpnControlActivity : Activity() {
         when (intent.getStringExtra(EXTRA_ACTION)) {
             "start" -> {
                 if (VpnService.prepare(this) != null) { Log.e(TAG, "VPN not authorized"); return }
-                startService(svc(GatepathTestVpnService.ACTION_START))
+                startService(
+                    svc(GatepathTestVpnService.ACTION_START)
+                        .putExtra(
+                            GatepathTestVpnService.EXTRA_MODE,
+                            intent.getStringExtra(GatepathTestVpnService.EXTRA_MODE),
+                        ),
+                )
             }
             "probe" -> sendUnboundProbe()
             "mark" -> {
