@@ -3,6 +3,7 @@ package com.ventouxlabs.gatepath
 import android.content.Intent
 import android.net.ConnectivityManager
 import android.os.Bundle
+import android.provider.Settings
 import android.util.Log
 import android.widget.Toast
 import androidx.activity.ComponentActivity
@@ -11,12 +12,18 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
+import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.lifecycleScope
 import com.ventouxlabs.gatepath.diag.IncidentEvidence
+import com.ventouxlabs.gatepath.network.ConfinementState
+import com.ventouxlabs.gatepath.network.VpnKind
 import com.ventouxlabs.gatepath.session.PortalSession
 import com.ventouxlabs.gatepath.share.DiagnosticsSharer
+import com.ventouxlabs.gatepath.ui.ConfinementAction
 import com.ventouxlabs.gatepath.ui.MainScreen
 import com.ventouxlabs.gatepath.ui.PortalScreen
+import com.ventouxlabs.gatepath.ui.VpnAppLauncher
 import com.ventouxlabs.gatepath.ui.theme.GatepathTheme
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.CancellationException
@@ -54,6 +61,20 @@ class MainActivity : ComponentActivity() {
                 val networkStatus by viewModel.networkStatus.collectAsState()
                 val diagnosis by viewModel.diagnosis.collectAsState()
                 val evidence by viewModel.evidence.collectAsState()
+                val confinement by viewModel.confinement.collectAsState()
+
+                // Only Tunnelled and Blocked name a VPN; every other state
+                // sends the user somewhere that isn't a VPN app, and NONE
+                // makes VpnAppLauncher fall back to the system VPN settings.
+                val context = LocalContext.current
+                val vpnKind = (confinement as? ConfinementState.Tunnelled)?.vpnKind
+                    ?: (confinement as? ConfinementState.Blocked)?.vpnKind
+                    ?: VpnKind.NONE
+                // Package enumeration hits the PackageManager, so resolve once
+                // per classification rather than on every recomposition.
+                val vpnAppLabel = remember(confinement) {
+                    VpnAppLauncher.resolve(context, vpnKind).first
+                }
 
                 when (val s = session) {
                     is PortalSession.Active -> {
@@ -72,8 +93,11 @@ class MainActivity : ComponentActivity() {
                             MainScreen(
                                 session = s,
                                 networkStatus = networkStatus,
+                                confinement = confinement,
+                                vpnAppLabel = vpnAppLabel,
                                 diagnosis = diagnosis,
                                 onDismiss = viewModel::onDismiss,
+                                onAction = { action -> onConfinementAction(action, vpnKind) },
                                 onRunDiagnostics = viewModel::rerunDiagnostics,
                                 onShareDiagnostics = { redact -> shareDiagnostics(redact, evidence) },
                             )
@@ -82,8 +106,11 @@ class MainActivity : ComponentActivity() {
                     else -> MainScreen(
                         session = s,
                         networkStatus = networkStatus,
+                        confinement = confinement,
+                        vpnAppLabel = vpnAppLabel,
                         diagnosis = diagnosis,
                         onDismiss = viewModel::onDismiss,
+                        onAction = { action -> onConfinementAction(action, vpnKind) },
                         onRunDiagnostics = viewModel::rerunDiagnostics,
                         onShareDiagnostics = { redact -> shareDiagnostics(redact, evidence) },
                     )
@@ -95,6 +122,20 @@ class MainActivity : ComponentActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         maybeApplyDebugIntent(intent)
+    }
+
+    /**
+     * The one action the confinement card offers. SHARE_EVIDENCE is absent on
+     * purpose: [MainScreen] owns the redaction dialog, so it handles that case
+     * itself and never routes it here.
+     */
+    private fun onConfinementAction(action: ConfinementAction, kind: VpnKind) {
+        when (action) {
+            ConfinementAction.SIGN_IN_HERE -> viewModel.signInHere()
+            ConfinementAction.OPEN_VPN_APP -> startActivity(VpnAppLauncher.resolve(this, kind).second)
+            ConfinementAction.OPEN_NETWORK_SETTINGS -> startActivity(Intent(Settings.ACTION_WIRELESS_SETTINGS))
+            ConfinementAction.SHARE_EVIDENCE -> Unit // handled by MainScreen's dialog
+        }
     }
 
     /**
