@@ -261,12 +261,23 @@ other network I/O during a session and the session is capped at 10 minutes, so t
 exposure window is small, but new features that issue HTTP from the same process
 during a session **must** re-evaluate this guarantee.
 
-The binding is undone in three places to defend against process-death leaks:
+The binding is undone in four places to defend against process-death leaks:
 1. `DisposableEffect.onDispose` in `GatepathWebView` (graceful close).
 2. `Application.onTerminate` (orderly process shutdown).
 3. A `ProcessLifecycleOwner` watchdog that fires on whole-app background (debounced
    across in-app activity transitions, so routine pause/resume during navigation does
    NOT yank the binding mid-session).
+4. `CaptivePortalActivity.onDestroy` (the system-handoff entry point), which releases
+   the binding only if the process is still bound to the network *it* set — the slot is
+   shared with `MainActivity`'s portal screen, and clearing another screen's live binding
+   would route that WebView over the default route.
+
+One writer is a borrower rather than an owner: `CaptivePortalMonitor`'s per-network probe
+saves the current binding, binds its probe network, and writes the saved value back when
+the probe finishes. A probe in flight when the owning screen releases can therefore
+restore a binding nobody owns; the watchdog in (3) is the only backstop for that window.
+Replacing these per-caller compares with a single refcounted binding owner is tracked as
+follow-up work.
 
 If the process is killed by the OS without lifecycle callbacks firing, the binding
 ends with the process — Android does not persist it across launches.

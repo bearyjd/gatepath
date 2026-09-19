@@ -95,6 +95,12 @@ class CaptivePortalActivity : ComponentActivity() {
     private var captivePortal: CaptivePortal? = null
     private var reported = false
 
+    /**
+     * The network this activity bound the process to in [onCreate], so
+     * [onDestroy] releases only a binding it still owns. Null until bound.
+     */
+    private var boundNetwork: Network? = null
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
@@ -128,8 +134,15 @@ class CaptivePortalActivity : ComponentActivity() {
         }
 
         // Bind the process to the captive network so the WebView's traffic
-        // routes via that interface.
-        connectivityManager.bindProcessToNetwork(network)
+        // routes via that interface. Ownership is claimed only when the bind
+        // actually took: under a secure VPN it is refused (EPERM — the
+        // Tunnelled/Blocked path), and claiming a slot we never set would let
+        // onDestroy clear a binding another screen legitimately owns.
+        if (connectivityManager.bindProcessToNetwork(network)) {
+            boundNetwork = network
+        } else {
+            Log.w(TAG, "bindProcessToNetwork($network) refused; not claiming the binding")
+        }
 
         Log.i(
             TAG,
@@ -299,9 +312,35 @@ class CaptivePortalActivity : ComponentActivity() {
         // backgrounds — backing out of a handoff card into MainActivity keeps
         // the app foregrounded, so without this the process stays bound to the
         // captive Wi-Fi and the diagnostic engine's deliberately-unbound probes
-        // travel it instead of the default route. Unconditional: a second
-        // null-bind after PortalScreen already disposed is a no-op.
-        connectivityManager.bindProcessToNetwork(null)
+        // travel it instead of the default route.
+        //
+        // Conditional, not unconditional: the binding is one slot shared by
+        // every screen in the process. MainActivity's PortalScreen may have
+        // bound the process to a *different* network while this card was up
+        // (the monitor opens sessions on its own now, and the system handoff
+        // arrives independently). Nulling that binding here would send the
+        // live portal WebView's traffic over the default route — the leak the
+        // no-leak sentinel exists to disprove. So release only what this
+        // activity set: if the slot no longer holds our network, someone else
+        // owns it and it is theirs to clear (PortalScreen's own onDispose does).
+        //
+        // Residuals, tracked for the follow-up (both need a refcounted binding
+        // owner rather than a per-caller compare):
+        //  (a) if another screen bound the *same* network, this check cannot
+        //      tell the two owners apart;
+        //  (b) CaptivePortalMonitor.probeAndEmit is a borrower, not an owner:
+        //      it saves the slot, binds its probe network, and writes the saved
+        //      value back in a `finally` on Dispatchers.IO. If a probe is in
+        //      flight when this runs, that write-back restores our network
+        //      after we cleared it, and the process ends up bound with nobody
+        //      left to release it. Pre-existing — the old unconditional
+        //      null-bind lost the same race — and BindWatchdog remains the
+        //      only backstop.
+        val ours = boundNetwork
+        if (ours != null && connectivityManager.boundNetworkForProcess == ours) {
+            connectivityManager.bindProcessToNetwork(null)
+        }
+        boundNetwork = null
     }
 
     @Suppress("DEPRECATION")
