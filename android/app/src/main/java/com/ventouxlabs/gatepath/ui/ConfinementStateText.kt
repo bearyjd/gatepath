@@ -17,11 +17,11 @@ object ConfinementStateText {
             "Gatepath is confined to this Wi-Fi. You can sign in here."
         is ConfinementState.Tunnelled ->
             "Your VPN is carrying Gatepath's traffic. Exclude Gatepath in " +
-                "${vpnAppLabel ?: vpnFallbackLabel(state.vpnKind)} to sign in here, " +
+                "${vpnAppLabel?.takeUnless { it.isBlank() } ?: vpnFallbackLabel(state.vpnKind)} to sign in here, " +
                 "or use the system notification."
         is ConfinementState.Blocked ->
             "Your VPN's kill switch is blocking Gatepath. Exclude Gatepath in " +
-                "${vpnAppLabel ?: vpnFallbackLabel(state.vpnKind)} or use the system notification."
+                "${vpnAppLabel?.takeUnless { it.isBlank() } ?: vpnFallbackLabel(state.vpnKind)} or use the system notification."
         is ConfinementState.DnsStrict ->
             "Private DNS is strict, so ${state.portalHost} cannot be resolved on this Wi-Fi. " +
                 "Set Private DNS to Automatic for this sign-in, or use the system notification."

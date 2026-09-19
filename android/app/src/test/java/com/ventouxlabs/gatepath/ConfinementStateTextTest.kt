@@ -45,6 +45,10 @@ class ConfinementStateTextTest {
         assertTrue(fallback.contains("Tailscale"))
         val generic = ConfinementStateText.sentence(ConfinementState.Blocked(VpnKind.NONE), null)
         assertTrue(generic.contains("your VPN app"))
+        val blockedBlank = ConfinementStateText.sentence(ConfinementState.Blocked(VpnKind.TORGUARD), "   ")
+        assertTrue(blockedBlank.contains("TorGuard"))
+        val tunneledEmpty = ConfinementStateText.sentence(ConfinementState.Tunnelled(VpnKind.TAILSCALE), "")
+        assertTrue(tunneledEmpty.contains("Tailscale"))
     }
 
     @Test
@@ -55,8 +59,35 @@ class ConfinementStateTextTest {
     }
 
     @Test
-    fun `confined sentence never contains the portal url`() {
-        assertFalse(ConfinementStateText.sentence(all[0], null).contains("10.0.0.1"))
+    fun `no state's sentence ever contains a url, query or token`() {
+        val urlBearingStates = listOf(
+            ConfinementState.Confined("http://10.0.0.1/login?token=secret", null),
+            ConfinementState.Tunnelled(VpnKind.OTHER),
+            ConfinementState.Blocked(VpnKind.NONE),
+            ConfinementState.DnsStrict("n143.network-auth.com"),
+            ConfinementState.Unknown("connect to http://gw.example/x?token=abc failed", "http://other.example/?sid=1")
+        )
+        val urlMarkers = listOf("http://", "https://", "?", "token=", "sid=")
+
+        // Test with null vpnAppLabel
+        for (state in urlBearingStates) {
+            val sentence = ConfinementStateText.sentence(state, vpnAppLabel = null)
+            for (marker in urlMarkers) {
+                assertFalse("State ${state.schemaName} should not contain '$marker' (vpnAppLabel=null)", sentence.contains(marker))
+            }
+        }
+
+        // Test with URL-like vpnAppLabel (should appear once verbatim, but no URL markers leaked)
+        for (state in urlBearingStates.filterIsInstance<ConfinementState.Tunnelled>() +
+                      urlBearingStates.filterIsInstance<ConfinementState.Blocked>()) {
+            val evilLabel = "http://evil.example"
+            val sentence = ConfinementStateText.sentence(state, vpnAppLabel = evilLabel)
+            assertEquals("VPN label should appear exactly once", 1, sentence.split(evilLabel).size - 1)
+            // URL markers from other sources should not appear
+            for (marker in listOf("10.0.0.1", "gw.example", "other.example")) {
+                assertFalse("State ${state.schemaName} should not leak other URLs (vpnAppLabel=http://evil.example)", sentence.contains(marker))
+            }
+        }
     }
 
     @Test
