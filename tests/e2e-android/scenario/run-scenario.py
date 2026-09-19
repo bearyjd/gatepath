@@ -169,9 +169,22 @@ def step(name: str, fn: Callable[[dict], dict]) -> Callable[[dict], dict]:
     return runner
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """The mock's 302s point at the emulator-facing host; from the runner
+    they must be observed, not followed."""
+
+    def redirect_request(
+        self, req: Any, fp: Any, code: Any, msg: Any, headers: Any, newurl: Any
+    ) -> Any:  # noqa: D102
+        return None
+
+
+_OPENER = urllib.request.build_opener(_NoRedirect)
+
+
 def _http(url: str, method: str = "GET", data: bytes | None = None, timeout: int = 5) -> bytes:
     req = urllib.request.Request(url, data=data, method=method)
-    with urllib.request.urlopen(req, timeout=timeout) as r:  # noqa: S310 — test fixture
+    with _OPENER.open(req, timeout=timeout) as r:  # noqa: S310 — test fixture
         return r.read()
 
 
@@ -511,9 +524,12 @@ def step_submit_login(state: dict) -> dict:
         try:
             _http(f"{state['mockportal_from_host_url']}/login", method="POST", data=data)
         except urllib.error.HTTPError as e:
-            # /login returns 302 (Location: /generate_204); urllib raises
-            # on 3xx by default unless redirects are followed. 302 is the
-            # success signal here — capture and continue.
+            # /login returns 302 (Location: /generate_204) pointing at the
+            # emulator-facing advertised host, which is unroutable from this
+            # runner. The module-level _OPENER deliberately refuses to follow
+            # redirects (see _NoRedirect), so urllib raises HTTPError for the
+            # 3xx instead of hanging trying to reach it. 302 is the success
+            # signal here — capture and continue.
             if e.code != 302:
                 raise
         return {"mode": "host-post", "outcome": "success"}
