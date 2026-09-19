@@ -344,45 +344,53 @@ def step_liveness_probe(state: dict) -> dict:
     }
 
 
-def step_mark_bound_end(state: dict) -> dict:
-    """Close the bound window. The portal session is still bound at this point
-    (right after validation), so the window spans the whole bound lifetime."""
-    _mark(state["serial"], "bound_end")
-    return {"marked": "bound_end"}
-
-
 def step_pull_vpn_sink(state: dict) -> dict:
-    """Pull the VPN sink after mark_bound_end has been issued.
+    """Pull the VPN sink after the bound window has (in `covering` mode) closed.
 
-    mark_bound_end dispatches via an async `am start`, so reading the sink
-    immediately raced the marker write and missed bound_end (issue #1). Poll up
-    to ~10s until the bound_end marker line is present, then write the artifact.
-    Always write the last pull (even if bound_end never appears) so the artifact
-    stays diagnosable; bound_end_seen surfaces whether the race was won."""
+    `covering` mode: `settle_covering` itself lays `bound_end` (there is no
+    separate mark step). It dispatches via an async `am start`, so reading the
+    sink immediately raced the marker write and missed bound_end (issue #1).
+    Poll up to ~10s until the bound_end marker line is present, then write the
+    artifact. Always write the last pull (even if bound_end never appears) so
+    the artifact stays diagnosable; bound_end_seen surfaces whether the race
+    was won.
+
+    `excluding` mode: Gatepath is outside the VPN, so the sink is not an
+    oracle for it — no markers were ever laid (STEPS_EXCLUDING runs no
+    liveness_probe/settle_covering). A single pull is enough; `oracle=False`
+    in the returned data tells the driver (Task 15) the sink was pulled for
+    the record only, not as a confinement proof."""
     serial = state["serial"]
-    deadline = time.monotonic() + 10
+    is_covering = state["vpn_mode"] == "covering"
+    deadline = time.monotonic() + (10 if is_covering else 0)
     contents = ""
     bound_end_seen = False
     while True:
         contents = adb_helper.shell(
             serial, f"run-as {TESTVPN_PACKAGE} cat {VPN_SINK_RELATIVE}", timeout=10, check=False
         )
-        for line in contents.splitlines():
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                if json.loads(line).get("marker") == "bound_end":
-                    bound_end_seen = True
-                    break
-            except (json.JSONDecodeError, ValueError):
-                continue
-        if bound_end_seen or time.monotonic() >= deadline:
+        if is_covering:
+            for line in contents.splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    if json.loads(line).get("marker") == "bound_end":
+                        bound_end_seen = True
+                        break
+                except (json.JSONDecodeError, ValueError):
+                    continue
+        if not is_covering or bound_end_seen or time.monotonic() >= deadline:
             break
         time.sleep(1.0)
     out = state["artifacts_dir"] / "vpn-sink.jsonl"
     out.write_text(contents)
-    return {"path": str(out), "size": len(contents), "bound_end_seen": bound_end_seen}
+    return {
+        "path": str(out),
+        "size": len(contents),
+        "bound_end_seen": bound_end_seen,
+        "oracle": is_covering,
+    }
 
 
 def _foreground(serial: str) -> str:
@@ -635,8 +643,8 @@ def step_write_bundle(state: dict) -> dict:
     # FLAG_ACTIVITY_NEW_TASK, and MainActivity is already running by this point
     # in the scenario, so without it Android just resumes the existing task and
     # never delivers the Intent — onNewIntent does not fire and the extras are
-    # dropped on the floor. launch_debug_portal gets away with the plain form
-    # only because the activity is not up yet when it runs.
+    # dropped on the floor. launch_app gets away with the plain form only
+    # because the activity is not up yet when it runs.
     #
     # Force-stopping first would also deliver the intent, but it would restart
     # the process and null the retained capture, making the capture-cleared
@@ -683,10 +691,10 @@ def step_pull_bundle(state: dict) -> dict:
 
 def step_pull_logcat(state: dict) -> dict:
     serial = state["serial"]
-    # Full post-clear buffer (launch_debug_portal cleared it just before the
-    # portal load), not a -t window: the D2 positive control greps this for the
-    # WebView's sentinel attempt, and a bounded tail buried it under device spam
-    # in CI (run #3 had zero GatepathWebView lines in -t 2000).
+    # Full post-clear buffer (launch_app cleared it just before starting
+    # MainActivity), not a -t window: the D2 positive control greps this for
+    # the WebView's sentinel attempt, and a bounded tail buried it under
+    # device spam in CI (run #3 had zero GatepathWebView lines in -t 2000).
     log = adb_helper.shell(serial, "logcat -d", timeout=30)
     out = state["artifacts_dir"] / "logcat.txt"
     out.write_text(log)
@@ -811,10 +819,12 @@ STEPS_COVERING: list[Callable[[dict], dict]] = COMMON_HEAD + [
     step("wait_confinement_state", step_wait_confinement_state), step("settle_covering", step_settle_covering),
 ] + COMMON_TAIL
 # Gatepath excluded from the VPN: CONFINED, monitor opens the session, sign-in completes.
+# No mark_bound_end (or any sink marker) here: Gatepath is outside the VPN, so
+# the sink is not an oracle for it — see step_pull_vpn_sink's `oracle` flag.
 STEPS_EXCLUDING: list[Callable[[dict], dict]] = COMMON_HEAD + [
     step("launch_app", step_launch_app), step("wait_confinement_state", step_wait_confinement_state),
     step("wait_portal_screen", step_wait_portal_screen), step("submit_login", step_submit_login),
-    step("wait_validated", step_wait_validated), step("mark_bound_end", step_mark_bound_end),
+    step("wait_validated", step_wait_validated),
 ] + COMMON_TAIL
 
 

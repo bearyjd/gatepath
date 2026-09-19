@@ -32,3 +32,21 @@ def test_both_modes_install_the_test_vpn_and_pull_the_sink():
         assert "install_testvpn" in names
         assert "pull_vpn_sink" in names
         assert "pull_audit_log" in names
+
+
+def test_excluding_mode_lays_no_sink_markers():
+    """Gatepath is outside the VPN in `excluding` mode, so the sink is not an
+    oracle for it -- no phase-marker steps should run at all."""
+    names = rs.step_names(rs.STEPS_EXCLUDING)
+    assert "mark_bound_end" not in names
+    assert "liveness_probe" not in names
+    assert "settle_covering" not in names
+
+
+def test_covering_mode_lays_bound_end_via_settle_not_a_separate_step():
+    """settle_covering itself marks bound_end (closing the window it opened
+    via liveness_probe's bound_begin) -- there is no separate mark_bound_end
+    step on the covering side."""
+    names = rs.step_names(rs.STEPS_COVERING)
+    assert "settle_covering" in names
+    assert "mark_bound_end" not in names
