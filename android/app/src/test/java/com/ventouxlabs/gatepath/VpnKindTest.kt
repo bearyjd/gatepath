@@ -1,7 +1,9 @@
 package com.ventouxlabs.gatepath
 
+import com.ventouxlabs.gatepath.network.VpnHeuristics
 import com.ventouxlabs.gatepath.network.VpnKind
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class VpnKindTest {
@@ -29,5 +31,12 @@ class VpnKindTest {
     @Test
     fun `matching is case-insensitive and reads the descriptor prefix only`() {
         assertEquals(VpnKind.TAILSCALE, VpnKind.fromInterfaces(listOf("Tailscale0 (full_tunnel)")))
+    }
+
+    @Test
+    fun `every vendor prefix VpnKind matches is in VpnHeuristics VPN_PREFIXES`() {
+        val vendorPrefixes = VpnKind.entries.mapNotNull { it.interfacePrefix }
+        vendorPrefixes.forEach { prefix -> assertTrue(prefix in VpnHeuristics.VPN_PREFIXES) }
+        assertEquals(setOf("tailscale", "torguard"), vendorPrefixes.toSet())
     }
 }
