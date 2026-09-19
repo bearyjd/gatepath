@@ -29,7 +29,8 @@ exercised only through fakes. Closing that is the highest-value work.
 ## P0 — Evals that test the actual intent
 
 ### P0.1 — No-leak sentinel test (both platforms)
-**Status:** **proven on both platforms.** Desktop — see P0.2. Android — a
+**Status:** **proven on both platforms (2026-09: Android re-proven with a
+separate VPN owner; see below).** Desktop — see P0.2. Android — a
 debug-only `VpnService` leak detector + harness + the D1-liveness/D2-confinement
 assertion run green end-to-end on the CI emulator (`android-e2e`): an unbound
 liveness probe reaches the default route (D1) while the WiFi-bound portal session's
@@ -48,7 +49,8 @@ it does:
   the captive portal IS reachable. Green and reproducible (3/3) on real hardware
   (Bazzite). The docker harness continues exercising the portal flow + off-domain
   blocking (with faked PHY) and is wired into CI (`desktop-e2e.yml`).
-- **Android** (`tests/e2e-android`): **proven** — a debug-only `VpnService`
+- **Android** (`tests/e2e-android`): **proven (2026-09: re-proven with a
+  separate VPN owner; see below)** — a debug-only `VpnService`
   becomes the default network; the assertion verifies an unbound probe reaches the
   sentinel (D1) and the WiFi-bound portal session's sentinel attempt never reaches
   the VPN sink (D2), with a positive control that the WebView actually attempted

@@ -175,4 +175,4 @@ strict × hostname cell:**
 | Automatic | Confined | Confined |
 | Strict | DnsStrict | Confined |
 
-Devices used: Pixel 9 Pro Fold, Pixel 10 Pro Fold.
+Target devices (no run recorded yet): Pixel 9 Pro Fold, Pixel 10 Pro Fold.
