@@ -80,8 +80,8 @@ def test_reversed_markers_fail():
 GW_PORTAL = {"path": "/portal", "headers": {"Host": "10.0.2.2:18080",
                                             "User-Agent": "Mozilla/5.0 (Linux; Android 14)"}}
 GW_OFF_DOMAIN = {"path": "/track.js", "headers": {"Host": "evil-tracker.example.com"}}
-AUDIT_COUNTED = {"blocked_navigation_attempts": 1, "blocked_resource_requests": 0}
-AUDIT_ZERO = {"blocked_navigation_attempts": 0, "blocked_resource_requests": 0}
+AUDIT_COUNTED = {"observed_navigation_attempts": 1, "observed_resource_requests": 0}
+AUDIT_ZERO = {"observed_navigation_attempts": 0, "observed_resource_requests": 0}
 # Verbatim from CI run 30418445289. The request was ALLOWED out and DNS is what
 # stopped it — neither off-domain hostname resolves in the emulator. A refusal
 # short-circuits in shouldOverrideUrlLoading / shouldInterceptRequest and never

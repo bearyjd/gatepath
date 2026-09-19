@@ -285,7 +285,7 @@ def check_off_domain(
 
     counted = 0
     for e in audit_entries:
-        for field in ("blocked_navigation_attempts", "blocked_resource_requests"):
+        for field in ("observed_navigation_attempts", "observed_resource_requests"):
             value = e.get(field)
             if isinstance(value, int) and value > 0:
                 counted += value

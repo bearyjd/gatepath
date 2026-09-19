@@ -9,18 +9,19 @@ The **machine-readable contract** lives in [`audit_log_schema.json`](audit_log_s
 Both platforms' test suites load that file and assert their writer's output conforms,
 so this Markdown is for humans; the JSON is the source of truth.
 
-Every entry **must** validate against the schema below. `schema_version: 1` is the only
-currently defined version. Increment it for any breaking change.
+Every entry **must** validate against the schema below. Currently `schema_version: 2`.
+Increment it for any breaking change.
 
 **Adding** a field is not a breaking change and does not bump the version: new
 fields go in the JSON contract's `optional_fields` list. Writers on both
 platforms must emit every optional field; readers must tolerate its absence,
-because lines written before the field existed are still valid `v1`. Removing
-a field, or changing an existing one, *is* breaking and does require a bump.
+because lines written before the field existed are still valid `v1` (with
+`v1_key_renames` applied). Removing a field, or changing an existing one,
+*is* breaking and does require a bump.
 
 ```json
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "timestamp_utc": "2026-05-05T12:34:56.000Z",
   "platform": "android",
   "ssid": "Airport-WiFi",
@@ -32,8 +33,9 @@ a field, or changing an existing one, *is* breaking and does require a bump.
   "session_closed_utc": "2026-05-05T12:36:42.000Z",
   "close_reason": "portal_completed",
   "duration_seconds": 162,
-  "blocked_navigation_attempts": 2,
-  "blocked_resource_requests": 11,
+  "observed_navigation_attempts": 2,
+  "observed_resource_requests": 11,
+  "confinement": "confined",
   "tls_cert_errors_bypassed": 0
 }
 ```
@@ -42,7 +44,7 @@ a field, or changing an existing one, *is* breaking and does require a bump.
 
 | Field | Type | Notes |
 |---|---|---|
-| `schema_version` | `int` | Always `1` for this revision. |
+| `schema_version` | `int` | Always `2` for this revision. |
 | `timestamp_utc` | `string` (ISO 8601, UTC, `Z` suffix) | When the entry was written. |
 | `platform` | `"android" \| "desktop"` | Which app produced the entry. |
 | `ssid` | `string \| null` | WiFi SSID if known and permitted. |
@@ -54,9 +56,10 @@ a field, or changing an existing one, *is* breaking and does require a bump.
 | `session_closed_utc` | `string \| null` (ISO 8601) | `null` only if the entry is for a session that never closed (should not happen for normal exit). |
 | `close_reason` | `"portal_completed" \| "user_dismissed" \| "timeout" \| "error" \| "aborted_pre_active"` | Non-null required. See enum below. |
 | `duration_seconds` | `int` | Whole seconds between open and close. `0` is valid for `aborted_pre_active`. |
-| `blocked_navigation_attempts` | `int` | Off-domain navigations the WebView observed. **Same meaning on both platforms.** Field name retained for schema-version compatibility — see "Field-name caveat" below. |
-| `blocked_resource_requests` | `int` | Tracker-domain subresource requests the WebView observed. **Same meaning on both platforms** as of the cookie/DOM-storage rework — see "Field-name caveat" below. |
-| `tls_cert_errors_bypassed` | `int` | *Optional field (added after v1 shipped).* Certificate errors the WebView was told to proceed past. **Platform-specific:** on Android, the count of `onReceivedSslError` → `handler.proceed()` calls, which only ever happen for the portal host and its subdomains; cert errors on any other host are cancelled and not counted. Non-zero means the session rendered a page whose certificate did not validate. On desktop this is **always `0`** — the WebKitGTK view has no TLS-error handler, so it never bypasses and has nothing to count. |
+| `observed_navigation_attempts` | `int` | Off-domain navigations the WebView observed. Counted and allowed to load. Same meaning on both platforms. See SECURITY_MODEL.md. |
+| `observed_resource_requests` | `int` | Tracker-domain subresource requests the WebView observed. Counted and allowed to load. Same meaning on both platforms. See SECURITY_MODEL.md. |
+| `confinement` | `"confined" \| "unconfined"` | Network confinement state. **Android:** Always `"confined"` — a session opens only when the Wi-Fi-bound probe reached the gateway, which netd permits only when no VPN covers Gatepath (or Gatepath is excluded from it). **Desktop:** `"confined"` when the netns helper launched the portal WebView inside the gatepath namespace; `"unconfined"` for the in-process (Flatpak-only) path where WebKitGTK traffic follows the system default route. See SECURITY_MODEL.md. |
+| `tls_cert_errors_bypassed` | `int` | *Optional field (added after v1 shipped).* Certificate errors the WebView was told to proceed past on the portal host. **Android:** count of `onReceivedSslError` → `handler.proceed()` calls, which only ever happen for the portal host and its subdomains; cert errors on any other host are cancelled and not counted. Non-zero means the session rendered a page whose certificate did not validate. **Desktop:** count of TLS errors proceeded past (gated by `ssl_error_policy` — same host-scoped rule as Android). The count travels through the portal observation channel (`portal_observations`); 0 when that file is missing or unreadable. Non-zero means the session rendered a page whose certificate did not validate. |
 
 ## `close_reason` enum
 
@@ -68,30 +71,26 @@ a field, or changing an existing one, *is* breaking and does require a bump.
 | `error` | Unrecoverable error during an active session. |
 | `aborted_pre_active` | Session was terminated before the portal window opened — either by an involuntary event (network lost during `Detected` phase) or by the user dismissing the portal banner before opening the window. `duration_seconds` will be `0` and `session_closed_utc` will equal `session_opened_utc` (synthetic timestamps, both stamped at close time). `portal_domain` MAY be empty when the session never observed a portal URL (e.g., dismissal during `Monitoring`). For all other `close_reason` values, `portal_domain` is required and non-empty. |
 
-## Field-name caveat: `blocked_*` is now "observed", not "refused"
+## Version history
 
-Both `blocked_navigation_attempts` and `blocked_resource_requests` previously
-meant "the WebView refused to load this". After the cookie/DOM-storage rework
-(see `SECURITY_MODEL.md`), the WebView **allows** these to load but counts
-them in the audit log:
+### Schema v1 (2026-05)
 
-- **Off-domain navigations** are allowed because captive vendors (Meraki,
-  Cisco ISE, UniFi, Aruba) POST sign-in forms to backend hosts on a different
-  hostname than the splash page. Hard-refusing cancelled the form submit and
-  broke real-world sign-ins.
-- **Tracker subresource requests** are allowed because captive splash pages
-  embed Google Analytics / Tag Manager whose `ReferenceError` on `gtag(...)`
-  killed the entire inline `<script>` block — including the Continue button's
-  click-handler binding. The page rendered but the button did nothing.
+Initial version. Renamed in v2 to "observed" (was "blocked").
 
-The field names stay `blocked_*` to preserve schema version 1 (Android/desktop
-parity tests, existing log consumers). The semantics are now identical on
-both platforms: **count of observed requests, not cancelled requests**. The
-privacy boundary moved from "request prevention" to "lifecycle isolation" —
-cookies, `sessionStorage`, `localStorage`, and cache are wiped via
-`CookieManager.removeAllCookies` + `WebStorage.deleteAllData` +
-`clearCache(true)` on session close, so nothing the trackers set persists
-past the session.
+### Schema v2 (current)
+
+- Renamed `blocked_navigation_attempts` → `observed_navigation_attempts` and
+  `blocked_resource_requests` → `observed_resource_requests` to clarify that
+  these are counts of observed requests, not cancelled requests. The WebView
+  allows these to load and counts them in the audit log. Readers must apply
+  `v1_key_renames` (see `audit_log_schema.json`) when decoding v1 lines so old
+  counts stay intact.
+- Added `confinement` field (required): `"confined"` or `"unconfined"`, tracking
+  whether the portal WebView ran inside a network namespace (confined) or used
+  the system default route (unconfined). Platform-specific semantics in the JSON.
+- Updated `tls_cert_errors_bypassed` documentation to reflect current behavior:
+  desktop now counts real TLS bypasses (from the portal observation channel),
+  not always 0.
 
 ## Reading
 
