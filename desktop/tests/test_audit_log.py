@@ -73,7 +73,7 @@ class TestWriteSession:
         write_session(_make_completed_session(), log_path=log)
         entry = read_all(log_path=log)[0]
 
-        assert entry["schema_version"] == 1
+        assert entry["schema_version"] == 2
         assert isinstance(entry["schema_version"], int)
         assert entry["platform"] == "desktop"
         assert entry["timestamp_utc"].endswith("Z")
@@ -83,8 +83,8 @@ class TestWriteSession:
         assert isinstance(entry["vpn_warning_shown"], bool)
         assert isinstance(entry["duration_seconds"], int)
         assert entry["duration_seconds"] == 162
-        assert isinstance(entry["blocked_navigation_attempts"], int)
-        assert isinstance(entry["blocked_resource_requests"], int)
+        assert isinstance(entry["observed_navigation_attempts"], int)
+        assert isinstance(entry["observed_resource_requests"], int)
         assert entry["close_reason"] == "portal_completed"
 
     def test_ssid_and_gateway_preserved(self, tmp_path: Path) -> None:
@@ -305,3 +305,25 @@ class TestSchemaConformance:
                 f"field {field}: expected {expected_type}, got "
                 f"{type(entry[field]).__name__}={entry[field]!r}"
             )
+
+    def test_confinement_defaults_to_unconfined_and_is_in_enum(self, tmp_path: Path) -> None:
+        log = tmp_path / "audit.jsonl"
+        write_session(_make_completed_session(), log_path=log)
+        entry = read_all(log_path=log)[0]
+        assert entry["confinement"] == "unconfined"
+        assert entry["confinement"] in set(_SCHEMA["confinement_enum"])
+
+    def test_confined_session_writes_confined(self, tmp_path: Path) -> None:
+        import dataclasses
+        from gatepath.portal_session import Confinement
+        log = tmp_path / "audit.jsonl"
+        write_session(
+            dataclasses.replace(_make_completed_session(), confinement=Confinement.CONFINED),
+            log_path=log,
+        )
+        assert read_all(log_path=log)[0]["confinement"] == "confined"
+
+    def test_every_confinement_value_is_in_the_schema_enum(self) -> None:
+        from gatepath.portal_session import Confinement
+        for c in Confinement:
+            assert c.value in set(_SCHEMA["confinement_enum"])

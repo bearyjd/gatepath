@@ -48,6 +48,16 @@ class CloseReason(str, Enum):
     ABORTED_PRE_ACTIVE = "aborted_pre_active"
 
 
+class Confinement(str, Enum):
+    """Whether the portal WebView ran inside the gatepath netns.
+
+    Wire values; see docs/audit_log_schema.json `confinement_enum`.
+    """
+
+    CONFINED = "confined"
+    UNCONFINED = "unconfined"
+
+
 # Allowed (from_phase, to_phase) pairs.
 _VALID_TRANSITIONS: frozenset[tuple[PortalPhase, PortalPhase]] = frozenset(
     {
@@ -96,6 +106,11 @@ class PortalSession:
     # an observation: a non-zero value means the session rendered a page whose
     # certificate did not validate.
     tls_cert_errors_bypassed: int = 0
+
+    # Whether the portal WebView ran inside the gatepath netns. Set by the
+    # caller (window.py) at the isolated engage site; default reflects the
+    # in-process (unconfined) path.
+    confinement: Confinement = Confinement.UNCONFINED
 
     @property
     def duration_seconds(self) -> Optional[int]:

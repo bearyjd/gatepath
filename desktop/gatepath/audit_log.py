@@ -1,6 +1,6 @@
 """Audit log writer — pure stdlib, append-only JSONL.
 
-Conforms exactly to docs/AUDIT_LOG_SCHEMA.md (schema_version=1).
+Conforms exactly to docs/AUDIT_LOG_SCHEMA.md (schema_version=2).
 Thread-safe via a module-level lock.  For tests, pass log_path explicitly
 so no XDG directories are touched.
 """
@@ -78,7 +78,7 @@ def write_session(
     path.parent.mkdir(parents=True, exist_ok=True)
 
     entry: dict = {
-        "schema_version": 1,
+        "schema_version": 2,
         "timestamp_utc": _now_utc_iso(),
         "platform": "desktop",
         "ssid": session.ssid,
@@ -90,14 +90,15 @@ def write_session(
         "session_closed_utc": _utc_iso(session.session_closed_utc),
         "close_reason": session.close_reason.value,
         "duration_seconds": session.duration_seconds if session.duration_seconds is not None else 0,
-        "blocked_navigation_attempts": session.blocked_navigation_attempts,
-        "blocked_resource_requests": session.blocked_resource_requests,
+        "observed_navigation_attempts": session.blocked_navigation_attempts,
+        "observed_resource_requests": session.blocked_resource_requests,
         # Real count as of the observation channel (#123): the portal WebView
         # runs in a subprocess and its counters are folded into the session via
         # SessionController.apply_observations before this entry is written.
         # Still 0 when that file is missing or unreadable — a lost count must
         # not cost us the whole session record.
         "tls_cert_errors_bypassed": session.tls_cert_errors_bypassed,
+        "confinement": session.confinement.value,
     }
 
     line = json.dumps(entry, ensure_ascii=False) + "\n"
