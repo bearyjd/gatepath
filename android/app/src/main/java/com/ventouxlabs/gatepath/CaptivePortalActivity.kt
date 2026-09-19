@@ -6,13 +6,30 @@ import android.net.ConnectivityManager
 import android.net.Network
 import android.os.Build
 import android.os.Bundle
+import android.provider.Settings
 import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.lifecycle.lifecycleScope
+import com.ventouxlabs.gatepath.network.CONNECTIVITY_CHECK_URL
+import com.ventouxlabs.gatepath.network.ClassificationInputs
+import com.ventouxlabs.gatepath.network.ConfinementState
+import com.ventouxlabs.gatepath.network.PortalProbe
+import com.ventouxlabs.gatepath.network.ProbeResult
+import com.ventouxlabs.gatepath.network.VpnDetector
+import com.ventouxlabs.gatepath.network.VpnKind
+import com.ventouxlabs.gatepath.network.classify
+import com.ventouxlabs.gatepath.ui.ConfinementAction
+import com.ventouxlabs.gatepath.ui.ConfinementCard
 import com.ventouxlabs.gatepath.ui.PortalScreen
+import com.ventouxlabs.gatepath.ui.VpnAppLauncher
 import com.ventouxlabs.gatepath.ui.theme.GatepathTheme
 import dagger.hilt.android.AndroidEntryPoint
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.net.URI
 import javax.inject.Inject
 
 /**
@@ -27,14 +44,16 @@ import javax.inject.Inject
  *   - [ConnectivityManager.EXTRA_NETWORK] — the captive [Network]. The
  *     activity binds the process to this network via
  *     [ConnectivityManager.bindProcessToNetwork] so the WebView's traffic
- *     routes via the captive interface. Receiving the CAPTIVE_PORTAL intent
- *     is the system's signal that this app is the chosen sign-in handler;
- *     the framework permits restricted-network access in this context,
- *     bypassing the `EPERM (Operation not permitted)` that direct probes
- *     hit when the network is captive.
+ *     routes via the captive interface.
  *
  *   - [ConnectivityManager.EXTRA_CAPTIVE_PORTAL_URL] — the URL the captive
  *     portal redirected to (the actual sign-in page). Available API 28+.
+ *
+ * Arriving here is not proof that the traffic can reach the gateway: a
+ * secure VPN still covers this UID, so the bind can still fail with EPERM.
+ * The activity therefore classifies the network first ([ConfinementState])
+ * and shows a WebView only from [ConfinementState.Confined]; every other
+ * state gets the confinement card instead of a page that cannot load.
  *
  * On dismiss with success → [CaptivePortal.reportCaptivePortalDismissed].
  * On dismiss without success (back button, system kill) → [CaptivePortal.ignoreNetwork].
@@ -45,6 +64,9 @@ class CaptivePortalActivity : ComponentActivity() {
     @Inject
     lateinit var connectivityManager: ConnectivityManager
 
+    @Inject
+    lateinit var probe: PortalProbe
+
     private var captivePortal: CaptivePortal? = null
     private var reported = false
 
@@ -54,7 +76,7 @@ class CaptivePortalActivity : ComponentActivity() {
 
         captivePortal = readCaptivePortalExtra(intent)
         val portalUrl = intent.getStringExtra(ConnectivityManager.EXTRA_CAPTIVE_PORTAL_URL)
-            ?: DEFAULT_CONNECTIVITY_CHECK_URL
+            ?: CONNECTIVITY_CHECK_URL
 
         val portal = captivePortal
         if (portal == null) {
@@ -78,10 +100,7 @@ class CaptivePortalActivity : ComponentActivity() {
         }
 
         // Bind the process to the captive network so the WebView's traffic
-        // routes via that interface. Receiving the CAPTIVE_PORTAL intent is
-        // the system's signal that this app is the chosen sign-in handler;
-        // the framework permits restricted-network access in this context,
-        // bypassing the EPERM that direct probes hit.
+        // routes via that interface.
         connectivityManager.bindProcessToNetwork(network)
 
         Log.i(
@@ -89,17 +108,60 @@ class CaptivePortalActivity : ComponentActivity() {
             "Handling captive portal for network $network at $portalUrl",
         )
 
+        lifecycleScope.launch {
+            val bound = withContext(Dispatchers.IO) { probe.probe(network, testUrl = CONNECTIVITY_CHECK_URL) }
+            val vpn = withContext(Dispatchers.IO) { VpnDetector.detect() }
+            val strict = connectivityManager.getLinkProperties(network)?.privateDnsServerName != null
+            val resolved = (bound as? ProbeResult.Portal)?.let { p ->
+                val host = runCatching { URI(p.locationUrl).host }.getOrNull()
+                if (host == null || host.all { it.isDigit() || it == '.' } || host.contains(':')) null
+                else withContext(Dispatchers.IO) { runCatching { network.getAllByName(host).isNotEmpty() }.getOrDefault(false) }
+            }
+            val state = classify(ClassificationInputs(bound, null, vpn.interfaces, strict, resolved))
+            Log.i(TAG, "System handoff confinement: ${state.schemaName}")
+            // The system delivered a URL; prefer it over the probe's when confined.
+            val url = if (state is ConfinementState.Confined) portalUrl else null
+            render(state, url, network)
+        }
+    }
+
+    /**
+     * Show the sign-in page when [url] is non-null, otherwise the one action
+     * this confinement state allows. Sharing is absent on purpose: the
+     * evidence bundle belongs to the ViewModel in `MainActivity`, and this
+     * entry point has no session of its own to attach it to.
+     */
+    private fun render(state: ConfinementState, url: String?, network: Network) {
         setContent {
             GatepathTheme {
-                PortalScreen(
-                    portalUrl = portalUrl,
-                    network = network,
-                    connectivityManager = connectivityManager,
-                    onDismiss = ::reportSignedIn,
-                    onBlockedNavigation = {},
-                    onBlockedResource = {},
-                    onTlsCertErrorBypassed = {},
-                )
+                if (url != null) {
+                    PortalScreen(
+                        portalUrl = url,
+                        network = network,
+                        connectivityManager = connectivityManager,
+                        onDismiss = ::reportSignedIn,
+                        onBlockedNavigation = {},
+                        onBlockedResource = {},
+                        onTlsCertErrorBypassed = {},
+                    )
+                } else {
+                    val kind = (state as? ConfinementState.Tunnelled)?.vpnKind
+                        ?: (state as? ConfinementState.Blocked)?.vpnKind ?: VpnKind.NONE
+                    val (label, launch) = VpnAppLauncher.resolve(this, kind)
+                    ConfinementCard(
+                        state = state,
+                        vpnAppLabel = label,
+                        onAction = { action ->
+                            when (action) {
+                                ConfinementAction.OPEN_VPN_APP -> startActivity(launch)
+                                ConfinementAction.OPEN_NETWORK_SETTINGS ->
+                                    startActivity(Intent(Settings.ACTION_WIRELESS_SETTINGS))
+                                ConfinementAction.SIGN_IN_HERE, ConfinementAction.SHARE_EVIDENCE -> Unit
+                            }
+                        },
+                        onShareEvidence = { /* no bundle on this entry; MainActivity owns sharing */ },
+                    )
+                }
             }
         }
     }
@@ -155,7 +217,5 @@ class CaptivePortalActivity : ComponentActivity() {
 
     companion object {
         private const val TAG = "GatepathCaptive"
-        private const val DEFAULT_CONNECTIVITY_CHECK_URL =
-            "http://connectivitycheck.gstatic.com/generate_204"
     }
 }
