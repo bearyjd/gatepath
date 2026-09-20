@@ -94,6 +94,38 @@ session record. The same channel carries `observed_navigation_attempts` and
 `observed_resource_requests` (schema v2; `blocked_*` in v1), which were
 previously always 0 on desktop.
 
+### Off-device diagnostics: WebView console capture
+
+The portal WebView's `console.log`/`warn`/`error` output is captured into a
+bounded, session-scoped, app-private file (`files/webview-console.jsonl`,
+last 200 messages, ~500 characters each) and included in the "Share
+Diagnostics" bundle. This exists so a UI-level portal bug (not a network
+failure `DiagnosisResult` would catch) leaves a trail that can be debugged
+off-device — the file never leaves the device on its own; it is only read
+when the user explicitly shares a diagnostics bundle.
+
+Redaction (default on, same toggle as the rest of the bundle) applies two
+passes to console text: the same known-identifier substitution (SSID,
+gateway IP, portal domain) and IPv4 masking already applied to the diagnosis
+text, plus a generic heuristic that masks long alphanumeric/base64/hex runs
+(≥20 characters) and JWT-shaped strings. **This is best-effort, not a
+guarantee** — an unusual secret shape could still slip through, and the
+heuristic can occasionally over-redact an ordinary long identifier. Unlike
+logcat (which still drops message bodies in release builds — a broader
+exposure surface, readable by any app holding `READ_LOGS`), the console
+capture file is app-private and only reaches anyone else if the user
+explicitly shares it.
+
+If the app process dies mid-session before the buffer flushes (dispose never
+runs), that session's capture is lost silently — no partial flush. Accepted
+for v1: this is best-effort off-device diagnostics, not a guarantee.
+
+A flush with nothing captured (the page logged no console output) does not
+overwrite the file, so it holds the most recent *non-empty* capture rather
+than strictly the last session — a quiet page can't erase a previous page's
+trail. Each entry carries its own `sourceHost`, so provenance stays visible
+even when the capture predates the session that's currently active.
+
 ## What Gatepath itself sends
 
 Everything above describes traffic Gatepath *prevents*. This section is the converse:

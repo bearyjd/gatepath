@@ -326,4 +326,150 @@ class DiagnosticsBundleTest {
         rawContentType = rawContentType,
         redirectSignal = PortalProbeCapture.RedirectSignal.SCRIPTED_LOCATION,
     )
+
+    private fun consoleEntry(message: String, level: String = "ERROR", sourceHost: String = "portal.example.com") =
+        ConsoleCaptureEntry(
+            level = level,
+            sourceHost = sourceHost,
+            lineNumber = 42,
+            message = message,
+            offsetMs = 100,
+        )
+
+    @Test
+    fun `console section states there were no messages when empty`() {
+        val out = DiagnosticsBundle.build(meta, entries = emptyList(), diagnosis = null, redact = false)
+        assertTrue(out.contains("(no console messages captured)"))
+    }
+
+    @Test
+    fun `console messages are rendered with level, host, line and text`() {
+        val out = DiagnosticsBundle.build(
+            meta,
+            entries = emptyList(),
+            diagnosis = null,
+            consoleEntries = listOf(consoleEntry("form submitted")),
+            redact = false,
+        )
+        assertTrue(out.contains("[ERROR] portal.example.com:42 form submitted"))
+    }
+
+    @Test
+    fun `redact masks a long token-shaped string in a console message`() {
+        val out = DiagnosticsBundle.build(
+            meta,
+            entries = emptyList(),
+            diagnosis = null,
+            consoleEntries = listOf(consoleEntry("session=a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5")),
+            redact = true,
+        )
+        assertFalse(out.contains("a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5"))
+        assertTrue(out.contains("REDACTED"))
+    }
+
+    @Test
+    fun `redact masks a JWT-shaped string as a single token, no fragment surviving`() {
+        val jwt = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U"
+        val out = DiagnosticsBundle.build(
+            meta,
+            entries = emptyList(),
+            diagnosis = null,
+            consoleEntries = listOf(consoleEntry("auth token: $jwt")),
+            redact = true,
+        )
+        assertFalse(out.contains(jwt))
+        assertFalse("no fragment of the JWT should survive", out.contains("eyJhbGciOiJIUzI1NiJ9"))
+    }
+
+    @Test
+    fun `redact does not mangle ordinary short portal copy`() {
+        val out = DiagnosticsBundle.build(
+            meta,
+            entries = emptyList(),
+            diagnosis = null,
+            consoleEntries = listOf(consoleEntry("Please accept the terms and conditions to continue")),
+            redact = true,
+        )
+        assertTrue(out.contains("Please accept the terms and conditions to continue"))
+        assertFalse(out.contains("REDACTED"))
+    }
+
+    @Test
+    fun `redact still scrubs known identifiers inside a console message`() {
+        val out = DiagnosticsBundle.build(
+            meta,
+            listOf(entry(portalDomain = "portal.example.com")),
+            diagnosis = null,
+            consoleEntries = listOf(consoleEntry("Redirecting to portal.example.com/login")),
+            redact = true,
+        )
+        assertFalse(out.contains("portal.example.com/login"))
+    }
+
+    @Test
+    fun `redact does not leave a fragment of a known identifier eaten by the generic token pass`() {
+        // A domain long enough to trip LONG_TOKEN's 20+ char threshold before
+        // the "." — if the generic pass ran first it would mask only the
+        // label, leaving ".example.com" behind even though the whole domain
+        // is a known identifier from the audit entries.
+        val out = DiagnosticsBundle.build(
+            meta,
+            listOf(entry(portalDomain = "verylongsubdomainlabelxyz.example.com")),
+            diagnosis = null,
+            consoleEntries = listOf(
+                consoleEntry(
+                    "Redirecting to verylongsubdomainlabelxyz.example.com/login",
+                    sourceHost = "js.example.net",
+                ),
+            ),
+            redact = true,
+        )
+        assertFalse("no fragment of the known domain should survive", out.contains(".example.com"))
+        assertFalse(out.contains("verylongsubdomainlabelxyz"))
+    }
+
+    @Test
+    fun `redact masks a token at exactly the 20 char threshold but not at 19`() {
+        val nineteen = "x".repeat(19)
+        val twenty = "x".repeat(20)
+        val out = DiagnosticsBundle.build(
+            meta,
+            entries = emptyList(),
+            diagnosis = null,
+            consoleEntries = listOf(
+                consoleEntry("token19=$nineteen", level = "ERROR"),
+                consoleEntry("token20=$twenty", level = "WARNING"),
+            ),
+            redact = true,
+        )
+        assertTrue("a 19-char token is below the threshold and must survive", out.contains(nineteen))
+        assertFalse("a 20-char token must be masked", out.contains(twenty))
+    }
+
+    @Test
+    fun `no redact preserves console message text verbatim`() {
+        val out = DiagnosticsBundle.build(
+            meta,
+            entries = emptyList(),
+            diagnosis = null,
+            consoleEntries = listOf(consoleEntry("session=a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5")),
+            redact = false,
+        )
+        assertTrue(out.contains("a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5"))
+    }
+
+    @Test
+    fun `console_messages_unreadable is reported only when nonzero`() {
+        val damaged = DiagnosticsBundle.build(
+            meta, entries = emptyList(), diagnosis = null,
+            consoleEntries = listOf(consoleEntry("hi")), consoleUnreadable = 2, redact = false,
+        )
+        assertTrue(damaged.contains("console_messages_unreadable: 2"))
+
+        val clean = DiagnosticsBundle.build(
+            meta, entries = emptyList(), diagnosis = null,
+            consoleEntries = listOf(consoleEntry("hi")), redact = false,
+        )
+        assertFalse(clean.contains("console_messages_unreadable"))
+    }
 }

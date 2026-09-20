@@ -1,10 +1,12 @@
 package com.ventouxlabs.gatepath.ui
 
+import android.content.Context
 import android.graphics.Bitmap
 import android.net.ConnectivityManager
 import android.net.Network
 import android.net.Uri
 import android.net.http.SslError
+import android.os.SystemClock
 import android.util.Log
 import android.webkit.ConsoleMessage
 import android.webkit.CookieManager
@@ -28,8 +30,13 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.viewinterop.AndroidView
 import com.ventouxlabs.gatepath.BuildConfig
+import com.ventouxlabs.gatepath.diag.CONSOLE_CAPTURE_FILE_NAME
 import com.ventouxlabs.gatepath.diag.CertSummary
+import com.ventouxlabs.gatepath.diag.ConsoleCaptureBuffer
+import com.ventouxlabs.gatepath.diag.ConsoleCaptureEntry
+import com.ventouxlabs.gatepath.diag.ConsoleCaptureFile
 import com.ventouxlabs.gatepath.network.BlockedDomains
+import java.io.File
 import java.net.URI
 
 private const val TAG = "GatepathWebView"
@@ -82,6 +89,9 @@ fun GatepathWebView(
 ) {
     val context = LocalContext.current
     val portalHost = remember(url) { runCatching { URI(url).host }.getOrNull() ?: "" }
+
+    val consoleCapture = remember { ConsoleCaptureBuffer() }
+    var sessionStartElapsedMs by remember { mutableStateOf(SystemClock.elapsedRealtime()) }
 
     val webView = remember {
         // Debug-only: lets `chrome://inspect` attach to this WebView so the
@@ -170,6 +180,22 @@ fun GatepathWebView(
                         "(line ${msg.lineNumber()})"
                     }
                     Log.println(level, TAG, "console: [${msg.messageLevel()}] $detail")
+
+                    // Unconditional, unlike the logcat line above: this goes to
+                    // an app-private file (files/, not world-readable), never
+                    // to logcat, which any app holding READ_LOGS could read.
+                    // Redaction happens at bundle-build time (DiagnosticsBundle),
+                    // not by dropping the message here.
+                    consoleCapture.record(
+                        ConsoleCaptureEntry(
+                            level = msg.messageLevel().name,
+                            sourceHost = runCatching { Uri.parse(msg.sourceId()).host }
+                                .getOrNull() ?: "(unknown)",
+                            lineNumber = msg.lineNumber(),
+                            message = msg.message(),
+                            offsetMs = SystemClock.elapsedRealtime() - sessionStartElapsedMs,
+                        ),
+                    )
                     return true
                 }
             }
@@ -186,6 +212,7 @@ fun GatepathWebView(
         onDispose {
             connectivityManager.bindProcessToNetwork(null)
             clearPortalSessionState(webView)
+            flushConsoleCapture(context, consoleCapture)
         }
     }
 
@@ -203,6 +230,13 @@ fun GatepathWebView(
         // letting the old portal's session state bleed into the new one.
         if (url != lastLoadedUrl) {
             clearPortalSessionState(webView)
+            // Flush the outgoing page's messages before clearing the buffer for
+            // the new one, and reset offsetMs's baseline — otherwise the next
+            // flush would mix two pages' messages, and the new page's offsets
+            // would carry the old session's elapsed time.
+            flushConsoleCapture(context, consoleCapture)
+            consoleCapture.clear()
+            sessionStartElapsedMs = SystemClock.elapsedRealtime()
             webView.loadUrl(url)
             lastLoadedUrl = url
         }
@@ -220,6 +254,31 @@ fun GatepathWebView(
     }
 
     AndroidView(factory = { webView }, modifier = modifier)
+}
+
+/**
+ * Writes the current buffer contents to `files/webview-console.jsonl`,
+ * overwriting any prior session. Shared by the same two call sites as
+ * [clearPortalSessionState], for the same reason: either one means this
+ * portal session is over.
+ *
+ * Skips the write when the buffer is empty — an unconditional overwrite would
+ * let a silent page clobber a previous session's captured messages, so the
+ * file always holds the most recent *non-empty* capture rather than the
+ * literal last session. See DiagnosticsBundle's "most recent capture" header.
+ *
+ * The write is wrapped in [runCatching] because both call sites run in
+ * Compose `onDispose`/`LaunchedEffect` on the main thread, tearing down a live
+ * portal session — an IOException here (e.g. full disk) must not crash the
+ * app. A failed capture is the "lost silently" case SECURITY_MODEL.md already
+ * documents as an accepted limitation.
+ */
+private fun flushConsoleCapture(context: Context, buffer: ConsoleCaptureBuffer) {
+    val entries = buffer.snapshot()
+    if (entries.isEmpty()) return
+    runCatching {
+        ConsoleCaptureFile.write(File(context.filesDir, CONSOLE_CAPTURE_FILE_NAME), entries)
+    }
 }
 
 /**
