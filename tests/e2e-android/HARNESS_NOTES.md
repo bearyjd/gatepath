@@ -32,6 +32,15 @@ present. Trade-off: the real system-intent → `CaptivePortalActivity` plumbing 
 **not** exercised (it's untestable here); everything downstream of "PortalScreen
 is showing the portal" is.
 
+As of the confinement-state harness (2026-09), `step_launch_app` — a plain
+`am start` with **no** debug extras — is the entry point in both
+`STEPS_COVERING` and `STEPS_EXCLUDING`: the point of those modes is to prove
+`CaptivePortalMonitor` classifies and (in `excluding` mode) opens the session
+**on its own**, so forcing the session via `gatepath.debug.portal_url` would
+defeat the test. `step_launch_debug_portal` (the intent above) still exists
+in `run-scenario.py` but is no longer wired into either step list — it is
+kept for manual use only (the workflow documented earlier in this section).
+
 ## 2. Three independent components must agree the mock is the captive authority
 
 This is the trap that cost the most rounds: fixing one surfaces the next. All
@@ -62,6 +71,20 @@ the old counter behaviour, so this stays backward compatible.
 
 ## 3. Emulator / harness gotchas
 
+- **The mock must advertise `10.0.2.2`, not its own `0.0.0.0` bind address.**
+  `mockportal-host` binds `0.0.0.0:18080` so the emulator's connection is
+  accepted, but the confinement-state monitor path (unlike the old
+  debug-intent path, which handed Gatepath the portal URL directly) follows
+  the mock's own `Location` header from `/generate_204`. An advertised
+  `0.0.0.0` sends the WebView to `http://0.0.0.0:18080/portal`, which the
+  emulator cannot connect to (`net::ERR_CONNECTION_REFUSED`). Fixed via
+  `build_server(..., advertised_host="10.0.2.2")` (`PORTAL_ADVERTISED_HOST` in
+  `compose.yml` / `entrypoint.sh`), kept independent of the bind host in
+  `mockportal/server.py` so `PORTAL_HOST`'s loopback safeguard is untouched.
+- **`adb_helper.adb()` decodes with `errors="replace"`.** `logcat -d` output is
+  not guaranteed valid UTF-8; one bad byte previously killed
+  `step_start_test_vpn` with `UnicodeDecodeError` rather than surfacing a real
+  step failure.
 - **logcat boot spam buries app logs.** After boot the emulator emits hundreds
   of `AiAiEcho ... package is updated` lines/sec — enough that even a `-t 3000`
   tail contains zero app lines, and the ring buffer rotates them out. Before
@@ -129,25 +152,74 @@ app's own lines land in the captured buffer.
 
 ## No-leak sentinel (ROADMAP P0.1)
 
-A debug-only `VpnService` (`android/app/src/debug/.../testvpn/`) becomes the system
-default network and logs every packet the Gatepath app emits while unbound to
-`files/vpn-sink.jsonl`. Because `bindProcessToNetwork(wifi)` bypasses the VPN, the
-sink is a leak detector:
+A debug-only `VpnService`, now shipped as a **separate, standalone debug app**
+(`android/testvpn/`, package `com.ventouxlabs.gatepath.testvpn`) rather than a
+build variant of Gatepath itself, becomes the system default network and logs
+every packet it observes while Gatepath is unbound to
+`files/vpn-sink.jsonl` (now under the `:testvpn` package's app-private
+storage, pulled from there). The split into its own package is deliberate:
+the original proof ran with Gatepath *owning* the VPN, which grants it socket
+"protect" rights on its own tunnel — a shape that does not match a real user
+running Tailscale or TorGuard, where Gatepath is an ordinary covered app. A
+separate VPN owner closes that gap. The harness runs two VPN modes:
 
-- `liveness_probe` sends an UNBOUND UDP burst to the sentinel `203.0.113.7` — it
-  MUST appear in the sink (D1: proves the sink intercepts the default route).
-- The portal session runs bound to WiFi between the `bound_begin`/`bound_end`
-  marker lines — the sink MUST be packet-silent there (D2: proves confinement).
+- **`covering`** — the `:testvpn` VPN covers Gatepath as a real third-party
+  secure VPN would. `bindProcessToNetwork(wifi)` fails with `EPERM`,
+  `MainViewModel` classifies `Tunnelled`, and no portal session opens at
+  all. This mode reruns the no-leak proof under the realistic covered-app
+  shape:
+  - `liveness_probe` fires the **TCP** sentinel probe (a plain `Socket()`
+    connect to `10.0.2.2:18081`, dispatched via the debug intent
+    `gatepath.debug.sentinel_probe` on Gatepath's own `MainActivity` —
+    **not** the old UDP burst, and not the `:testvpn` app's own `probe`
+    action, since a `VpnService`'s own outbound traffic bypasses the tunnel
+    it creates) — it MUST appear in the sink (D1: proves the sink
+    intercepts the default route for a covered, non-owner app).
+  - `settle_covering` gives the Tunnelled app 20s to misbehave, then lays
+    `bound_end` itself — there is no `bound_begin`/portal session in this
+    mode, so the sink MUST stay silent for that whole settle window
+    (`check_vpn_silent_while_tunnelled` in `driver/assertions.py`: fail-closed
+    confinement, deliberately with no positive-control WebView attempt to
+    check against, since there's no WebView in this mode).
+- **`excluding`** — Gatepath is excluded from the `:testvpn` VPN's
+  disallowed-app list, the shipped product contract.
+  `bindProcessToNetwork(wifi)` succeeds, `MainViewModel` classifies
+  `Confined`, and `CaptivePortalMonitor` opens the session on its own (no
+  debug intent) end-to-end through sign-in. This mode never runs
+  `liveness_probe` or `settle_covering` and lays **no** VPN-sink markers at
+  all — Gatepath's own traffic never rides the tunnel the sink watches, so
+  the sink is not an oracle for it; `driver/assertions.py` asserts nothing
+  about its contents in this mode and only notes it was pulled for the
+  record.
 
-`appops set com.ventouxlabs.gatepath ACTIVATE_VPN allow` suppresses the consent dialog
-(no root). The apparatus is `src/debug/` only; `release-vpn-guard` CI asserts the
-release build excludes it. Negative control: comment out the bind at
-`GatepathWebView.kt` and `vpn.confinement` goes RED.
+`appops set com.ventouxlabs.gatepath.testvpn ACTIVATE_VPN allow` suppresses the
+consent dialog (no root). The apparatus is `android/testvpn/`, a wholly
+separate debug-only application module, never bundled with Gatepath's own
+`app` module and never built for release (the release variant is disabled in
+its `build.gradle.kts`, so `:testvpn:assembleRelease` does not exist). Its
+control activity is exported behind `android.permission.DUMP` and refuses
+intents unless the installed package is debuggable. The shell uid holds `DUMP`
+(so `adb shell am start` reaches it) and no third-party app can. It is **not**
+`exported="false"`: the shell does not hold `START_ANY_ACTIVITY`, and the first
+PR #168 CI round proved a non-exported activity is refused for it ("not exported
+from uid"), which surfaced only as `established=False` three steps later.
+`step_start_test_vpn` now records `am_output` and raises on a denial, so a
+refused launch fails at the step that caused it. `release-vpn-guard` CI
+(`tests/e2e-android/guard/check_release_manifest.py`) asserts Gatepath's own
+merged RELEASE manifest contains none of `GatepathTestVpnService`,
+`BIND_VPN_SERVICE`, or `TestVpnControlActivity`, with a positive control
+confirming those same markers ARE present in `:testvpn`'s own DEBUG
+manifest (so the check isn't vacuously passing). Negative control: comment
+out the bind at `GatepathWebView.kt` and `vpn.confinement` goes RED in
+`excluding`-adjacent manual testing (the `covering` mode's D2 has no
+WebView to un-bind).
 
-**Status:** proven — green and reproducible on the CI emulator (`android-e2e`):
-D1 liveness + D2 confinement pass non-vacuously (the positive control confirms the
-WebView attempted the sentinel). The VPN-as-default mechanism is also confirmed on
-a physical Pixel. Subtleties the emulator surfaced, baked into the harness:
+**Status:** proven — green and reproducible on the CI emulator
+(`android-e2e`, now a `{covering, excluding}` matrix), covering mode's D1
+liveness + D2 confinement pass non-vacuously, and excluding mode proves the
+product contract end-to-end (audit entry with `confinement: confined`). The
+VPN-as-default mechanism is also confirmed on a physical Pixel. Subtleties
+the emulator surfaced, baked into the harness:
 - Write phase markers from the harness via `run-as` append, NOT by `am start`-ing
   the control activity — Android drops the activity launch under rapid succession
   (the NoDisplay activity races its own `finish()`), so marks went missing.
@@ -155,7 +227,5 @@ a physical Pixel. Subtleties the emulator surfaced, baked into the harness:
   monitor never touches — an unroutable TEST-NET address never reached the TUN, and
   the captive monitor's own `:18080` probes are otherwise indistinguishable from
   WebView traffic in the sink.
-- Trigger the WebView's sentinel attempt via a `<head>` favicon + blocking script
-  (body sub-resources are cancelled when the session tears down post-validation).
 - Settle until the unbound probe's TCP SYN retransmits drain before opening the
   bound window, else they bleed past `bound_begin` and read as a leak.

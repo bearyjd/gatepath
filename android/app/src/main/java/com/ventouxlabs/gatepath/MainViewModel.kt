@@ -6,27 +6,35 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.ventouxlabs.gatepath.audit.AuditEntry
 import com.ventouxlabs.gatepath.audit.AuditLog
+import com.ventouxlabs.gatepath.diag.CertSummary
 import com.ventouxlabs.gatepath.diag.DiagnosisResult
 import com.ventouxlabs.gatepath.diag.DiagnosticEngine
+import com.ventouxlabs.gatepath.diag.DiagnosticReport
+import com.ventouxlabs.gatepath.diag.IncidentEvidence
 import com.ventouxlabs.gatepath.diag.ProbeContext
 import com.ventouxlabs.gatepath.network.CaptivePortalMonitor
+import com.ventouxlabs.gatepath.network.ConfinementState
 import com.ventouxlabs.gatepath.network.HttpFetcher
 import com.ventouxlabs.gatepath.network.NetworkDiagnostics
-import com.ventouxlabs.gatepath.network.PortalProbeCapture
 import com.ventouxlabs.gatepath.network.ProbeResult
 import com.ventouxlabs.gatepath.network.NetworkEvent
 import com.ventouxlabs.gatepath.network.PortalProbe
 import com.ventouxlabs.gatepath.network.VpnDetector
+import com.ventouxlabs.gatepath.network.VpnKind
+import com.ventouxlabs.gatepath.network.classify
 import com.ventouxlabs.gatepath.session.CloseReason
 import com.ventouxlabs.gatepath.session.PortalSession
 import com.ventouxlabs.gatepath.session.PortalSessionManager
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.net.InetAddress
 import java.net.URI
 import java.time.Instant
@@ -73,38 +81,50 @@ class MainViewModel @Inject constructor(
 
         /** Captive network was lost mid-session. */
         Lost,
-
-        /**
-         * Network looks captive but our probe was refused (typically EPERM
-         * because Android marks captive networks as restricted). The user
-         * needs to tap the system Wi-Fi "Sign in" notification and pick
-         * Gatepath as the handler — that path delivers a CaptivePortal token
-         * which bypasses the restriction.
-         */
-        CaptivePending,
     }
 
     private val _networkStatus = MutableStateFlow(NetworkStatus.Unknown)
     val networkStatus: StateFlow<NetworkStatus> = _networkStatus.asStateFlow()
 
     /**
-     * Diagnostics from the most recent failed-probe attempt. Surfaces in the
-     * troubleshooting panel when [networkStatus] is [NetworkStatus.CaptivePending].
-     * Cleared whenever the network transitions to a known-good state
-     * (validated / sign-in complete / captive confirmed) so stale info doesn't
-     * persist across networks.
+     * How the most recent captive incident classified. `null` means no
+     * incident is live: the UI shows no confinement card at all rather than
+     * guessing. In-app sign-in is offered only from
+     * [ConfinementState.Confined] — see `docs/SECURITY_MODEL.md`.
      */
-    private val _latestDiagnostics = MutableStateFlow<NetworkDiagnostics?>(null)
-    val latestDiagnostics: StateFlow<NetworkDiagnostics?> = _latestDiagnostics.asStateFlow()
+    private val _confinement = MutableStateFlow<ConfinementState?>(null)
+    val confinement: StateFlow<ConfinementState?> = _confinement.asStateFlow()
 
-    private val _latestProbeCapture = MutableStateFlow<PortalProbeCapture?>(null)
-    val latestProbeCapture: StateFlow<PortalProbeCapture?> = _latestProbeCapture.asStateFlow()
+    /**
+     * The shareable record for the current incident. Produced in every
+     * confinement state, not only when a session opens, and enriched in place
+     * as the resolver answers and any certificate error arrive.
+     */
+    private val _evidence = MutableStateFlow<IncidentEvidence?>(null)
+    val evidence: StateFlow<IncidentEvidence?> = _evidence.asStateFlow()
+
+    /**
+     * Debug-only hook the harness reads as a file; null in release. Set by
+     * MainActivity.
+     *
+     * The monitor starts in [init], so an incident can classify before the
+     * Activity exists. Setting a sink therefore replays the current state
+     * immediately — otherwise that first classification would never reach the
+     * artefact the harness polls.
+     */
+    @Volatile
+    var debugStateSink: ((String) -> Unit)? = null
+        set(sink) {
+            field = sink
+            val current = _confinement.value
+            if (sink != null && current != null) sink(current.schemaName)
+        }
 
     /**
      * Result of the most recent diagnostic-engine run. Set when the monitor
-     * emits [NetworkEvent.CaptivePortalSuspected] and the engine has produced
-     * a finding. UI consumes this to show the top finding + recommended action
-     * above the existing static troubleshooting list.
+     * emits [NetworkEvent.CaptiveIncident] and the engine has produced a
+     * finding. UI consumes this to show the top finding + recommended action
+     * under the confinement card.
      *
      * Cleared whenever the network transitions to a known-good state, so a
      * stale finding from a previous network can't linger.
@@ -112,8 +132,31 @@ class MainViewModel @Inject constructor(
     private val _diagnosis = MutableStateFlow<DiagnosisResult?>(null)
     val diagnosis: StateFlow<DiagnosisResult?> = _diagnosis.asStateFlow()
 
-    /** Network from the most recent CaptivePortalSuspected — target for manual re-runs. */
+    /** Network from the most recent incident — target for manual re-runs. */
     private var suspectedNetwork: Network? = null
+
+    /**
+     * The monitor's environment snapshot for the current incident. Not a
+     * public flow: [IncidentEvidence] deliberately carries only the two probe
+     * errors, but [rerunDiagnostics] also needs `defaultRouteBypassesCaptive`
+     * to rebuild an honest [ProbeContext]. Cleared with the rest of the
+     * incident state.
+     */
+    private var lastDiagnostics: NetworkDiagnostics? = null
+
+    /**
+     * Was the session that is currently open opened from a classified
+     * [ConfinementState.Confined] state?
+     *
+     * Latched when the session opens, **not** read live at audit time. Every
+     * path that ends a session clears the incident state first — the success
+     * path nulls `_confinement` in `clearIncidentState()` before
+     * `handleSignInSuccess()` reaches `writeAuditLog`, and `CaptiveNetworkLost`
+     * does the same — so reading `_confinement.value` from the writer reports
+     * `unconfined` for exactly the sessions that were confined. Reset after
+     * each write.
+     */
+    private var sessionWasConfined: Boolean = false
 
     /**
      * Handle to the in-flight session-timeout coroutine. Cancelled when the
@@ -132,16 +175,7 @@ class MainViewModel @Inject constructor(
             _session.value = sessionManager.startMonitoring(_session.value)
             monitor.observe().collect { event ->
                 when (event) {
-                    is NetworkEvent.CaptiveNetworkAvailable -> {
-                        _latestProbeCapture.value = event.capture
-                        _activeNetwork.value = event.network
-                        _networkStatus.value = NetworkStatus.CaptiveDetected
-                        _latestDiagnostics.value = null
-                        _diagnosis.value = null
-                        suspectedNetwork = null
-                        _session.value = sessionManager.portalDetected(_session.value, event.portalUrl)
-                        openPortal()
-                    }
+                    is NetworkEvent.CaptiveIncident -> handleIncident(event)
                     is NetworkEvent.NetworkValidated -> {
                         // The portal sign-in succeeded — captive network now has
                         // NET_CAPABILITY_VALIDATED. Transition Active → Completed.
@@ -158,34 +192,31 @@ class MainViewModel @Inject constructor(
                         _networkStatus.value = NetworkStatus.NoPortal
                         clearIncidentState()
                     }
-                    is NetworkEvent.CaptivePortalSuspected -> {
-                        // Both probe paths failed. Diagnostics carries VPN
-                        // status, Private DNS, proxy, and raw probe errors so
-                        // the UI can guide the user through the troubleshooting
-                        // pathway.
-                        Log.w(TAG, "Captive suspected on ${event.network}: ${event.diagnostics}")
-                        _latestDiagnostics.value = event.diagnostics
-                        _networkStatus.value = NetworkStatus.CaptivePending
-                        // Only drop the capture when the incident actually
-                        // changed. A re-evaluation of the network we already
-                        // captured can land here, and that capture still
-                        // describes this incident — discarding it would leave
-                        // a suspected-portal bundle with no evidence at all.
-                        if (_activeNetwork.value != event.network) {
-                            _latestProbeCapture.value = null
-                        }
-                        suspectedNetwork = event.network
-                        runDiagnosticEngine(event.network, event.diagnostics)
-                    }
                     is NetworkEvent.CaptiveNetworkLost -> {
                         _networkStatus.value = NetworkStatus.Lost
                         clearIncidentState()
                         if (_activeNetwork.value == event.network) {
                             _activeNetwork.value = null
-                            // The manager picks ABORTED_PRE_ACTIVE for pre-Active
-                            // states and ERROR for Active; we always pass ERROR
-                            // and let the manager decide based on phase.
-                            handleClose(CloseReason.ERROR, "Network lost")
+                            // Close only a session that is still open.
+                            // _activeNetwork outlives the session it names —
+                            // no close path nulls it — so it can still match
+                            // after a dismiss or a completed sign-in. An
+                            // unguarded close would then take an already
+                            // Completed (or a Monitoring) session and run it
+                            // through
+                            // PortalSessionManager.error — writing an audit
+                            // entry with an empty portal_domain for a session
+                            // that never was, and leaving the state machine
+                            // Completed, where portalDetected no longer applies
+                            // and automatic sign-in is dead for the rest of the
+                            // process.
+                            val current = _session.value
+                            if (current is PortalSession.Active || current is PortalSession.Detected) {
+                                // The manager picks ABORTED_PRE_ACTIVE for
+                                // Detected and ERROR for Active; we always pass
+                                // ERROR and let it decide based on phase.
+                                handleClose(CloseReason.ERROR, "Network lost")
+                            }
                         }
                     }
                 }
@@ -194,17 +225,73 @@ class MainViewModel @Inject constructor(
     }
 
     /**
-     * Reset everything scoped to one captive incident.
+     * Classify one captive incident, publish the evidence, and open the
+     * sign-in session only when the traffic is actually [ConfinementState.Confined]
+     * to this Wi-Fi. Every other state leaves the session closed and lets the
+     * confinement card tell the user what to do instead.
      *
-     * [NetworkEvent.CaptiveNetworkAvailable] deliberately does not call this:
-     * it sets a fresh capture, and clearing first would publish a transient
-     * null to collectors of [latestProbeCapture].
+     * [NetworkEvent.CaptiveIncident] deliberately does not call
+     * [clearIncidentState]: it overwrites every incident-scoped field below,
+     * and clearing first would publish a transient null to collectors.
      */
+    private fun handleIncident(event: NetworkEvent.CaptiveIncident) {
+        val state = classify(event.inputs)
+        _confinement.value = state
+        _networkStatus.value = NetworkStatus.CaptiveDetected
+        _diagnosis.value = null
+        suspectedNetwork = event.network
+        lastDiagnostics = event.diagnostics
+        _evidence.value = IncidentEvidence(
+            confinement = state.schemaName,
+            probePath = event.boundPath,
+            probeCapture = (event.inputs.bound as? ProbeResult.Portal)?.capture,
+            resolverWifi = emptyList(),
+            resolverDoh = emptyList(),
+            certSummary = null,
+            vpnKind = VpnKind.fromInterfaces(event.diagnostics.vpnInterfaces),
+            vpnInterfaces = event.diagnostics.vpnInterfaces,
+            privateDnsStrict = event.diagnostics.privateDnsServer != null,
+            bindError = event.diagnostics.bindProbeError,
+            fallbackError = event.diagnostics.fallbackProbeError,
+        )
+        debugStateSink?.invoke(state.schemaName)
+        Log.i(TAG, "Confinement on ${event.network}: ${state.schemaName}")
+        if (state is ConfinementState.Confined) {
+            // reenter, not portalDetected: after a dismiss or a lost network
+            // the session is Completed, which portalDetected rejects, so a
+            // second captive network in the same process would never open.
+            val next = sessionManager.reenter(_session.value, state.portalUrl)
+            _session.value = next
+            // Latch, retarget and open only on a transition that actually
+            // happened. A rejected reenter leaves the session untouched and
+            // opens nothing, so claiming the session was confined would attach
+            // this incident's verdict to whatever session is really running.
+            //
+            // `_activeNetwork` is the network of the open (or opening) session
+            // — never the latest incident. `reenter` rejects from Active, so a
+            // second Confined network arriving mid-sign-in must leave it alone:
+            // retargeting it there re-keys MainActivity's PortalScreen (wiping
+            // the portal's cookies mid-flow) and breaks the
+            // `_activeNetwork == event.network` tests on NetworkValidated and
+            // CaptiveNetworkLost, losing the portal_completed audit entry.
+            // `suspectedNetwork` above keeps the "latest incident" meaning for
+            // rerunDiagnostics; `signInHere` sets this field from there itself.
+            if (next is PortalSession.Detected) {
+                sessionWasConfined = true
+                _activeNetwork.value = event.network
+                openPortal()
+            }
+        }
+        runDiagnosticEngine(event.network, event.diagnostics)
+    }
+
+    /** Reset everything scoped to one captive incident. */
     private fun clearIncidentState() {
-        _latestDiagnostics.value = null
+        _confinement.value = null
+        _evidence.value = null
         _diagnosis.value = null
         suspectedNetwork = null
-        _latestProbeCapture.value = null
+        lastDiagnostics = null
     }
 
     /**
@@ -214,10 +301,10 @@ class MainViewModel @Inject constructor(
      * collected there, the only addition is the active-probe callable.
      *
      * The active-probe closure deliberately invokes `portalProbe.probe(null)`
-     * (no bind) — bind has already failed by the time we reach this branch
-     * (that's what triggered Suspected), so re-running it would just confirm
-     * EPERM. The default-route probe instead exercises whether the userspace
-     * fallback might be working now (e.g. VPN was just paused). It probes
+     * (no bind) — the monitor has just run the bound probe for this incident,
+     * so repeating it would only restate what the incident's classification
+     * inputs already carry. The default-route probe instead exercises whether the userspace
+     * fallback is working (e.g. the VPN was just paused). It probes
      * `monitor.probeUrl` — the same URL the monitor itself uses, which in
      * debug builds may be overridden to point at a mock portal — rather than
      * a hardcoded endpoint, so the diagnostic battery agrees with the monitor
@@ -237,24 +324,53 @@ class MainViewModel @Inject constructor(
                 defaultRouteBypassesCaptive = diagnostics.defaultRouteBypassesCaptive,
                 probeUrl = monitor.probeUrl,
                 httpFetch = { url, accept -> httpFetcher.fetch(network = null, url = url, accept = accept) },
+                // When we are genuinely confined to this Wi-Fi, resolve
+                // through THAT network's resolver — the system resolver would
+                // answer from whatever path currently owns the default route
+                // and the answer would describe the wrong network.
                 resolveHost = { host ->
-                    runCatching {
-                        InetAddress.getAllByName(host).mapNotNull { it.hostAddress }
-                    }.getOrElse { emptyList() }
+                    // Both resolvers block. The engine invokes this from the
+                    // viewModelScope coroutine, i.e. Dispatchers.Main.immediate,
+                    // where a blocking lookup throws NetworkOnMainThreadException
+                    // and every answer comes back empty.
+                    withContext(Dispatchers.IO) {
+                        runCatching {
+                            val addrs = if (_confinement.value is ConfinementState.Confined) {
+                                network.getAllByName(host)
+                            } else {
+                                InetAddress.getAllByName(host)
+                            }
+                            addrs.mapNotNull { it.hostAddress }
+                        }.getOrElse { emptyList() }
+                    }.also { answers ->
+                        _evidence.update { it?.copy(resolverWifi = answers) }
+                    }
                 },
-                // Keep whatever this probe intercepts. Without it the suspected
-                // path clears the stale capture (correctly) and then discards
-                // the fresh one, leaving the bundle with no evidence for the
-                // incident the user is actually reporting.
+                // Keep whatever this probe intercepts, but only when the
+                // incident has no capture yet: this one travelled the default
+                // route, so letting it overwrite a bound-Wi-Fi capture would
+                // contradict the record's own `probePath`.
                 activeProbe = {
                     portalProbe.probe(network = null, testUrl = monitor.probeUrl).also { result ->
                         if (result is ProbeResult.Portal) {
-                            result.capture?.let { _latestProbeCapture.value = it }
+                            result.capture?.let { fresh ->
+                                _evidence.update { e ->
+                                    if (e?.probeCapture == null) e?.copy(probeCapture = fresh) else e
+                                }
+                            }
                         }
                     }
                 },
             )
             val result = diagnosticEngine.run(ctx)
+            // The DNS-hijack probe is the only component that asks a resolver
+            // Gatepath does not control, so it is the only source for the
+            // second half of the resolver comparison in the evidence record.
+            result.checks
+                .firstNotNullOfOrNull { it.report as? DiagnosticReport.DnsHijack }
+                ?.let { hijack ->
+                    _evidence.update { it?.copy(resolverDoh = listOf(hijack.doHAnswer)) }
+                }
             Log.i(TAG, "Diagnosis on ${network}: top=${result.top::class.simpleName} action=${result.recommended}")
             _diagnosis.value = result
         }
@@ -271,7 +387,7 @@ class MainViewModel @Inject constructor(
      */
     fun rerunDiagnostics() {
         val network = suspectedNetwork ?: return
-        val previous = _latestDiagnostics.value
+        val previous = lastDiagnostics
         val fresh = runCatching {
             monitor.snapshotDiagnostics(
                 network = network,
@@ -283,8 +399,44 @@ class MainViewModel @Inject constructor(
             Log.w(TAG, "Diagnostics re-run snapshot failed: ${ex.message}")
             return
         }
-        _latestDiagnostics.value = fresh
+        lastDiagnostics = fresh
         runDiagnosticEngine(network, fresh)
+    }
+
+    /** The WebView saw a certificate error; fold its safe summary into the evidence. */
+    fun onCertSummary(summary: CertSummary) {
+        _evidence.update { it?.copy(certSummary = summary) }
+    }
+
+    /**
+     * User pressed "Sign in here". Only meaningful from Confined; otherwise a
+     * no-op.
+     *
+     * Uses [PortalSessionManager.reenter] rather than `portalDetected`: this
+     * button is reachable after a dismiss, which leaves the session
+     * `Completed`, and `portalDetected` accepts only `Monitoring`.
+     *
+     * Reads the network from [suspectedNetwork] rather than relying on
+     * [handleIncident] to have set `_activeNetwork`: the incident that raised
+     * this card may have had its `reenter` rejected, in which case it
+     * deliberately left `_activeNetwork` pointing at the session that was
+     * running then. [suspectedNetwork] is cleared alongside `_confinement` in
+     * `clearIncidentState`, so a non-null `Confined` state implies a non-null
+     * network here; the elvis is a guard, not a fallback.
+     */
+    fun signInHere() {
+        val network = suspectedNetwork ?: return
+        val state = _confinement.value as? ConfinementState.Confined ?: return
+        if (_session.value is PortalSession.Active) return
+        val next = sessionManager.reenter(_session.value, state.portalUrl)
+        _session.value = next
+        // Same ordering as handleIncident: latch, retarget and open only when
+        // the transition succeeded.
+        if (next is PortalSession.Detected) {
+            sessionWasConfined = true
+            _activeNetwork.value = network
+            openPortal()
+        }
     }
 
     private fun openPortal() {
@@ -304,6 +456,7 @@ class MainViewModel @Inject constructor(
                 val next = sessionManager.timeout(current, utcNow())
                 _session.value = next
                 writeAuditLog(next)
+                sessionWasConfined = false
             }
         }
     }
@@ -315,6 +468,9 @@ class MainViewModel @Inject constructor(
         val next = sessionManager.dismiss(current, utcNow())
         _session.value = next
         writeAuditLog(next)
+        sessionWasConfined = false
+        // The confinement card deliberately stays on screen: the user can press
+        // "Sign in here" again, which is what PortalSessionManager.reenter is for.
     }
 
     /**
@@ -333,6 +489,7 @@ class MainViewModel @Inject constructor(
         val next = sessionManager.completePortal(current, utcNow())
         _session.value = next
         writeAuditLog(next)
+        sessionWasConfined = false
     }
 
     fun onBlockedNavigation() {
@@ -357,6 +514,9 @@ class MainViewModel @Inject constructor(
      * Idle without persisting anything. Callers must gate on BuildConfig.DEBUG.
      */
     fun debugForceActiveSession(portalUrl: String, network: Network) {
+        // This path never classifies, so the session is not confined — and the
+        // latch could still be set from an earlier real session.
+        sessionWasConfined = false
         _activeNetwork.value = network
         _session.value = PortalSession.Active(
             portalUrl = portalUrl,
@@ -380,6 +540,7 @@ class MainViewModel @Inject constructor(
         }
         _session.value = next
         writeAuditLog(next)
+        sessionWasConfined = false
     }
 
     /**
@@ -429,8 +590,12 @@ class MainViewModel @Inject constructor(
             sessionClosedUtc = finalState.closedUtc,
             closeReason = finalState.closeReason.schemaValue,
             durationSeconds = durationSeconds,
-            blockedNavigationAttempts = finalState.blockedNavigationAttempts,
-            blockedResourceRequests = finalState.blockedResourceRequests,
+            observedNavigationAttempts = finalState.blockedNavigationAttempts,
+            observedResourceRequests = finalState.blockedResourceRequests,
+            // Latched at session open, not read live: every close path clears
+            // the incident state before the write, so reading _confinement here
+            // would report "unconfined" for precisely the confined sessions.
+            confinement = if (sessionWasConfined) "confined" else "unconfined",
             tlsCertErrorsBypassed = finalState.tlsCertErrorsBypassed,
         )
 

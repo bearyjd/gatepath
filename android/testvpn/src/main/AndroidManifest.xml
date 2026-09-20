@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- e2e-only: the no-leak sentinel VPN, owned by a package that is NOT Gatepath so
+         netd treats Gatepath like any app under a third-party VPN. Never shipped. -->
+    <application android:label="Gatepath test VPN" android:allowBackup="false">
+        <service
+            android:name=".GatepathTestVpnService"
+            android:exported="false"
+            android:permission="android.permission.BIND_VPN_SERVICE">
+            <intent-filter>
+                <action android:name="android.net.VpnService" />
+            </intent-filter>
+        </service>
+        <!-- Exported ONLY behind android.permission.DUMP. The harness drives this
+             activity with `adb shell am start`; the shell uid does not hold
+             START_ANY_ACTIVITY, so a non-exported activity is refused with
+             "not exported from uid" (PR #168 CI) — but it does hold DUMP
+             (data/etc/privapp-permissions-platform.xml), which is
+             signature|privileged|development and so unobtainable by any
+             third-party app. Without this permission, any app on the device
+             could start a packet-logging VPN in "covering" mode.
+             check_release_manifest.py asserts the attribute stays. -->
+        <activity
+            android:name=".TestVpnControlActivity"
+            android:exported="true"
+            android:permission="android.permission.DUMP"
+            android:theme="@android:style/Theme.NoDisplay" />
+    </application>
+</manifest>

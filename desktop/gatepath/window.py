@@ -23,7 +23,12 @@ from gatepath.diagnosis_runner import run_diagnostics_async
 from gatepath.portal_monitor import CaptiveInterfaceLookup
 from gatepath.portal_load_error import PortalLoadError
 from gatepath.portal_observations import collect_observations
-from gatepath.portal_session import CloseReason, PortalPhase, PortalSession
+from gatepath.portal_session import (
+    CloseReason,
+    PortalPhase,
+    PortalSession,
+    to_confined,
+)
 from gatepath.session_controller import SessionController
 from gatepath.ui.diagnosis_panel import DiagnosisPanel
 from gatepath.ui.portal_error_panel import build_error_panel
@@ -392,7 +397,7 @@ try:
             # Remember the PID so we can collect what the WebView observed
             # once it exits — the counts live in that process (#123).
             self._portal_pid = result.pid
-            self._controller.set_active(active_session)
+            self._controller.set_active(to_confined(active_session))
             self.set_visible(False)
             threading.Thread(
                 target=self._wait_for_subprocess_thread,

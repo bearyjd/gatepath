@@ -33,8 +33,8 @@ import java.net.URL
  * This matches the desktop probe (desktop/gatepath/portal_probe.py), which has
  * always classified 200 as a portal. Android previously returned Error here,
  * which meant a 200-style portal was never detected at all: both probe paths in
- * CaptivePortalMonitor failed and the flow emitted CaptivePortalSuspected
- * instead of opening the sign-in WebView.
+ * CaptivePortalMonitor failed, so the incident classified as Unknown instead of
+ * opening the sign-in WebView.
  */
 const val CONNECTIVITY_CHECK_URL = "http://connectivitycheck.gstatic.com/generate_204"
 

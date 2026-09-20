@@ -81,6 +81,11 @@ def _open(url: str, *, method: str = "GET", data: bytes | None = None):
 
 
 def test_generate_204_redirects_first_then_validates(portal: str) -> None:
+    # Also covers the advertised_host=None default: build_server's default
+    # threads no advertised_host, so Location falls back to the bind host
+    # (127.0.0.1, matching the portal fixture's base URL). See
+    # test_advertised_host_overrides_bind_host_in_redirect_targets for the
+    # non-default case.
     for _ in range(3):
         resp = _open(f"{portal}/generate_204")
         assert resp.status == 302
@@ -183,6 +188,38 @@ def test_portal_host_env_overrides_default(monkeypatch: pytest.MonkeyPatch) -> N
         monkeypatch.delenv("PORTAL_HOST", raising=False)
         importlib.reload(srv)
         assert srv.PORTAL_HOST == "127.0.0.1"
+
+
+def test_advertised_host_overrides_bind_host_in_redirect_targets() -> None:
+    # A server bound to 127.0.0.1 (so the test can still reach it) but told to
+    # advertise 10.0.2.2 (the QEMU host alias an Android emulator uses to reach
+    # the docker host) must carry 10.0.2.2 in its Location header, not its own
+    # bind address — the trap this covers is a mock bound to 0.0.0.0 inside a
+    # container advertising 0.0.0.0 back to a client that cannot connect to it.
+    port = _free_port()
+    server, _ = build_server(
+        host="127.0.0.1",
+        port=port,
+        complete_after=1,
+        advertised_host="10.0.2.2",
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        base = f"http://127.0.0.1:{port}"
+        for _ in range(50):
+            try:
+                urllib.request.urlopen(f"{base}/log", timeout=1).read()
+                break
+            except OSError:
+                time.sleep(0.02)
+        resp = _open(f"{base}/generate_204")
+        assert resp.status == 302
+        assert resp.headers["Location"] == f"http://10.0.2.2:{port}/portal"
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
 
 
 def test_portal_injects_leak_sentinel_when_set() -> None:

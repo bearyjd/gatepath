@@ -57,8 +57,8 @@ class AuditLogTest {
         sessionClosedUtc = sessionClosedUtc,
         closeReason = closeReason,
         durationSeconds = 162,
-        blockedNavigationAttempts = 2,
-        blockedResourceRequests = 11,
+        observedNavigationAttempts = 2,
+        observedResourceRequests = 11,
     )
 
     // ── Schema compliance ───────────────────────────────────────────────────
@@ -83,8 +83,8 @@ class AuditLogTest {
         assertEquals("2026-05-05T12:36:42.000Z", read.sessionClosedUtc)
         assertEquals("portal_completed", read.closeReason)
         assertEquals(162, read.durationSeconds)
-        assertEquals(2, read.blockedNavigationAttempts)
-        assertEquals(11, read.blockedResourceRequests)
+        assertEquals(2, read.observedNavigationAttempts)
+        assertEquals(11, read.observedResourceRequests)
     }
 
     @Test
@@ -227,5 +227,17 @@ class AuditLogTest {
 
         assertEquals(0, writer.readRecent(limit = 0).entries.size)
         assertEquals(0, writer.readRecent(limit = -1).entries.size)
+    }
+
+    @Test
+    fun `a v1 line with blocked_ keys reads back as observed_ counters`() {
+        logFile.appendText(
+            """{"schema_version":1,"timestamp_utc":"2026-05-06T12:34:56.000Z","platform":"android","ssid":null,"gateway_ip":null,"portal_domain":"p.example","vpn_interfaces_detected":[],"vpn_warning_shown":false,"session_opened_utc":"2026-05-06T12:34:00.000Z","session_closed_utc":"2026-05-06T12:36:42.000Z","close_reason":"portal_completed","duration_seconds":162,"blocked_navigation_attempts":4,"blocked_resource_requests":9}""" + "\n",
+        )
+        val read = writer.readRecent()
+        assertEquals(0, read.unreadable)
+        assertEquals(4, read.entries.single().observedNavigationAttempts)
+        assertEquals(9, read.entries.single().observedResourceRequests)
+        assertEquals("unconfined", read.entries.single().confinement)
     }
 }

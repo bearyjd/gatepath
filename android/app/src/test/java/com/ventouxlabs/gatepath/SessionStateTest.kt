@@ -228,6 +228,35 @@ class SessionStateTest {
         assertEquals("aborted_pre_active", CloseReason.ABORTED_PRE_ACTIVE.schemaValue)
     }
 
+    // ── Re-entry after a dismiss ────────────────────────────────────────────
+    //
+    // "Sign in here" on the confinement card is reachable AFTER the user has
+    // dismissed, which leaves the session Completed. portalDetected only
+    // accepts Monitoring, so without reenter the button is a no-op in exactly
+    // the situation it exists for.
+
+    @Test
+    fun `reenter from Completed yields Detected with the url`() {
+        val completed = PortalSession.Completed(
+            closeReason = CloseReason.USER_DISMISSED,
+            openedUtc = opened,
+            closedUtc = closed,
+            portalUrl = portalUrl,
+        )
+        val result = manager.reenter(completed, portalUrl)
+        assertTrue(result is PortalSession.Detected)
+        assertEquals(portalUrl, (result as PortalSession.Detected).portalUrl)
+    }
+
+    @Test
+    fun `reenter from Active is rejected`() {
+        val before = manager.rejectedTransitions.get()
+        val active = PortalSession.Active(portalUrl, opened)
+        val result = manager.reenter(active, portalUrl)
+        assertEquals(active, result)
+        assertEquals(before + 1, manager.rejectedTransitions.get())
+    }
+
     // ── Immutability proof: copy() returns a NEW Active, original unchanged ──
 
     @Test

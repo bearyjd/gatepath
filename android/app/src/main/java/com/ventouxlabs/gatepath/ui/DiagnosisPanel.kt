@@ -32,7 +32,8 @@ import com.ventouxlabs.gatepath.diag.RecommendedAction
  *
  * Phase 1 surfaces:
  *   - PrivateDnsBlocking → "Open Private DNS settings"
- *   - HTTP probe Inconclusive → diagnostic info shown via the existing TroubleshootingPanel
+ *   - HTTP probe Inconclusive → the raw probe errors, with the next step
+ *     coming from the [ConfinementCard] above this panel
  *   - Healthy → panel is not rendered (caller decides)
  *
  * Per D1 (confirmed 2026-05-08), the action is ALWAYS user-gated — clicking

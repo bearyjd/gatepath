@@ -11,8 +11,10 @@ cd "$REPO_ROOT"
 
 python3 tests/e2e-android/scenario/run-scenario.py \
     --apk-path android/app/build/outputs/apk/debug/app-debug.apk \
+    --testvpn-apk-path android/testvpn/build/outputs/apk/debug/testvpn-debug.apk \
     --emulator-addr emulator-5554 \
     --mockportal-host-url http://10.0.2.2:18080 \
     --mockportal-from-host-url http://localhost:18080 \
-    --artifacts-dir tests/e2e-android/artifacts \
+    --artifacts-dir "tests/e2e-android/artifacts/${GATEPATH_E2E_VPN_MODE:-excluding}" \
+    --vpn-mode "${GATEPATH_E2E_VPN_MODE:-excluding}" \
     --mode host-post

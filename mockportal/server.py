@@ -26,7 +26,7 @@ Behavior:
                         (default 0, i.e. inert — normal, unskewed header).
 
 Configurable via env: PORTAL_HOST, PORTAL_PORT, PORTAL_COMPLETE_AFTER (default 3),
-PORTAL_DATE_SKEW_SECONDS (default 0).
+PORTAL_DATE_SKEW_SECONDS (default 0), PORTAL_ADVERTISED_HOST (default unset).
 """
 
 from __future__ import annotations
@@ -63,6 +63,14 @@ PORTAL_LEAK_SENTINEL = os.environ.get("PORTAL_LEAK_SENTINEL", "")
 # clock-skew diagnostics tests. Default 0 is inert: the header is byte-identical
 # to the stdlib's normal, unskewed Date header.
 PORTAL_DATE_SKEW_SECONDS = int(os.environ.get("PORTAL_DATE_SKEW_SECONDS", "0"))
+# The host advertised in redirect targets (Location headers, the Refresh
+# header, and the meta-refresh body) — what a caller that follows the mock's
+# own redirect ends up connecting back to. This is deliberately separate from
+# PORTAL_HOST (the bind address): a server bound to 0.0.0.0 must still
+# advertise a host its clients can actually reach, since a real gateway never
+# hands a client its own bind-all address. Default None falls back to the
+# bind host, which keeps every existing loopback caller unchanged.
+PORTAL_ADVERTISED_HOST = os.environ.get("PORTAL_ADVERTISED_HOST")
 
 
 # The two off-domain references below are the fixture's off-domain oracle: the
@@ -289,12 +297,17 @@ def build_server(
     complete_after: int = PORTAL_COMPLETE_AFTER,
     leak_sentinel: str = PORTAL_LEAK_SENTINEL,
     date_skew_seconds: int = PORTAL_DATE_SKEW_SECONDS,
+    advertised_host: str | None = PORTAL_ADVERTISED_HOST,
 ) -> tuple[ThreadingHTTPServer, _State]:
     state = _State(complete_after)
     server = ThreadingHTTPServer((host, port), lambda *a, **kw: None)
     actual_host, actual_port = server.server_address[:2]
+    # advertised_host is what redirect targets (Location, Refresh, meta-refresh)
+    # carry — deliberately independent of the bind host, since a real gateway
+    # never advertises its own 0.0.0.0 bind-all address to a client.
+    url_host = advertised_host or actual_host
     server.RequestHandlerClass = _make_handler(
-        state, actual_host, actual_port, leak_sentinel, date_skew_seconds
+        state, url_host, actual_port, leak_sentinel, date_skew_seconds
     )
     return server, state
 

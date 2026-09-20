@@ -25,6 +25,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.ventouxlabs.gatepath.BuildConfig
+import com.ventouxlabs.gatepath.diag.CertSummary
 
 /**
  * Full-screen portal sheet.
@@ -44,6 +45,7 @@ fun PortalScreen(
     onBlockedNavigation: () -> Unit,
     onBlockedResource: () -> Unit,
     onTlsCertErrorBypassed: () -> Unit,
+    onCertSummary: (CertSummary) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     var loadError by remember { mutableStateOf<PortalLoadError?>(null) }
@@ -78,6 +80,7 @@ fun PortalScreen(
                 onBlockedNavigation = onBlockedNavigation,
                 onBlockedResource = onBlockedResource,
                 onTlsCertErrorBypassed = onTlsCertErrorBypassed,
+                onCertSummary = onCertSummary,
                 onLoadStarted = { loadError = null },
                 onLoadError = { loadError = it },
                 reloadToken = reloadToken,

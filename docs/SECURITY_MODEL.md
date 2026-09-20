@@ -90,8 +90,9 @@ authenticated caller UID rather than accepting it from the client; if it is
 absent, Gatepath declines to write the file rather than falling back to a
 world-writable location where the counts could be forged. A missing or
 unreadable file leaves the counters at 0 — losing a count must not cost the
-session record. The same channel carries `blocked_navigation_attempts` and
-`blocked_resource_requests`, which were previously always 0 on desktop.
+session record. The same channel carries `observed_navigation_attempts` and
+`observed_resource_requests` (schema v2; `blocked_*` in v1), which were
+previously always 0 on desktop.
 
 ## What Gatepath itself sends
 
@@ -179,10 +180,28 @@ proves confinement only of the portal *session* inside the namespace, not of thi
 
 ## Android-specific guarantees
 
-- All **portal-session** traffic — the WebView and the connectivity probe — is bound to the
-  captive portal `Network` object via `ConnectivityManager.bindProcessToNetwork()`, scoping
-  it to the WiFi/Ethernet interface flagged as captive. Gatepath's *diagnostic* requests are
-  deliberately unbound and are not portal-session traffic; see
+- Portal-session traffic is bound to the captive `Network` via
+  `bindProcessToNetwork()`, **and the app verifies on every incident that the
+  binding is honoured.** netd refuses explicit network selection for a UID
+  covered by a secure (non-bypassable) VPN unless the UID can protect sockets
+  (`NetworkController::checkUserNetworkAccessLocked`), so under Tailscale,
+  TorGuard or WireGuard the bound probe fails with `EPERM`. Gatepath then
+  reports **Tunnelled** and does not open a sign-in WebView. The product
+  contract is therefore: **exclude Gatepath in your VPN client's app
+  split-tunnelling.** Only then does the Wi-Fi-bound probe reach the gateway
+  (**Confined**) and in-app sign-in is offered. The state is classified by
+  `ConfinementState.classify` and recorded in the evidence bundle; every
+  audit entry carries `confinement`.
+
+  Costs, stated plainly: an excluded Gatepath is outside the VPN permanently,
+  so its connectivity probe and the diagnostic DoH query leave in the clear
+  over the default network at all times. Gatepath cannot bypass strict
+  Private DNS (that needs `NETWORK_BYPASS_PRIVATE_DNS`), so a hostname portal
+  under strict mode is reported as **DnsStrict** with the instruction to use
+  the system handler or set Private DNS to Automatic for the sign-in.
+
+  Gatepath's *diagnostic* requests are deliberately unbound and are not
+  portal-session traffic; see
   [What Gatepath itself sends](#what-gatepath-itself-sends) for what they are and why.
 
 > This is proven by an eval, not just asserted: the `tests/e2e-android` no-leak
@@ -242,15 +261,31 @@ other network I/O during a session and the session is capped at 10 minutes, so t
 exposure window is small, but new features that issue HTTP from the same process
 during a session **must** re-evaluate this guarantee.
 
-The binding is undone in three places to defend against process-death leaks:
+The binding is undone in four places to defend against process-death leaks:
 1. `DisposableEffect.onDispose` in `GatepathWebView` (graceful close).
 2. `Application.onTerminate` (orderly process shutdown).
 3. A `ProcessLifecycleOwner` watchdog that fires on whole-app background (debounced
    across in-app activity transitions, so routine pause/resume during navigation does
    NOT yank the binding mid-session).
+4. `CaptivePortalActivity.onDestroy` (the system-handoff entry point), which releases
+   the binding only if the process is still bound to the network *it* set — the slot is
+   shared with `MainActivity`'s portal screen, and clearing another screen's live binding
+   would route that WebView over the default route.
+
+One writer is a borrower rather than an owner: `CaptivePortalMonitor`'s per-network probe
+saves the current binding, binds its probe network, and writes the saved value back when
+the probe finishes. A probe in flight when the owning screen releases can therefore
+restore a binding nobody owns; the watchdog in (3) is the only backstop for that window.
+Replacing these per-caller compares with a single refcounted binding owner is tracked as
+follow-up work.
 
 If the process is killed by the OS without lifecycle callbacks firing, the binding
 ends with the process — Android does not persist it across launches.
+
+A debug-only intent (`gatepath.debug.sentinel_probe`) sends one bound-network
+sentinel probe on demand for the `tests/e2e-android` no-leak proof; it exists
+only in debug builds and is stripped from release, like every other
+`gatepath.debug.*` extra.
 
 ## Desktop-specific limitations (be explicit)
 
@@ -345,18 +380,29 @@ reaches the user cleanly from a Flatpak-confined caller, and what subject
 unconfined path exactly as before — the grant cannot make things worse than the
 status quo it replaces.
 
-### Caveat — desktop tracker-resource requests are logged, not blocked
+### Caveat — tracker-resource requests are logged, not blocked, on both platforms
 
-On Android, `WebViewClient.shouldInterceptRequest` lets Gatepath cancel requests to
-known tracker domains before they leave the device. On desktop, WebKitGTK's
-`resource-load-started` signal is informational — Gatepath observes the request and
-increments the counter, but the request still completes. The
-`blocked_resource_requests` audit-log field on desktop should be read as
-*"observed tracker requests"*, not *"blocked tracker requests"*. See
-[AUDIT_LOG_SCHEMA.md](AUDIT_LOG_SCHEMA.md) for the platform-specific semantics.
+Neither platform cancels tracker-domain subresource requests. Since PR #33 both
+observe them, increment a counter, and let the request complete. The difference
+is only in the API, not the outcome: Android's
+`WebViewClient.shouldInterceptRequest` *could* cancel, but Gatepath's
+implementation counts and returns `null`, which hands the request back to the
+WebView unchanged; desktop's WebKitGTK `resource-load-started` signal is purely
+informational and could not cancel even if we wanted it to.
 
-This is a WebKitGTK API limitation and is honestly disclosed to the user in the
-portal-window banner.
+The counters are therefore `observed_resource_requests` and
+`observed_navigation_attempts` (schema v2, both platforms) — read them as
+*"observed"*, never *"blocked"*. They were named `blocked_*` in v1, which is
+exactly the misreading the rename exists to stop. See
+[AUDIT_LOG_SCHEMA.md](AUDIT_LOG_SCHEMA.md) for the field semantics.
+
+Why not block: on desktop the API cannot. On Android it could, but returning an
+empty response for an embedded analytics script made the portal page's own
+inline init throw on the first `gtag(...)` call, killing every later statement
+in that `<script>` — including the Continue button's click handler. The captive
+session is short-lived and cookies and web storage are cleared on dispose, so
+the exposure is bounded to the sign-in flow. See `GatepathWebView`'s
+`shouldInterceptRequest` for the full note.
 
 ## What neither platform protects against
 
@@ -376,6 +422,7 @@ portal-window banner.
 |---|---|
 | Portal operator capturing portal-window traffic | **Out** (unavoidable) |
 | Portal operator capturing your VPN/DNS traffic on Android | In — prevented |
+| Secure VPN covering Gatepath (not excluded) | **Fail-closed**: bound sockets get `EPERM`, no sign-in, no leak; user is told to exclude Gatepath |
 | Portal operator capturing your VPN/DNS traffic on desktop | **Partial** — warned, not prevented |
 | Portal page running tracking scripts | **Partial** — allowed (captive vendors embed GA/GTM in splash pages and break on `gtag is not defined`); observed + counted; persistent state wiped on session close |
 | Portal page persisting cookies / `sessionStorage` / `localStorage` / cache after session | In — wiped via `CookieManager.removeAllCookies` + `WebStorage.deleteAllData` + `clearCache` |

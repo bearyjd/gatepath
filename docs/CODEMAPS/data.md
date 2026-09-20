@@ -1,11 +1,11 @@
-<!-- Generated: 2026-07-05 | Files scanned: audit_log_schema.json + writers | Token estimate: ~350 -->
+<!-- Generated: 2026-07-05 | Files scanned: audit_log_schema.json + writers | Token estimate: ~350 | Updated: 2026-09-19 for schema v2 -->
 
 # Data Codemap — Audit Log Schema
 
 No database. The only cross-platform "data model" is the shared audit-log
 record, defined once and enforced by both platforms' test suites.
 
-**Source of truth:** `docs/audit_log_schema.json` (machine-readable, `schema_version: 1`)
+**Source of truth:** `docs/audit_log_schema.json` (machine-readable, `schema_version: 2`)
 Human docs: `docs/AUDIT_LOG_SCHEMA.md`
 
 ## Record shape
@@ -19,10 +19,15 @@ vpn_interfaces_detected: array<string>
 vpn_warning_shown: bool
 close_reason: "portal_completed" | "user_dismissed" | "timeout" | "error" | "aborted_pre_active"
 duration_seconds: int
-blocked_navigation_attempts: int   (observed + counted, NOT blocked — legacy field name)
-blocked_resource_requests: int    (observed + counted, NOT blocked — legacy field name)
+observed_navigation_attempts: int   (off-domain navigations observed + counted, allowed to load)
+observed_resource_requests: int    (tracker-domain subresource requests observed + counted, allowed to load)
+confinement: "confined" | "unconfined"  (android: confined only when the session opened from a classified
+                                         Confined state, else unconfined (e.g. the debug-force path).
+                                         desktop: confined if netns-isolated,
+                                         unconfined if in-process / Flatpak default route)
 tls_cert_errors_bypassed: int    (optional field; android: cert errors proceeded past on
-                                  the portal host only. desktop: always 0, no TLS handler)
+                                  the portal host only. desktop: cert errors counted from
+                                  portal observation channel; 0 if missing/unreadable)
 ```
 
 ## Writers / readers

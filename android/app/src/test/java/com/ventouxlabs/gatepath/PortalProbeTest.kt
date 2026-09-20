@@ -149,8 +149,8 @@ class PortalProbeTest {
     //
     // Regression coverage for the field bug: gateways that answer the
     // connectivity check with 200 instead of a 3xx were classified as Error,
-    // so CaptivePortalMonitor emitted CaptivePortalSuspected and the sign-in
-    // WebView never opened. See PortalProbe's KDoc.
+    // so the incident classified as Unknown and the sign-in WebView never
+    // opened. See PortalProbe's KDoc.
 
     @Test
     fun `200 with login page in place is a Portal at the probe url`() = runBlocking {

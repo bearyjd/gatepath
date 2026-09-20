@@ -8,11 +8,12 @@ import org.json.JSONObject
 import java.io.FileInputStream
 
 /**
- * DEBUG-ONLY local VpnService used by the android-e2e no-leak sentinel
- * (ROADMAP P0.1). Becomes the system default network and records the
- * destination of every IPv4 packet the Gatepath app emits while unbound,
- * to files/vpn-sink.jsonl. Never forwards (a black hole). Absent from
- * release builds — lives in src/debug/.
+ * VpnService for the android-e2e no-leak sentinel (ROADMAP P0.1). Lives in
+ * the standalone `:testvpn` debug-only app — NOT the Gatepath app — so
+ * Gatepath is a covered/excluded app under a third-party VPN rather than the
+ * VPN owner, matching the production configuration. Becomes the system
+ * default network and records the destination of every IPv4 packet emitted
+ * while unbound, to files/vpn-sink.jsonl. Never forwards (a black hole).
  */
 class GatepathTestVpnService : VpnService() {
 
@@ -22,13 +23,13 @@ class GatepathTestVpnService : VpnService() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_STOP -> { teardown(); stopSelf() }
-            ACTION_START -> startTun()
+            ACTION_START -> startTun(intent.getStringExtra(EXTRA_MODE) ?: "covering")
             else -> Log.w(TAG, "ignoring unknown/null action: ${intent?.action}")
         }
         return START_NOT_STICKY
     }
 
-    private fun startTun() {
+    private fun startTun(mode: String) {
         if (running) return
         resetSink(filesDir)  // fresh per run
         val pfd = Builder()
@@ -36,12 +37,18 @@ class GatepathTestVpnService : VpnService() {
             .addAddress(TUN_ADDR, 32)
             .addRoute("0.0.0.0", 0)
             .setMtu(MTU)
-            .also { it.addAllowedApplication(packageName) }
+            .also { b ->
+                when (mode) {
+                    "covering" -> b.addAllowedApplication(GATEPATH_PACKAGE)   // third-party VPN covers Gatepath
+                    "excluding" -> b.addDisallowedApplication(GATEPATH_PACKAGE) // Gatepath excluded (the product contract)
+                    else -> error("unknown mode $mode")
+                }
+            }
             .establish() ?: run { Log.e(TAG, "establish() null — VPN not authorized?"); return }
         tun = pfd
         running = true
         Thread { readLoop(FileInputStream(pfd.fileDescriptor)) }.apply { isDaemon = true }.start()
-        Log.i(TAG, "test VPN sink established")
+        Log.i(TAG, "test VPN sink established (mode=$mode)")
     }
 
     private fun readLoop(input: FileInputStream) {
@@ -82,7 +89,9 @@ class GatepathTestVpnService : VpnService() {
         const val ACTION_START = "com.ventouxlabs.gatepath.testvpn.START"
         const val ACTION_STOP = "com.ventouxlabs.gatepath.testvpn.STOP"
         const val EXTRA_LABEL = "com.ventouxlabs.gatepath.testvpn.label"
+        const val EXTRA_MODE = "gatepath.testvpn.mode"
         const val SINK_FILE = "vpn-sink.jsonl"
+        private const val GATEPATH_PACKAGE = "com.ventouxlabs.gatepath"
         private const val TUN_ADDR = "10.111.0.2"
         private const val MTU = 1500
 

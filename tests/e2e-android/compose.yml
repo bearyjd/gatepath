@@ -38,6 +38,12 @@ services:
       # `exec python3` inherits this env; server.py reads it at import via
       # os.environ (default empty → desktop e2e unaffected).
       PORTAL_LEAK_SENTINEL: "http://10.0.2.2:18081"
+      # The mock binds 0.0.0.0 (so the container accepts the emulator's
+      # connection) but must NOT advertise 0.0.0.0 back in redirect targets —
+      # the emulator can't connect to that. The confinement-state monitor path
+      # follows the mock's own Location header (unlike the old debug-intent
+      # path, which supplied the portal URL directly), so this is load-bearing.
+      PORTAL_ADVERTISED_HOST: "10.0.2.2"
 
   emulator:
     container_name: gatepath-e2e-emulator
