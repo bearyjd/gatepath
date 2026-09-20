@@ -5,6 +5,10 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.intOrNull
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import java.io.File
 
 private const val TAG = "GatepathAudit"
@@ -87,7 +91,7 @@ class AuditLogWriter(private val file: File) {
 
         var unreadable = 0
         val entries = tail.mapNotNull { line ->
-            runCatching { readerJson.decodeFromString<AuditEntry>(line) }
+            runCatching { readerJson.decodeFromString<AuditEntry>(upgradeV1(line)) }
                 // Counted, not logged: AuditLogWriter is deliberately free of
                 // android.* so it stays JVM-testable, and the count reaches the
                 // user in the bundle itself rather than in a logcat line nobody
@@ -97,6 +101,30 @@ class AuditLogWriter(private val file: File) {
                 .getOrNull()
         }
         return AuditReadResult(entries, unreadable)
+    }
+
+    /**
+     * v1 lines carry `blocked_*` counters; v2 renamed them to `observed_*`
+     * (the semantics changed in PR #33, the names could not until a version
+     * bump). Rewrite the keys so a v1 line decodes with its counts intact.
+     * Names are duplicated from docs/audit_log_schema.json `v1_key_renames`;
+     * AuditSchemaParityTest pins them.
+     */
+    private fun upgradeV1(line: String): String {
+        val obj = runCatching { Json.parseToJsonElement(line).jsonObject }.getOrNull() ?: return line
+        if (obj["schema_version"]?.jsonPrimitive?.intOrNull != 1) return line
+        val renamed = obj.entries.associate { (k, v) -> (V1_RENAMES[k] ?: k) to v }
+        return JsonObject(renamed).toString()
+    }
+
+    internal companion object {
+        private val V1_RENAMES = mapOf(
+            "blocked_navigation_attempts" to "observed_navigation_attempts",
+            "blocked_resource_requests" to "observed_resource_requests",
+        )
+
+        /** Visible to tests via `-Xfriend-paths`; do not widen to public. */
+        internal fun v1KeyRenamesForTest(): Map<String, String> = V1_RENAMES
     }
 }
 

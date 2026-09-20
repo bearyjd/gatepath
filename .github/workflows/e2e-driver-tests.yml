@@ -46,16 +46,21 @@ jobs:
       # test_assertions.py with no __init__.py, so the second is refused as an
       # "import file mismatch". (Their `assertions` modules collide the same
       # way — pytest just rejects the test module first.)
+      #
+      # Each step runs its whole directory, not a hand-enumerated file list: a
+      # named list is the same trap CLAUDE.md documents for run-jvm-tests.sh —
+      # a new test file fires the path filter, runs nothing, and reports green
+      # (that is how test_run_scenario_modes.py went unexecuted).
       - name: Android e2e driver assertions
         working-directory: tests/e2e-android/driver
-        run: python -m pytest test_assertions.py -v
+        run: python -m pytest . -v
       - name: Desktop e2e driver assertions
         working-directory: tests/e2e-docker/driver
-        run: python -m pytest test_assertions.py -v
+        run: python -m pytest . -v
       # The scenario writes the artifacts the assertions read, so a bug there
       # is indistinguishable from a bug in the app (#136: teardown clobbered
       # logcat.txt, and the off-domain positive control flipped verdict between
       # two runs of identical app behaviour). Guarded here for the same reason.
-      - name: Android e2e scenario artifact capture
+      - name: Android e2e scenario tests
         working-directory: tests/e2e-android/scenario
-        run: python -m pytest test_logcat_capture.py -v
+        run: python -m pytest . -v

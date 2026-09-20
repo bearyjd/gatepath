@@ -51,7 +51,7 @@ class AuditSchemaParityTest {
     }
 
     private fun sampleEntry(closeReason: String = "portal_completed") = AuditEntry(
-        schemaVersion = 1,
+        schemaVersion = 2,
         timestampUtc = "2026-05-06T12:34:56.000Z",
         platform = "android",
         ssid = "Airport-WiFi",
@@ -63,8 +63,9 @@ class AuditSchemaParityTest {
         sessionClosedUtc = "2026-05-06T12:36:42.000Z",
         closeReason = closeReason,
         durationSeconds = 162,
-        blockedNavigationAttempts = 2,
-        blockedResourceRequests = 11,
+        confinement = "confined",
+        observedNavigationAttempts = 2,
+        observedResourceRequests = 11,
         tlsCertErrorsBypassed = 1,
     )
 
@@ -160,6 +161,26 @@ class AuditSchemaParityTest {
             "Platform '${obj["platform"]}' not in $platformEnum",
             obj["platform"]!!.jsonPrimitive.content in platformEnum,
         )
+    }
+
+    @Test
+    fun `confinement value is in the schema confinement_enum`() = runBlocking {
+        writer.append(sampleEntry())
+        val obj = readWrittenJson()
+        val allowed = schema["confinement_enum"]!!.jsonArray.map { it.jsonPrimitive.content }.toSet()
+        assertTrue(obj["confinement"]!!.jsonPrimitive.content in allowed)
+    }
+
+    @Test
+    fun `schema_version written is the schema's version`() = runBlocking {
+        writer.append(sampleEntry())
+        assertEquals(schema["schema_version"]!!.jsonPrimitive.int, readWrittenJson()["schema_version"]!!.jsonPrimitive.int)
+    }
+
+    @Test
+    fun `reader's v1 renames match the schema's v1_key_renames`() {
+        val schemaRenames = schema["v1_key_renames"]!!.jsonObject.mapValues { it.value.jsonPrimitive.content }
+        assertEquals(schemaRenames, AuditLogWriter.v1KeyRenamesForTest())
     }
 
     // ── Field-type parity ───────────────────────────────────────────────────

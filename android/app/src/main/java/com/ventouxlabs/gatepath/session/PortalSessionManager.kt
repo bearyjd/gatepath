@@ -32,6 +32,26 @@ class PortalSessionManager {
         return PortalSession.Detected(portalUrl = portalUrl)
     }
 
+    /**
+     * Completed | Monitoring → Detected: the user asked to sign in again after
+     * dismissing, from the confinement card that stays on screen.
+     *
+     * [portalDetected] cannot serve this: it accepts only [PortalSession.Monitoring],
+     * and a dismiss leaves the session [PortalSession.Completed], which is
+     * precisely the state "Sign in here" exists to recover from. Re-entering
+     * from [PortalSession.Active] is rejected — there is already a window open.
+     */
+    fun reenter(current: PortalSession, portalUrl: String): PortalSession {
+        return when (current) {
+            is PortalSession.Completed, is PortalSession.Monitoring ->
+                PortalSession.Detected(portalUrl = portalUrl)
+            else -> {
+                rejectedTransitions.incrementAndGet()
+                current
+            }
+        }
+    }
+
     /** Detected → Active. [openedUtc] is captured by the caller (ISO-8601 UTC). */
     fun openPortal(current: PortalSession, openedUtc: String): PortalSession {
         if (current !is PortalSession.Detected) {

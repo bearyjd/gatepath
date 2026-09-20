@@ -54,11 +54,23 @@ object DiagnosticsBundle {
     // Bare IPv4 literal — probe errors / DNS answers echo these verbatim.
     private val IPV4 = Regex("""\b(?:\d{1,3}\.){3}\d{1,3}\b""")
 
+    // Bare IPv6 literal — resolver answers can be v6 too. Grammar-accurate: a
+    // full form of exactly eight 1-to-4-hex groups, or a compressed form that
+    // contains `::`. Lookarounds (rather than \b) reject a match glued to a
+    // surrounding hex/colon/dot/hyphen run. A timestamp like `12:34:56` or
+    // `T00:00:00Z` has neither eight groups nor `::`, so it can't match.
+    private val IPV6 = Regex(
+        """(?<![0-9A-Za-z:.-])(?:(?:[0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}""" +
+            """|(?:[0-9a-fA-F]{1,4}:){1,7}:(?:[0-9a-fA-F]{1,4}(?::[0-9a-fA-F]{1,4}){0,6})?""" +
+            """|::(?:[0-9a-fA-F]{1,4}(?::[0-9a-fA-F]{1,4}){0,6})?)(?![0-9A-Za-z:.-])""",
+    )
+
     fun build(
         meta: BundleMeta,
         entries: List<AuditEntry>,
         diagnosis: DiagnosisResult?,
         probeCapture: PortalProbeCapture? = null,
+        evidence: IncidentEvidence? = null,
         unreadableEntries: Int = 0,
         consoleEntries: List<ConsoleCaptureEntry> = emptyList(),
         consoleUnreadable: Int = 0,
@@ -84,6 +96,11 @@ object DiagnosticsBundle {
 
         appendLine("--- Latest portal probe capture ---")
         appendLine(renderProbeCapture(probeCapture))
+        appendLine()
+
+        appendLine("--- Incident evidence ---")
+        val evidenceText = renderEvidence(evidence)
+        appendLine(if (redact) redactDiagnosisText(evidenceText, entries) else evidenceText)
         appendLine()
 
         appendLine("--- Audit log (audit.jsonl) ---")
@@ -159,7 +176,7 @@ object DiagnosticsBundle {
         for (value in known) {
             out = out.replace(value, REDACTED)
         }
-        return out.replace(IPV4, REDACTED)
+        return out.replace(IPV4, REDACTED).replace(IPV6, REDACTED)
     }
 
     private fun renderDiagnosis(diagnosis: DiagnosisResult?): String {
@@ -181,12 +198,46 @@ object DiagnosticsBundle {
      * its own response, so a length or a digest is an identifier channel it
      * can vary per device.
      */
-    private fun renderProbeCapture(capture: PortalProbeCapture?): String {
-        if (capture == null) return "(no intercepted response captured)"
+    private fun renderProbeCapture(capture: PortalProbeCapture?): String =
+        renderCaptureLines(capture, prefix = "")
+
+    /**
+     * Shared by [renderProbeCapture] and [renderEvidence] so the standalone
+     * "latest capture" section and the capture embedded per-incident render
+     * identically, just under a different key prefix.
+     */
+    private fun renderCaptureLines(capture: PortalProbeCapture?, prefix: String): String {
+        if (capture == null) return "${prefix}capture: (no intercepted response captured)"
         return buildString {
-            appendLine("http_status: ${capture.httpStatus}")
-            appendLine("content_type: ${capture.contentType ?: "(absent)"}")
-            append("redirect_signal: ${capture.redirectSignal}")
+            appendLine("${prefix}http_status: ${capture.httpStatus}")
+            appendLine("${prefix}content_type: ${capture.contentType ?: "(absent)"}")
+            append("${prefix}redirect_signal: ${capture.redirectSignal}")
+        }
+    }
+
+    private fun renderEvidence(e: IncidentEvidence?): String {
+        if (e == null) return "(no incident evidence captured)"
+        return buildString {
+            appendLine("confinement: ${e.confinement}")
+            appendLine("probe_path: ${e.probePath}")
+            appendLine("vpn_kind: ${e.vpnKind}")
+            appendLine("vpn_interfaces: ${if (e.vpnInterfaces.isEmpty()) "(none)" else e.vpnInterfaces.joinToString(", ")}")
+            appendLine("private_dns_strict: ${e.privateDnsStrict}")
+            appendLine(renderCaptureLines(e.probeCapture, prefix = "probe_"))
+            appendLine("resolver_wifi: ${if (e.resolverWifi.isEmpty()) "(none)" else e.resolverWifi.joinToString(", ")}")
+            appendLine("resolver_doh: ${if (e.resolverDoh.isEmpty()) "(none)" else e.resolverDoh.joinToString(", ")}")
+            val c = e.certSummary
+            if (c == null) {
+                appendLine("cert: (no certificate error observed)")
+            } else {
+                appendLine("cert_primary_error: ${c.primaryError}")
+                appendLine("cert_not_before_epoch_ms: ${c.notBeforeEpochMillis ?: "(absent)"}")
+                appendLine("cert_not_after_epoch_ms: ${c.notAfterEpochMillis ?: "(absent)"}")
+                appendLine("cert_self_signed: ${c.selfSigned}")
+                appendLine("cert_sha256: ${c.sha256Fingerprint.ifEmpty { "(absent)" }}")
+            }
+            appendLine("bind_error: ${e.bindError ?: "(none)"}")
+            append("fallback_error: ${e.fallbackError ?: "(none)"}")
         }
     }
 

@@ -2,26 +2,53 @@ package com.ventouxlabs.gatepath.testvpn
 
 import android.app.Activity
 import android.content.Intent
+import android.content.pm.ApplicationInfo
 import android.net.VpnService
 import android.os.Bundle
 import android.util.Log
-import com.ventouxlabs.gatepath.BuildConfig
 import java.net.InetSocketAddress
 import java.net.Socket
 
-/** DEBUG-ONLY harness control surface, driven by `am start … --es gatepath.testvpn.action <a>`. */
+/**
+ * Control surface for the standalone `:testvpn` app, driven by
+ * `am start … --es gatepath.testvpn.action <a>` from the e2e harness.
+ *
+ * This activity can start a VPN that logs the destination of every packet
+ * Gatepath emits, so it is gated twice rather than by policy alone:
+ *
+ * - **Guarded by `android.permission.DUMP`.** The shell uid holds it (so
+ *   `adb shell am start` works) and no third-party app can; it is not
+ *   simply non-exported because the shell does not hold `START_ANY_ACTIVITY`
+ *   and a non-exported target is refused for it.
+ * - **Debuggable builds only.** `handle` runs only when the installed
+ *   package is debuggable — the same `BuildConfig.DEBUG`-style gate the
+ *   in-app debug intents use, checked at runtime so it does not depend on
+ *   a generated BuildConfig. The release variant is disabled in
+ *   `build.gradle.kts` as well, so a non-debuggable build cannot exist.
+ */
 class TestVpnControlActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        if (BuildConfig.DEBUG) handle(intent)
+        if (isDebuggable()) {
+            handle(intent)
+        } else {
+            Log.e(TAG, "refusing control intent: package is not debuggable")
+        }
         finish()
     }
+
+    private fun isDebuggable(): Boolean =
+        (applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0
 
     private fun handle(intent: Intent) {
         when (intent.getStringExtra(EXTRA_ACTION)) {
             "start" -> {
                 if (VpnService.prepare(this) != null) { Log.e(TAG, "VPN not authorized"); return }
-                startService(svc(GatepathTestVpnService.ACTION_START))
+                val mode = intent.getStringExtra(GatepathTestVpnService.EXTRA_MODE) ?: "covering"
+                startService(
+                    svc(GatepathTestVpnService.ACTION_START)
+                        .putExtra(GatepathTestVpnService.EXTRA_MODE, mode),
+                )
             }
             "probe" -> sendUnboundProbe()
             "mark" -> {

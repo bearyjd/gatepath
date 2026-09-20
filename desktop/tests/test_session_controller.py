@@ -195,8 +195,8 @@ class TestCounters:
         controller.on_user_dismiss()
 
         entries = read_all(log_path=log)
-        assert entries[0]["blocked_navigation_attempts"] == 2
-        assert entries[0]["blocked_resource_requests"] == 1
+        assert entries[0]["observed_navigation_attempts"] == 2
+        assert entries[0]["observed_resource_requests"] == 1
 
     def test_record_after_close_is_safe_noop(self, tmp_path: Path) -> None:
         controller, _, log = _make_controller(tmp_path)
@@ -205,7 +205,7 @@ class TestCounters:
         controller.record_blocked_navigation()  # no-op, no exception
         # Counters frozen at close time.
         entries = read_all(log_path=log)
-        assert entries[0]["blocked_navigation_attempts"] == 0
+        assert entries[0]["observed_navigation_attempts"] == 0
 
 
 class TestSetActiveValidation:
@@ -236,8 +236,8 @@ class TestApplyObservations:
         controller.close(CloseReason.PORTAL_COMPLETED)
 
         entry = read_all(log_path=log)[0]
-        assert entry["blocked_navigation_attempts"] == 4
-        assert entry["blocked_resource_requests"] == 9
+        assert entry["observed_navigation_attempts"] == 4
+        assert entry["observed_resource_requests"] == 9
         assert entry["tls_cert_errors_bypassed"] == 1
 
     def test_observations_replace_rather_than_add(self, tmp_path: Path) -> None:

@@ -10,6 +10,20 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
 
+    <!--
+      Package visibility for the confinement card's "Open VPN app" action.
+      On Android 11+ queryIntentServices sees nothing without this, so the
+      card would always fall back to the system VPN settings screen even
+      when the user's VPN client is installed.
+    -->
+    <queries>
+        <intent>
+            <action android:name="android.net.VpnService" />
+        </intent>
+        <package android:name="com.tailscale.ipn" />
+        <package android:name="net.torguard.openvpn.client" />
+    </queries>
+
     <application
         android:name=".GatepathApplication"
         android:allowBackup="false"

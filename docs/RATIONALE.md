@@ -135,7 +135,10 @@ compartment, is allowed to talk to the portal.
 
 ### Relationship to the Android model (and an honest design tradeoff)
 
-Android achieves the same goal with `bindProcessToNetwork()`, which *binds one
+Android achieves the same goal with `bindProcessToNetwork()` **only when no
+secure VPN covers Gatepath**, which in practice means excluding Gatepath in
+the VPN client; the app verifies this per incident (see
+[`SECURITY_MODEL.md`](SECURITY_MODEL.md)). When it applies, this *binds one
 process's sockets* to the captive network while the interface stays shared — a
 **non-exclusive** mechanism. Linux has no clean per-process equivalent that
 works without privilege (the nearest, `SO_BINDTODEVICE`, needs `CAP_NET_RAW`
@@ -227,6 +230,13 @@ is not a nicety — it is what makes the trade defensible.
   tunnel is actively carrying traffic.
 - **Off-link portals are imperfect.** A portal that lives beyond the local
   gateway is the awkward edge case for any interface-scoped approach.
+- **Excluding Gatepath from the VPN is permanent, on Android.** The product
+  contract that makes `bindProcessToNetwork()` actually confine anything is
+  excluding Gatepath in the VPN client's split-tunnelling — and that
+  exclusion is not scoped to a sign-in window the way the desktop netns
+  compartment is. Gatepath's own connectivity probe and diagnostic DoH query
+  leave in the clear over the default network at all times, not only during a
+  captive incident.
 - **If you don't run an always-on, kill-switched VPN, you probably don't need
   Gatepath.** The OS's built-in captive browser is fine when you have no global
   posture to protect. Gatepath earns its complexity *only* under the strict

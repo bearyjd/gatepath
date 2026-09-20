@@ -11,7 +11,7 @@ import com.ventouxlabs.gatepath.diag.CONSOLE_CAPTURE_FILE_NAME
 import com.ventouxlabs.gatepath.diag.ConsoleCaptureFile
 import com.ventouxlabs.gatepath.diag.DiagnosisResult
 import com.ventouxlabs.gatepath.diag.DiagnosticsBundle
-import com.ventouxlabs.gatepath.network.PortalProbeCapture
+import com.ventouxlabs.gatepath.diag.IncidentEvidence
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -47,7 +47,7 @@ object DiagnosticsSharer {
     suspend fun writeBundle(
         context: Context,
         diagnosis: DiagnosisResult?,
-        probeCapture: PortalProbeCapture?,
+        evidence: IncidentEvidence?,
         redact: Boolean,
     ): Uri = withContext(Dispatchers.IO) {
         val audit = AuditLog.readRecent()
@@ -56,7 +56,11 @@ object DiagnosticsSharer {
             meta = collectMeta(context),
             entries = audit.entries,
             diagnosis = diagnosis,
-            probeCapture = probeCapture,
+            // The incident record owns the capture now; the bundle's own
+            // "latest capture" section would otherwise read as "none" for
+            // every incident that actually intercepted a response.
+            probeCapture = evidence?.probeCapture,
+            evidence = evidence,
             unreadableEntries = audit.unreadable,
             consoleEntries = console.entries,
             consoleUnreadable = console.unreadable,

@@ -48,6 +48,16 @@ class CloseReason(str, Enum):
     ABORTED_PRE_ACTIVE = "aborted_pre_active"
 
 
+class Confinement(str, Enum):
+    """Whether the portal WebView ran inside the gatepath netns.
+
+    Wire values; see docs/audit_log_schema.json `confinement_enum`.
+    """
+
+    CONFINED = "confined"
+    UNCONFINED = "unconfined"
+
+
 # Allowed (from_phase, to_phase) pairs.
 _VALID_TRANSITIONS: frozenset[tuple[PortalPhase, PortalPhase]] = frozenset(
     {
@@ -96,6 +106,11 @@ class PortalSession:
     # an observation: a non-zero value means the session rendered a page whose
     # certificate did not validate.
     tls_cert_errors_bypassed: int = 0
+
+    # Whether the portal WebView ran inside the gatepath netns. Set by the
+    # caller (window.py) at the isolated engage site; default reflects the
+    # in-process (unconfined) path.
+    confinement: Confinement = Confinement.UNCONFINED
 
     @property
     def duration_seconds(self) -> Optional[int]:
@@ -176,6 +191,19 @@ def to_completed(
         blocked_resource_requests=blocked_resources,
         tls_cert_errors_bypassed=tls_cert_errors_bypassed,
     )
+
+
+def to_confined(session: PortalSession) -> PortalSession:
+    """Return a copy of *session* marked as having run inside the gatepath netns.
+
+    Called **only** from the netns-isolated launch path in ``window.py``, after
+    the helper has reported a successful engage — never from the in-process
+    WebView fallback, which keeps the default ``UNCONFINED``. It lives here
+    rather than inline at the call site because ``confined`` is the security
+    claim the audit log exists to carry, and the launch path is GTK-gated code
+    that the desktop test suite does not execute.
+    """
+    return dataclasses.replace(session, confinement=Confinement.CONFINED)
 
 
 def to_aborted_pre_active(session: PortalSession) -> PortalSession:

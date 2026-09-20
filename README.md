@@ -32,10 +32,10 @@ and the security model. They share **no code** — see [`docs/ARCHITECTURE.md`](
 | Capability                                             | Android        | Desktop (Flatpak) |
 |--------------------------------------------------------|----------------|-------------------|
 | Detect captive portal                                  | NetworkCallback| NetworkManager D-Bus + urllib fallback |
-| Bind portal traffic to WiFi interface                  | Yes (kernel)   | **No** in Flatpak; native netns helper validated on a `mac80211_hwsim` virtual-radio harness (`tests/e2e-hwsim/`), open networks only; physical-card confirmation pending — see [`docs/BLOCKERS.md`](docs/BLOCKERS.md) |
+| Bind portal traffic to WiFi interface                  | Yes, when excluded from the VPN; verified per incident | **No** in Flatpak; native netns helper validated on a `mac80211_hwsim` virtual-radio harness (`tests/e2e-hwsim/`), open networks only; physical-card confirmation pending — see [`docs/BLOCKERS.md`](docs/BLOCKERS.md) |
 | Keep VPN tunnel active during portal session           | Yes            | Best-effort, **user warned** |
-| Block off-domain navigation in portal window           | Yes            | Yes |
-| Block analytics / tracker resource requests            | Yes            | Yes |
+| Block off-domain navigation in portal window           | Observed and counted (not blocked) | Observed and counted (not blocked) |
+| Block analytics / tracker resource requests            | Observed and counted (not blocked) | Observed and counted (not blocked) |
 | Wipe cookies / cache / storage on session close        | Yes            | Yes |
 | Auto-close session after timeout                       | Yes (10 min)   | Yes (10 min) |
 | Append-only audit log                                  | Yes (JSONL)    | Yes (JSONL) |

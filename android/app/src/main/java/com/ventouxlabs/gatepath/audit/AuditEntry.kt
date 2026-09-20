@@ -5,12 +5,12 @@ import kotlinx.serialization.Serializable
 
 /**
  * Immutable data class representing one audit log entry.
- * Schema version 1 — must match docs/AUDIT_LOG_SCHEMA.md exactly.
+ * Schema version 2 — must match docs/AUDIT_LOG_SCHEMA.md exactly.
  * Field names use @SerialName to match the JSON snake_case schema.
  */
 @Serializable
 data class AuditEntry(
-    @SerialName("schema_version") val schemaVersion: Int = 1,
+    @SerialName("schema_version") val schemaVersion: Int = 2,
     @SerialName("timestamp_utc") val timestampUtc: String,
     @SerialName("platform") val platform: String = "android",
     @SerialName("ssid") val ssid: String?,
@@ -22,8 +22,15 @@ data class AuditEntry(
     @SerialName("session_closed_utc") val sessionClosedUtc: String?,
     @SerialName("close_reason") val closeReason: String,
     @SerialName("duration_seconds") val durationSeconds: Int,
-    @SerialName("blocked_navigation_attempts") val blockedNavigationAttempts: Int,
-    @SerialName("blocked_resource_requests") val blockedResourceRequests: Int,
+    @SerialName("observed_navigation_attempts") val observedNavigationAttempts: Int,
+    @SerialName("observed_resource_requests") val observedResourceRequests: Int,
+    /**
+     * `confined` or `unconfined` — see docs/audit_log_schema.json
+     * `confinement_enum`. Android writes `confined` only for a session opened
+     * from a classified `Confined` state; the debug-force path writes
+     * `unconfined`.
+     */
+    @SerialName("confinement") val confinement: String = "unconfined",
     /**
      * Certificate errors proceeded past on the portal host (see
      * `ui/SslErrorPolicy`). Added after schema_version 1 shipped, so it is an

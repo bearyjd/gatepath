@@ -134,7 +134,11 @@ MAIN_SOURCES=(
     "$SRC_MAIN/com/ventouxlabs/gatepath/ui/WebViewHostMatching.kt"
     "$SRC_MAIN/com/ventouxlabs/gatepath/ui/SslErrorPolicy.kt"
     "$SRC_MAIN/com/ventouxlabs/gatepath/ui/PortalLoadError.kt"
+    "$SRC_MAIN/com/ventouxlabs/gatepath/ui/ConfinementStateText.kt"
     "$SRC_MAIN/com/ventouxlabs/gatepath/network/VpnHeuristics.kt"
+    "$SRC_MAIN/com/ventouxlabs/gatepath/network/VpnKind.kt"
+    "$SRC_MAIN/com/ventouxlabs/gatepath/network/ProbePath.kt"
+    "$SRC_MAIN/com/ventouxlabs/gatepath/network/ConfinementState.kt"
     "$SRC_MAIN/com/ventouxlabs/gatepath/network/BoundedReader.kt"
     "$SRC_MAIN/com/ventouxlabs/gatepath/network/HttpFetcher.kt"
     "$SRC_MAIN/com/ventouxlabs/gatepath/diag/DiagnosticReport.kt"
@@ -156,6 +160,8 @@ MAIN_SOURCES=(
     "$SRC_MAIN/com/ventouxlabs/gatepath/diag/ConsoleCaptureBuffer.kt"
     "$SRC_MAIN/com/ventouxlabs/gatepath/diag/ConsoleCaptureFile.kt"
     "$SRC_MAIN/com/ventouxlabs/gatepath/diag/DiagnosticsBundle.kt"
+    "$SRC_MAIN/com/ventouxlabs/gatepath/diag/CertSummary.kt"
+    "$SRC_MAIN/com/ventouxlabs/gatepath/diag/IncidentEvidence.kt"
     "$SRC_MAIN/com/ventouxlabs/gatepath/BindWatchdog.kt"
 )
 
@@ -221,8 +227,11 @@ TEST_SOURCES=(
     "$SRC_TEST/com/ventouxlabs/gatepath/WebViewHostMatchingTest.kt"
     "$SRC_TEST/com/ventouxlabs/gatepath/SslErrorPolicyTest.kt"
     "$SRC_TEST/com/ventouxlabs/gatepath/PortalLoadErrorTest.kt"
+    "$SRC_TEST/com/ventouxlabs/gatepath/ConfinementStateTextTest.kt"
     "$SRC_TEST/com/ventouxlabs/gatepath/BindWatchdogTest.kt"
     "$SRC_TEST/com/ventouxlabs/gatepath/VpnHeuristicsTest.kt"
+    "$SRC_TEST/com/ventouxlabs/gatepath/VpnKindTest.kt"
+    "$SRC_TEST/com/ventouxlabs/gatepath/ConfinementStateTest.kt"
     "$SRC_TEST/com/ventouxlabs/gatepath/VpnPrefixParityTest.kt"
     "$SRC_TEST/com/ventouxlabs/gatepath/BoundedReaderTest.kt"
     "$SRC_TEST/com/ventouxlabs/gatepath/diag/DiagnosticEngineTest.kt"
@@ -240,6 +249,8 @@ TEST_SOURCES=(
     "$SRC_TEST/com/ventouxlabs/gatepath/diag/ConsoleCaptureBufferTest.kt"
     "$SRC_TEST/com/ventouxlabs/gatepath/diag/ConsoleCaptureFileTest.kt"
     "$SRC_TEST/com/ventouxlabs/gatepath/diag/DiagnosticsBundleTest.kt"
+    "$SRC_TEST/com/ventouxlabs/gatepath/diag/CertSummaryTest.kt"
+    "$SRC_TEST/com/ventouxlabs/gatepath/diag/IncidentEvidenceTest.kt"
 )
 
 TEST_CP="$MAIN_CP:$CLASSES_MAIN:$ANDROID_STUB:$JUNIT_JAR:$HAMCREST_JAR:$COROUTINES_TEST"

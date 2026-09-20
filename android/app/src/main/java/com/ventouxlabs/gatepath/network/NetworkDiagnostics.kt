@@ -1,9 +1,9 @@
 package com.ventouxlabs.gatepath.network
 
 /**
- * Snapshot of why captive-portal sign-in is failing. Built when
- * [CaptivePortalMonitor] emits [NetworkEvent.CaptivePortalSuspected] and
- * surfaced to the UI via the troubleshooting panel.
+ * Snapshot of the network environment at one captive incident. Built when
+ * [CaptivePortalMonitor] emits [NetworkEvent.CaptiveIncident] and consumed by
+ * the diagnostic engine and the incident evidence record.
  *
  * The fields are deliberately user-readable strings — this object gets
  * shown to a human, not parsed by another module.
@@ -13,19 +13,16 @@ data class NetworkDiagnostics(
     val networkId: String,
 
     /**
-     * Error from the bind-then-probe path
-     * (`network.openConnection()` after `bindProcessToNetwork(network)`).
-     * Typically `EPERM` on captive networks because Android marks them
-     * restricted. `null` if that path actually succeeded (rare).
+     * `EPERM` when a secure VPN covers Gatepath's UID; `EACCES` under
+     * always-on lockdown; `null` when the bound probe reached the gateway.
      */
     val bindProbeError: String?,
 
     /**
      * Error from the userspace fallback (`URL.openConnection()` with no
-     * bind, follows the kernel's default route). `null` if it succeeded —
-     * but in that case we'd have emitted `CaptiveNetworkAvailable`, not
-     * `CaptivePortalSuspected`, so this is `null` only for the
-     * "fallback returned 204 from a different network (cellular/VPN)" case.
+     * bind, follows the kernel's default route). `null` when that path
+     * returned a response rather than failing — either a 204 from a
+     * different network (cellular/VPN) or the portal redirect itself.
      */
     val fallbackProbeError: String?,
 

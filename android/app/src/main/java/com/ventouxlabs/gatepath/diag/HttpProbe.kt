@@ -7,8 +7,8 @@ import com.ventouxlabs.gatepath.network.ProbeResult
  * (which is bound to the captive [android.net.Network]) and reports whether
  * the path is now usable.
  *
- * Engine is invoked from a `CaptivePortalSuspected` event — meaning the
- * monitoring layer already ran bind + userspace probes and both failed. This
+ * Engine is invoked from a `CaptiveIncident` event — meaning the monitoring
+ * layer already ran its bind and userspace probes on this network. This
  * probe runs a fresh bind probe inside the diagnostic battery so:
  *   - if state has cleared (transient race), we surface Healthy
  *   - if the probe still errors, we carry the raw message into [DiagnosticReport.Inconclusive]

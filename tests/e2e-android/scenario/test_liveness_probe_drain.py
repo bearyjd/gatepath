@@ -1,11 +1,15 @@
 """`bound_begin` must not be measured for quiescence before a fired probe's
 own connect() attempts could have finished.
 
-`step_liveness_probe`'s poll loop fires `am start ... --es
-gatepath.testvpn.action probe` and breaks as soon as the sentinel shows up in
-the sink. But `am start` is fire-and-forget: it returns once the activity is
-launched, not once its onCreate() (which spawns and `.join()`s a thread doing
-up to `PROBE_COUNT` sequential `connect()` attempts, each with a
+`step_liveness_probe`'s poll loop fires `am start --activity-single-top -n
+com.ventouxlabs.gatepath/.MainActivity --ez gatepath.debug.sentinel_probe
+true` (Task 14 — previously the testvpn app's `probe` action, moved to
+Gatepath's own MainActivity because a VPN-owning process's own traffic
+bypasses the tunnel it creates, see run-scenario.py's step_liveness_probe
+docstring) and breaks as soon as the sentinel shows up in the sink. But `am
+start` is fire-and-forget: it returns once the activity is launched, not once
+its debug-intent handler (which spawns a background thread doing up to
+`PROBE_COUNT` sequential `connect()` attempts, each with a
 `CONNECT_TIMEOUT_MS` timeout) actually finishes. So the probe that triggered
 capture can still be sending SYNs for up to `PROBE_COUNT * CONNECT_TIMEOUT_MS`
 after the poll loop already moved on to the quiescence-settle measurement.
@@ -28,10 +32,10 @@ _spec = importlib.util.spec_from_file_location("run_scenario", SCENARIO)
 run_scenario = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(run_scenario)
 
-# PROBE_COUNT (3) * CONNECT_TIMEOUT_MS (1500ms) from TestVpnControlActivity.kt.
-# Deliberately hardcoded here, independent of run_scenario.PROBE_DRAIN_SEC, so
-# this test proves the real timing property rather than merely that some
-# constant with that name exists.
+# PROBE_COUNT (3) * CONNECT_TIMEOUT_MS (1500ms) from MainActivity.kt's debug
+# sentinel-probe handler. Deliberately hardcoded here, independent of
+# run_scenario.PROBE_DRAIN_SEC, so this test proves the real timing property
+# rather than merely that some constant with that name exists.
 STRAGGLER_WORST_CASE_SEC = 4.5
 
 
@@ -55,9 +59,12 @@ def test_settle_measurement_waits_for_the_triggering_probe_to_finish(monkeypatch
     pull_sink_call_times: list[float] = []
     mark_calls: list[tuple[str, float]] = []
 
-    def fake_testvpn(serial: str, action: str, label: str | None = None) -> None:
-        if action == "probe":
+    def fake_shell(serial: str, cmd: str, timeout: int = 30, check: bool = True) -> str:
+        # step_liveness_probe's only adb_helper.shell call is firing the debug
+        # sentinel-probe intent on Gatepath's own MainActivity (Task 14).
+        if run_scenario.EXTRA_DEBUG_SENTINEL_PROBE in cmd:
             probe_fire_times.append(clock["now"])
+        return ""
 
     def fake_pull_sink(serial: str) -> list[dict]:
         pull_sink_call_times.append(clock["now"])
@@ -68,7 +75,7 @@ def test_settle_measurement_waits_for_the_triggering_probe_to_finish(monkeypatch
     def fake_mark(serial: str, label: str) -> None:
         mark_calls.append((label, clock["now"]))
 
-    monkeypatch.setattr(run_scenario, "_testvpn", fake_testvpn)
+    monkeypatch.setattr(run_scenario.adb_helper, "shell", fake_shell)
     monkeypatch.setattr(run_scenario, "_pull_sink", fake_pull_sink)
     monkeypatch.setattr(run_scenario, "_mark", fake_mark)
 
