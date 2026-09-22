@@ -1,6 +1,5 @@
 package com.ventouxlabs.gatepath.ui
 
-import android.net.ConnectivityManager
 import android.net.Network
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -26,6 +25,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.ventouxlabs.gatepath.BuildConfig
 import com.ventouxlabs.gatepath.diag.CertSummary
+import com.ventouxlabs.gatepath.network.ProcessBinding
 
 /**
  * Full-screen portal sheet.
@@ -40,7 +40,7 @@ import com.ventouxlabs.gatepath.diag.CertSummary
 fun PortalScreen(
     portalUrl: String,
     network: Network,
-    connectivityManager: ConnectivityManager,
+    processBinding: ProcessBinding,
     onDismiss: () -> Unit,
     onBlockedNavigation: () -> Unit,
     onBlockedResource: () -> Unit,
@@ -76,7 +76,7 @@ fun PortalScreen(
             GatepathWebView(
                 url = portalUrl,
                 network = network,
-                connectivityManager = connectivityManager,
+                processBinding = processBinding,
                 onBlockedNavigation = onBlockedNavigation,
                 onBlockedResource = onBlockedResource,
                 onTlsCertErrorBypassed = onTlsCertErrorBypassed,

@@ -317,23 +317,40 @@ other network I/O during a session and the session is capped at 10 minutes, so t
 exposure window is small, but new features that issue HTTP from the same process
 during a session **must** re-evaluate this guarantee.
 
-The binding is undone in four places to defend against process-death leaks:
-1. `DisposableEffect.onDispose` in `GatepathWebView` (graceful close).
-2. `Application.onTerminate` (orderly process shutdown).
-3. A `ProcessLifecycleOwner` watchdog that fires on whole-app background (debounced
-   across in-app activity transitions, so routine pause/resume during navigation does
-   NOT yank the binding mid-session).
-4. `CaptivePortalActivity.onDestroy` (the system-handoff entry point), which releases
-   the binding only if the process is still bound to the network *it* set — the slot is
-   shared with `MainActivity`'s portal screen, and clearing another screen's live binding
-   would route that WebView over the default route.
+A single `ProcessBinding` (`network/ProcessBinding.kt`, one `@Singleton`, backed by
+`AndroidNetworkBinder` over `ConnectivityManager`) is now the only thing that calls
+`bindProcessToNetwork`. Every writer is one of two roles instead of running its own
+save/bind/restore:
 
-One writer is a borrower rather than an owner: `CaptivePortalMonitor`'s per-network probe
-saves the current binding, binds its probe network, and writes the saved value back when
-the probe finishes. A probe in flight when the owning screen releases can therefore
-restore a binding nobody owns; the watchdog in (3) is the only backstop for that window.
-Replacing these per-caller compares with a single refcounted binding owner is tracked as
-follow-up work.
+- **Owners** hold a `Lease` from `acquire(network)`, which returns null instead of a
+  lease when the bind is refused (e.g. EPERM under a secure VPN), so a refused bind never
+  claims the slot. Leases form a stack; the bound network always follows the top, and
+  `release(lease)` removes a lease wherever it sits — not just the top — so releasing one
+  owner never disturbs another still-live owner's binding. There are three owners:
+  1. `GatepathWebView`'s `DisposableEffect.onDispose` (graceful close of a WebView the
+     ordinary in-app flow opened).
+  2. `CaptivePortalActivity.onCreate`/`onDestroy` (the system-handoff entry point) —
+     acquires its own lease and releases exactly that lease, which is safe even while
+     `MainActivity`'s WebView holds a lease of its own, because releases are tracked per
+     lease rather than by comparing the process-wide slot's current value.
+  3. `GatepathApplication`'s whole-app-background watchdog and `onTerminate`, both of
+     which call `releaseAll()` — clears every owner's lease and force-binds null
+     immediately, even with a borrow (below) in flight, because this is the leak defense
+     of last resort and cannot wait.
+- **Borrowers** pin the slot for the duration of a block and restore it to the *current*
+  top of the owner stack afterward — never to a value saved before the block ran, which is
+  what let a stale restore happen under the old per-caller design.
+  `CaptivePortalMonitor`'s per-network probe is the one borrower, via
+  `processBinding.borrow(network) { probe.probe(...) }`.
+
+One gap is intentional and documented in `ProcessBinding`'s KDoc rather than fixed: an
+`acquire` made while a borrow is in flight cannot test the real bind without disturbing
+the borrow's pinned network, so it always succeeds and pushes a lease; if the deferred
+bind would actually have been refused, that failure surfaces only once the borrow ends and
+is never reported back to that `acquire` caller. This is reachable in principle (a WebView
+`DisposableEffect` on the main thread racing a probe on `Dispatchers.IO`) but theoretical
+in practice, because a WebView only opens from `ConfinementState.Confined`, which means
+the probe already bound that exact network successfully.
 
 If the process is killed by the OS without lifecycle callbacks firing, the binding
 ends with the process — Android does not persist it across launches.
