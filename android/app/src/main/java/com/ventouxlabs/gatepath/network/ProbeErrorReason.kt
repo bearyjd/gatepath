@@ -1,7 +1,6 @@
 package com.ventouxlabs.gatepath.network
 
 import android.system.ErrnoException
-import android.system.OsConstants
 
 /**
  * Why a captive-portal probe failed, structured instead of parsed from a
@@ -91,11 +90,28 @@ internal fun probeErrorReason(ex: Throwable): ProbeErrorReason {
     }
 }
 
+/**
+ * The Linux errno values this classification cares about, as compile-time
+ * constants. Deliberately NOT `android.system.OsConstants`: those fields are
+ * filled in natively at class-init, so under Gradle unit tests (which link
+ * the `android.jar` stubs) every one of them reads as 0 and the `when` below
+ * would send every errno to its first branch — the four failures on PR #170's
+ * first Gradle run. The generic errno numbering is the same on every Android
+ * ABI still supported (arm64, arm, x86_64, x86 all use the generic table).
+ */
+internal object LinuxErrno {
+    const val EPERM = 1
+    const val EACCES = 13
+    const val ENETUNREACH = 101
+    const val ETIMEDOUT = 110
+    const val ECONNREFUSED = 111
+}
+
 private fun Int.toProbeErrorReason(): ProbeErrorReason? = when (this) {
-    OsConstants.EPERM -> ProbeErrorReason.PERMISSION_DENIED
-    OsConstants.EACCES -> ProbeErrorReason.ACCESS_BLOCKED
-    OsConstants.ECONNREFUSED -> ProbeErrorReason.CONNECTION_REFUSED
-    OsConstants.ENETUNREACH -> ProbeErrorReason.UNREACHABLE
-    OsConstants.ETIMEDOUT -> ProbeErrorReason.TIMEOUT
+    LinuxErrno.EPERM -> ProbeErrorReason.PERMISSION_DENIED
+    LinuxErrno.EACCES -> ProbeErrorReason.ACCESS_BLOCKED
+    LinuxErrno.ECONNREFUSED -> ProbeErrorReason.CONNECTION_REFUSED
+    LinuxErrno.ENETUNREACH -> ProbeErrorReason.UNREACHABLE
+    LinuxErrno.ETIMEDOUT -> ProbeErrorReason.TIMEOUT
     else -> null
 }

@@ -1,7 +1,7 @@
 package com.ventouxlabs.gatepath
 
 import android.system.ErrnoException
-import android.system.OsConstants
+import com.ventouxlabs.gatepath.network.LinuxErrno
 import com.ventouxlabs.gatepath.network.ProbeErrorReason
 import com.ventouxlabs.gatepath.network.probeErrorReason
 import org.junit.Assert.assertEquals
@@ -26,7 +26,7 @@ class ProbeErrorReasonTest {
 
     @Test
     fun `ConnectException wrapping ErrnoException EPERM is PERMISSION_DENIED regardless of the outer message`() {
-        val errno = ErrnoException("connect", OsConstants.EPERM)
+        val errno = ErrnoException("connect", LinuxErrno.EPERM)
         val outer = ConnectException("some OEM-specific wording that says nothing about EPERM")
         outer.initCause(errno)
         assertEquals(ProbeErrorReason.PERMISSION_DENIED, probeErrorReason(outer))
@@ -34,7 +34,7 @@ class ProbeErrorReasonTest {
 
     @Test
     fun `ErrnoException EACCES nested two levels deep is ACCESS_BLOCKED`() {
-        val errno = ErrnoException("connect", OsConstants.EACCES)
+        val errno = ErrnoException("connect", LinuxErrno.EACCES)
         val mid = IOException("wrapped", errno)
         val outer = ConnectException("outer")
         outer.initCause(mid)
@@ -43,19 +43,19 @@ class ProbeErrorReasonTest {
 
     @Test
     fun `ErrnoException ECONNREFUSED is CONNECTION_REFUSED`() {
-        val errno = ErrnoException("connect", OsConstants.ECONNREFUSED)
+        val errno = ErrnoException("connect", LinuxErrno.ECONNREFUSED)
         assertEquals(ProbeErrorReason.CONNECTION_REFUSED, probeErrorReason(errno))
     }
 
     @Test
     fun `ErrnoException ENETUNREACH is UNREACHABLE`() {
-        val errno = ErrnoException("connect", OsConstants.ENETUNREACH)
+        val errno = ErrnoException("connect", LinuxErrno.ENETUNREACH)
         assertEquals(ProbeErrorReason.UNREACHABLE, probeErrorReason(errno))
     }
 
     @Test
     fun `ErrnoException ETIMEDOUT is TIMEOUT`() {
-        val errno = ErrnoException("connect", OsConstants.ETIMEDOUT)
+        val errno = ErrnoException("connect", LinuxErrno.ETIMEDOUT)
         assertEquals(ProbeErrorReason.TIMEOUT, probeErrorReason(errno))
     }
 
@@ -68,7 +68,7 @@ class ProbeErrorReasonTest {
     fun `an errno beneath a SocketTimeoutException wins over the timeout`() {
         // Chain-wide priority, not per node: the kernel errno is the real
         // answer even when a timeout wrapper sits above it.
-        val errno = ErrnoException("connect", OsConstants.EPERM)
+        val errno = ErrnoException("connect", LinuxErrno.EPERM)
         val outer = SocketTimeoutException("timed out")
         outer.initCause(errno)
         assertEquals(ProbeErrorReason.PERMISSION_DENIED, probeErrorReason(outer))

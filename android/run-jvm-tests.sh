@@ -184,9 +184,14 @@ echo "=== Compiling main sources (JVM-compatible subset) ==="
 # Stub out android.util.Log so AuditLog.kt compiles without Android SDK
 ANDROID_STUB="$BUILD_DIR/android-stub"
 mkdir -p "$ANDROID_STUB/android/util" "$ANDROID_STUB/android/net" "$ANDROID_STUB/android/system"
-# android.system.ErrnoException / OsConstants stubs: PortalProbe walks a failed
-# connect()'s cause chain for the errno so classification does not depend on
-# the rendered message text. Only the members the main sources touch.
+# android.system.ErrnoException stub: PortalProbe walks a failed connect()'s
+# cause chain for the errno so classification does not depend on the rendered
+# message text. Only the members the main sources touch. The message format
+# deliberately omits the errno's name so the JVM path cannot pass through the
+# substring fallback if the typed path ever breaks. There is no OsConstants
+# stub on purpose: the real android.jar's OsConstants fields are filled in
+# natively and read as 0 under Gradle unit tests, so the main sources carry
+# their own errno constants (LinuxErrno) rather than reference OsConstants.
 cat > "$ANDROID_STUB/android/system/ErrnoException.java" << 'JAVA_EOF'
 package android.system;
 public class ErrnoException extends Exception {
@@ -197,17 +202,6 @@ public class ErrnoException extends Exception {
         this.functionName = functionName;
         this.errno = errno;
     }
-}
-JAVA_EOF
-cat > "$ANDROID_STUB/android/system/OsConstants.java" << 'JAVA_EOF'
-package android.system;
-public final class OsConstants {
-    public static final int EPERM = 1;
-    public static final int EACCES = 13;
-    public static final int ENETUNREACH = 101;
-    public static final int ECONNREFUSED = 111;
-    public static final int ETIMEDOUT = 110;
-    private OsConstants() {}
 }
 JAVA_EOF
 cat > "$ANDROID_STUB/android/util/Log.java" << 'JAVA_EOF'
@@ -236,8 +230,7 @@ JAVA_EOF
 javac -d "$ANDROID_STUB" \
     "$ANDROID_STUB/android/util/Log.java" \
     "$ANDROID_STUB/android/net/Network.java" \
-    "$ANDROID_STUB/android/system/ErrnoException.java" \
-    "$ANDROID_STUB/android/system/OsConstants.java"
+    "$ANDROID_STUB/android/system/ErrnoException.java"
 
 kotlinc \
     -Xplugin="$SERIALIZATION_PLUGIN" \

@@ -27,9 +27,20 @@ bash android/run-jvm-tests.sh       # needs JDK 21 + kotlinc 2.0.x + python3; do
 `run-jvm-tests.sh` compiles only the Android-SDK-free subset of `src/main`
 (business logic: `audit/`, `network/PortalProbe.kt`, `session/`, `diag/`,
 `BindWatchdog.kt`, `ui/WebViewHostMatching.kt`) against stub
-`android.util.Log` / `android.net.Network` classes it generates itself — it is
-**not** a substitute for `./gradlew :app:test`, just the no-SDK fallback.
-`PortalProbeTest` spawns a `mockportal` subprocess, so `python3` must be on PATH.
+`android.util.Log` / `android.net.Network` / `android.system.ErrnoException`
+classes it generates itself — it is **not** a substitute for
+`./gradlew :app:test`, just the no-SDK fallback. `PortalProbeTest` spawns a
+`mockportal` subprocess, so `python3` must be on PATH.
+`GATEPATH_JVM_TEST_BUILD_DIR` overrides its build directory (parallel runs).
+
+**The two paths can disagree on `android.*` values.** Under Gradle, unit tests
+link the real `android.jar` stubs, whose `android.system.OsConstants` fields
+are filled in natively and therefore read as **0** in a unit test; a stub the
+JVM runner generates would carry the real numbers and hide that. Do not
+reference `OsConstants` (or any natively-initialised `android.*` constant) from
+code the unit tests exercise — `network/ProbeErrorReason.kt` carries its own
+`LinuxErrno` constants for exactly this reason, and there is deliberately no
+`OsConstants` stub in the runner.
 
 **It enumerates its sources by hand.** `MAIN_SOURCES` and `TEST_SOURCES` are
 explicit lists, not globs — add a new SDK-free source or test file to the
