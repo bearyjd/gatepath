@@ -207,10 +207,11 @@ class CaptivePortalActivity : ComponentActivity() {
      *   platform did not surface than a real portal. Offering "try signing
      *   in anyway" there would hand a tunnelled user the one action this
      *   feature exists to withhold; offering nothing would leave a button
-     *   that does nothing. Known limitation, tracked in issue #169: Unknown
-     *   also covers a bound probe that returned 204, where the bind
-     *   succeeded and the WebView would load — distinguishing that needs a
-     *   reason on the Unknown state, so for now it gets the VPN advice too.
+     *   that does nothing. A bound probe that actually returned 204 — where
+     *   the bind succeeded and the WebView would load — is told apart from a
+     *   genuine probe error by [com.ventouxlabs.gatepath.network.UnknownReason.BOUND_VALIDATED]
+     *   on the state and keeps the sign-in offer even under a VPN; see
+     *   [ConfinementStateText.handoffUnknown].
      *
      * [ConfinementState.Tunnelled], [ConfinementState.Blocked] and
      * [ConfinementState.DnsStrict] keep their existing actions and never open
@@ -243,7 +244,7 @@ class CaptivePortalActivity : ComponentActivity() {
                     // Unknown gets this entry point's own sentence and action;
                     // see this function's KDoc. Null for every other state.
                     val handoffUnknown = (state as? ConfinementState.Unknown)
-                        ?.let { ConfinementStateText.handoffUnknown(vpnKind, label) }
+                        ?.let { ConfinementStateText.handoffUnknown(it.reason, vpnKind, label) }
                     // Scaffold, not a bare card: enableEdgeToEdge() is active,
                     // so without innerPadding the card draws under the status
                     // and navigation bars.

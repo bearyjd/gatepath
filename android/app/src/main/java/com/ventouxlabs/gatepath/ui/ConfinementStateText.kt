@@ -1,6 +1,7 @@
 package com.ventouxlabs.gatepath.ui
 
 import com.ventouxlabs.gatepath.network.ConfinementState
+import com.ventouxlabs.gatepath.network.UnknownReason
 import com.ventouxlabs.gatepath.network.VpnKind
 
 enum class ConfinementAction { SIGN_IN_HERE, OPEN_VPN_APP, OPEN_NETWORK_SETTINGS, SHARE_EVIDENCE }
@@ -53,18 +54,24 @@ object ConfinementStateText {
      * What the system-handoff entry point (`CaptivePortalActivity`) offers for
      * [ConfinementState.Unknown]. That screen owns no evidence bundle, so the
      * default Unknown copy ("Share the evidence.") would name a control it
-     * cannot show. Two cases instead:
+     * cannot show. Three cases instead:
      *
-     * - A VPN interface is up: an inconclusive bound probe under a VPN is far
-     *   more likely a tunnelled bind the platform did not surface as a typed
-     *   errno than a real portal, so the useful next step is the same as
+     * - [reason] is [UnknownReason.BOUND_VALIDATED]: the bound probe actually
+     *   reached the gateway and got a 204, so the bind succeeded and the
+     *   WebView will load regardless of any VPN interface — this always gets
+     *   the sign-in offer, the same carve-out as the no-VPN case below.
+     * - [reason] is [UnknownReason.PROBE_ERROR] and a VPN interface is up: an
+     *   inconclusive bound probe under a VPN is far more likely a tunnelled
+     *   bind the platform did not surface as a typed errno than a real
+     *   portal, so the useful next step is the same as
      *   [ConfinementState.Tunnelled]'s — exclude Gatepath in the VPN app.
-     * - No VPN: the system's own probe saw a portal (that is why the handoff
-     *   happened), which outranks our inconclusive one, so the honest offer
-     *   is to try the sign-in page anyway.
+     * - [reason] is [UnknownReason.PROBE_ERROR] and no VPN: the system's own
+     *   probe saw a portal (that is why the handoff happened), which
+     *   outranks our inconclusive one, so the honest offer is to try the
+     *   sign-in page anyway.
      */
-    fun handoffUnknown(vpnKind: VpnKind, vpnAppLabel: String?): HandoffUnknownCopy =
-        if (vpnKind == VpnKind.NONE) {
+    fun handoffUnknown(reason: UnknownReason, vpnKind: VpnKind, vpnAppLabel: String?): HandoffUnknownCopy =
+        if (reason == UnknownReason.BOUND_VALIDATED || vpnKind == VpnKind.NONE) {
             HandoffUnknownCopy(
                 sentence = "Gatepath could not work out what this network is doing.",
                 action = ConfinementAction.SIGN_IN_HERE,

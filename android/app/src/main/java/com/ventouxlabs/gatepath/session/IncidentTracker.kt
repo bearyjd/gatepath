@@ -62,8 +62,12 @@ class IncidentTracker {
      * `0L` is never issued by [begin] (ids start at 1 and only increase), so
      * it doubles as a safe "nothing is current" sentinel: every keyed write
      * below compares against this and is a no-op once it no longer matches.
+     * Exposed read-only so a caller that only holds a network (not the
+     * [Begun] id from the original [begin] call, e.g. a manual rerun) can
+     * still key a write to "whatever incident is live right now".
      */
-    private var currentId: Long = 0L
+    var currentId: Long = 0L
+        private set
     private var nextId: Long = 1L
 
     /** What [begin] classified and published, plus the id later writes must key against. */
