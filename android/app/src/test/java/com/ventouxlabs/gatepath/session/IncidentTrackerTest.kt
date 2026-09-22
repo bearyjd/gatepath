@@ -121,6 +121,21 @@ class IncidentTrackerTest {
     }
 
     @Test
+    fun `a write keyed to the zero sentinel is dropped after clear, not resurrected`() {
+        val tracker = IncidentTracker()
+        val network = Network()
+
+        tracker.begin(network, tunnelledInputs(), ProbePath.BOUND_WIFI, diagnostics())
+        tracker.clear()
+        assertEquals(0L, tracker.currentId)
+
+        // 0L equals currentId right after clear; without the explicit
+        // isLive() guard this would pass a bare `id == currentId` check.
+        tracker.setDiagnosis(0L, healthyDiagnosis())
+        assertNull("a write keyed to the zero sentinel must never publish", tracker.diagnosis.value)
+    }
+
+    @Test
     fun `adoptDefaultRouteCapture sets DEFAULT_ROUTE and does not overwrite an existing capture`() {
         val tracker = IncidentTracker()
         val network = Network()
@@ -183,6 +198,20 @@ class IncidentTrackerTest {
         tracker.updateLastDiagnostics(begun1.id, diagnostics(bindError = "stale rerun"))
 
         assertEquals(currentSnapshot, tracker.lastDiagnostics)
+    }
+
+    @Test
+    fun `updateLastDiagnostics with the current id replaces lastDiagnostics`() {
+        val tracker = IncidentTracker()
+        val network = Network()
+
+        val begun = tracker.begin(network, tunnelledInputs(), ProbePath.BOUND_WIFI, diagnostics())
+        assertEquals(diagnostics(), tracker.lastDiagnostics)
+
+        val fresh = diagnostics(bindError = null, fallbackError = "fresh rerun error")
+        tracker.updateLastDiagnostics(begun.id, fresh)
+
+        assertEquals(fresh, tracker.lastDiagnostics)
     }
 
     @Test

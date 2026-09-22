@@ -21,18 +21,24 @@ import org.junit.Test
  */
 class ProcessBindingTest {
 
-    /** Records every bind() call in order; can be told to refuse a network. */
+    /** Records every bind() call in order; can be told to refuse or throw for a network. */
     private class FakeBinder : NetworkBinder {
         val calls = mutableListOf<Network?>()
         private var bound: Network? = null
         private var refused: Network? = null
+        private var throwsOn: Network? = null
 
         fun refuse(network: Network) {
             refused = network
         }
 
+        fun throwOn(network: Network) {
+            throwsOn = network
+        }
+
         override fun bind(network: Network?): Boolean {
             calls.add(network)
+            if (network != null && network === throwsOn) throw IllegalStateException("simulated bind failure")
             if (network != null && network === refused) return false
             bound = network
             return true
@@ -234,6 +240,54 @@ class ProcessBindingTest {
         // the "a refused bind never claims the slot" guarantee during a
         // borrow window.
         assertEquals(probe, binding.current())
+    }
+
+    @Test
+    fun `a borrow whose bind throws leaves borrowing false afterwards, so acquire binds normally`() = runTest {
+        val binder = FakeBinder()
+        val binding = ProcessBinding(binder)
+        val probe = Network()
+        val net = Network()
+        binder.throwOn(probe)
+
+        try {
+            binding.borrow(probe) {
+                // unreachable — bind() throws before block() runs
+            }
+        } catch (e: IllegalStateException) {
+            // expected — the simulated bind failure propagates
+        }
+
+        // If `borrowing` were stuck true, this acquire would take the
+        // already-borrowing branch and push a lease without ever calling
+        // bind(), leaving the slot unbound (fail-open) even though the
+        // binder itself would have accepted it.
+        val lease = binding.acquire(net)
+        assertNotNull(lease)
+        assertEquals(net, binding.current())
+    }
+
+    @Test
+    fun `releaseAll immediately before a borrow's pin still ends with the slot null after the borrow`() = runTest {
+        val binder = FakeBinder()
+        val binding = ProcessBinding(binder)
+        val net = Network()
+        val probe = Network()
+
+        val lease = requireNotNull(binding.acquire(net))
+        binding.releaseAll()
+        assertNull(binding.current())
+
+        binding.borrow(probe) {
+            assertEquals(probe, binding.current())
+        }
+
+        // The owner stack was already empty when the borrow's pin landed, so
+        // applyTop() at the end of the borrow binds null, not net — and the
+        // stale lease from before releaseAll() is not on the stack to revive.
+        assertNull(binding.current())
+        binding.release(lease) // no-op; stale after releaseAll
+        assertNull(binding.current())
     }
 
     @Test

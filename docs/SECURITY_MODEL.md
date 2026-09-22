@@ -326,17 +326,21 @@ save/bind/restore:
   lease when the bind is refused (e.g. EPERM under a secure VPN), so a refused bind never
   claims the slot. Leases form a stack; the bound network always follows the top, and
   `release(lease)` removes a lease wherever it sits — not just the top — so releasing one
-  owner never disturbs another still-live owner's binding. There are three owners:
-  1. `GatepathWebView`'s `DisposableEffect.onDispose` (graceful close of a WebView the
-     ordinary in-app flow opened).
+  owner never disturbs another still-live owner's binding. There are two owners:
+  1. `GatepathWebView`'s `DisposableEffect.onDispose` (graceful close of a WebView). This
+     is reached from more than the ordinary in-app flow: `CaptivePortalActivity`, the
+     system-handoff entry point, composes the same `GatepathWebView` via `PortalScreen`,
+     including from `ConfinementState.Unknown`'s `BOUND_VALIDATED` carve-out — a case
+     where a refused lease is a real possibility, not a theoretical one (see below).
   2. `CaptivePortalActivity.onCreate`/`onDestroy` (the system-handoff entry point) —
      acquires its own lease and releases exactly that lease, which is safe even while
      `MainActivity`'s WebView holds a lease of its own, because releases are tracked per
      lease rather than by comparing the process-wide slot's current value.
-  3. `GatepathApplication`'s whole-app-background watchdog and `onTerminate`, both of
-     which call `releaseAll()` — clears every owner's lease and force-binds null
-     immediately, even with a borrow (below) in flight, because this is the leak defense
-     of last resort and cannot wait.
+
+  `GatepathApplication` is not an owner — it holds no lease of its own. Its
+  whole-app-background watchdog and `onTerminate` both call `releaseAll()`, which is a
+  leak defense of last resort: it clears every owner's lease and binds null immediately,
+  even with a borrow (below) in flight, because it cannot wait for one to finish.
 - **Borrowers** pin the slot for the duration of a block and restore it to the *current*
   top of the owner stack afterward — never to a value saved before the block ran, which is
   what let a stale restore happen under the old per-caller design.
@@ -348,9 +352,12 @@ One gap is intentional and documented in `ProcessBinding`'s KDoc rather than fix
 the borrow's pinned network, so it always succeeds and pushes a lease; if the deferred
 bind would actually have been refused, that failure surfaces only once the borrow ends and
 is never reported back to that `acquire` caller. This is reachable in principle (a WebView
-`DisposableEffect` on the main thread racing a probe on `Dispatchers.IO`) but theoretical
-in practice, because a WebView only opens from `ConfinementState.Confined`, which means
-the probe already bound that exact network successfully.
+`DisposableEffect` on the main thread racing a probe on `Dispatchers.IO`), and more
+importantly a refused `acquire` outside a borrow is reachable in production too — the
+`BOUND_VALIDATED` carve-out above proves a validated probe, not a successful process-wide
+bind. `GatepathWebView` now fails closed on either path: a null lease skips every
+`loadUrl` call site and surfaces `PortalLoadErrorKind.BIND_REFUSED` instead of silently
+loading over whatever route is currently bound.
 
 If the process is killed by the OS without lifecycle callbacks firing, the binding
 ends with the process — Android does not persist it across launches.

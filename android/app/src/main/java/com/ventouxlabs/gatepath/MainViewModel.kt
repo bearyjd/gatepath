@@ -154,6 +154,24 @@ class MainViewModel @Inject constructor(
     private var sessionWasConfined: Boolean = false
 
     /**
+     * The [IncidentTracker] id of the incident that opened the session
+     * currently running, or `0L` (the tracker's own "nothing is current"
+     * sentinel) when no session is open. Latched alongside
+     * [sessionWasConfined] wherever a reenter is Accepted, and reset
+     * alongside it wherever a session ends.
+     *
+     * [onCertSummary] keys its evidence write to this rather than to
+     * `incidents.currentId`: reading `currentId` there is a tautology
+     * against [IncidentTracker]'s own staleness check — it would always
+     * report "current", even for a cert error arriving from a WebView whose
+     * session's incident has since been superseded by a new one on another
+     * network. Latching the id at session-open time is what makes that
+     * write droppable once the session it actually describes is no longer
+     * live.
+     */
+    private var sessionIncidentId: Long = 0L
+
+    /**
      * Handle to the in-flight session-timeout coroutine. Cancelled when the
      * user dismisses, the network drops, or a new session begins. Without this
      * cancellation the coroutine would survive a dismiss and fire 10 minutes
@@ -273,6 +291,7 @@ class MainViewModel @Inject constructor(
                 is PortalSessionManager.ReenterResult.Accepted -> {
                     _session.value = result.session
                     sessionWasConfined = true
+                    sessionIncidentId = begun.id
                     _activeNetwork.value = event.network
                     openPortal()
                 }
@@ -347,6 +366,13 @@ class MainViewModel @Inject constructor(
                 // incident has no capture yet: this one travelled the default
                 // route, so letting it overwrite a bound-Wi-Fi capture would
                 // contradict the record's own `probePath`.
+                //
+                // This is also what ProbeContext.defaultRouteBypassesCaptiveResolved()
+                // calls when `defaultRouteBypassesCaptive` above is null (no
+                // fallback probe ran for this incident) — it is the only
+                // source of a fresh default-route measurement here, so the
+                // tri-state's lazy resolution and this probe's own default-
+                // route check are deliberately the same call.
                 activeProbe = {
                     portalProbe.probe(network = null, testUrl = monitor.probeUrl).also { result ->
                         if (result is ProbeResult.Portal) {
@@ -398,9 +424,22 @@ class MainViewModel @Inject constructor(
         runDiagnosticEngine(id, network, fresh)
     }
 
-    /** The WebView saw a certificate error; fold its safe summary into the evidence. */
+    /**
+     * The WebView saw a certificate error; fold its safe summary into the
+     * evidence of the incident that opened the session it came from.
+     *
+     * Keyed to [sessionIncidentId], not `incidents.currentId`: the latter is
+     * a tautology against [IncidentTracker]'s own staleness check — it is
+     * always "current" — so it would still attach a stale WebView's cert
+     * error to whatever incident happens to be live now, even after that
+     * WebView's own session and incident have been superseded (e.g. a
+     * second captive network arrived and classified while the first
+     * session's WebView was still open in the background). Keying to the
+     * id latched at session-open time is what makes this write droppable
+     * once the session it actually describes is no longer live.
+     */
     fun onCertSummary(summary: CertSummary) {
-        incidents.updateEvidence(incidents.currentId) { it.copy(certSummary = summary) }
+        incidents.updateEvidence(sessionIncidentId) { it.copy(certSummary = summary) }
     }
 
     /**
@@ -431,6 +470,7 @@ class MainViewModel @Inject constructor(
             is PortalSessionManager.ReenterResult.Accepted -> {
                 _session.value = result.session
                 sessionWasConfined = true
+                sessionIncidentId = incidents.currentId
                 _activeNetwork.value = network
                 openPortal()
             }
@@ -458,6 +498,7 @@ class MainViewModel @Inject constructor(
                 _session.value = next
                 writeAuditLog(next)
                 sessionWasConfined = false
+                sessionIncidentId = 0L
             }
         }
     }
@@ -470,6 +511,7 @@ class MainViewModel @Inject constructor(
         _session.value = next
         writeAuditLog(next)
         sessionWasConfined = false
+        sessionIncidentId = 0L
         // The confinement card deliberately stays on screen: the user can press
         // "Sign in here" again, which is what PortalSessionManager.reenter is for.
     }
@@ -491,6 +533,7 @@ class MainViewModel @Inject constructor(
         _session.value = next
         writeAuditLog(next)
         sessionWasConfined = false
+        sessionIncidentId = 0L
     }
 
     fun onBlockedNavigation() {
@@ -518,6 +561,7 @@ class MainViewModel @Inject constructor(
         // This path never classifies, so the session is not confined — and the
         // latch could still be set from an earlier real session.
         sessionWasConfined = false
+        sessionIncidentId = 0L
         _activeNetwork.value = network
         _session.value = PortalSession.Active(
             portalUrl = portalUrl,
@@ -542,6 +586,7 @@ class MainViewModel @Inject constructor(
         _session.value = next
         writeAuditLog(next)
         sessionWasConfined = false
+        sessionIncidentId = 0L
     }
 
     /**

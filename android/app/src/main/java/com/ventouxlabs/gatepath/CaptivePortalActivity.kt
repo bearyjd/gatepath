@@ -58,9 +58,9 @@ import javax.inject.Inject
  *     used to report sign-in completion or dismissal back to the system.
  *
  *   - [ConnectivityManager.EXTRA_NETWORK] — the captive [Network]. The
- *     activity binds the process to this network via
- *     [ConnectivityManager.bindProcessToNetwork] so the WebView's traffic
- *     routes via the captive interface.
+ *     activity acquires a [ProcessBinding.Lease] on this network so the
+ *     WebView's traffic routes via the captive interface — see
+ *     [ProcessBinding] for the owner/borrower model this participates in.
  *
  *   - [ConnectivityManager.EXTRA_CAPTIVE_PORTAL_URL] — the URL the captive
  *     portal redirected to (the actual sign-in page). Available API 28+.
@@ -207,10 +207,13 @@ class CaptivePortalActivity : ComponentActivity() {
      *   platform did not surface than a real portal. Offering "try signing
      *   in anyway" there would hand a tunnelled user the one action this
      *   feature exists to withhold; offering nothing would leave a button
-     *   that does nothing. A bound probe that actually returned 204 — where
-     *   the bind succeeded and the WebView would load — is told apart from a
-     *   genuine probe error by [com.ventouxlabs.gatepath.network.UnknownReason.BOUND_VALIDATED]
-     *   on the state and keeps the sign-in offer even under a VPN; see
+     *   that does nothing. A bound probe that actually returned 204 is told
+     *   apart from a genuine probe error by
+     *   [com.ventouxlabs.gatepath.network.UnknownReason.BOUND_VALIDATED] on
+     *   the state, but that alone only proves the probe's own socket routed
+     *   correctly — not that [lease] (the process-wide bind the WebView
+     *   actually depends on) was granted. The sign-in offer under a VPN is
+     *   kept only when [lease] is also non-null; see
      *   [ConfinementStateText.handoffUnknown].
      *
      * [ConfinementState.Tunnelled], [ConfinementState.Blocked] and
@@ -244,7 +247,7 @@ class CaptivePortalActivity : ComponentActivity() {
                     // Unknown gets this entry point's own sentence and action;
                     // see this function's KDoc. Null for every other state.
                     val handoffUnknown = (state as? ConfinementState.Unknown)
-                        ?.let { ConfinementStateText.handoffUnknown(it.reason, vpnKind, label) }
+                        ?.let { ConfinementStateText.handoffUnknown(it.reason, vpnKind, label, processBindHeld = lease != null) }
                     // Scaffold, not a bare card: enableEdgeToEdge() is active,
                     // so without innerPadding the card draws under the status
                     // and navigation bars.

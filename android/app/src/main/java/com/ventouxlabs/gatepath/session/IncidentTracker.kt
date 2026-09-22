@@ -31,6 +31,11 @@ import java.net.URI
  * Pure Kotlin aside from [android.net.Network] (an opaque handle compared
  * only by reference/equality here), so this is exercised by the no-SDK JVM
  * suite.
+ *
+ * **Threading:** main-thread confined. Every write here arrives from
+ * `MainViewModel`'s `viewModelScope` (`Dispatchers.Main.immediate`); this
+ * class has no synchronization of its own and relies on that single-threaded
+ * confinement, not on any locking here.
  */
 class IncidentTracker {
 
@@ -69,6 +74,17 @@ class IncidentTracker {
     var currentId: Long = 0L
         private set
     private var nextId: Long = 1L
+
+    /**
+     * `true` when [id] names the incident currently live. `0L` is both the
+     * id [begin] never issues and the value [clear] resets [currentId] to —
+     * without the explicit `id != 0L` check, a write keyed to `0L` (e.g. a
+     * caller that never captured a real [Begun] id, or held onto a stale
+     * default) would pass a bare `id == currentId` check right after
+     * [clear] and silently resurrect a field on an incident that no longer
+     * exists.
+     */
+    private fun isLive(id: Long) = id != 0L && id == currentId
 
     /** What [begin] classified and published, plus the id later writes must key against. */
     data class Begun(val id: Long, val confinement: ConfinementState, val evidence: IncidentEvidence)
@@ -112,7 +128,7 @@ class IncidentTracker {
 
     /** Atomic update to the current incident's evidence; a no-op once [id] is stale. */
     fun updateEvidence(id: Long, transform: (IncidentEvidence) -> IncidentEvidence) {
-        if (id != currentId) return
+        if (!isLive(id)) return
         _evidence.update { it?.let(transform) }
     }
 
@@ -132,13 +148,13 @@ class IncidentTracker {
 
     /** Publish a diagnostic-engine result; dropped once [id] is stale. */
     fun setDiagnosis(id: Long, result: DiagnosisResult) {
-        if (id != currentId) return
+        if (!isLive(id)) return
         _diagnosis.value = result
     }
 
     /** Record a fresh environment snapshot from a manual rerun; dropped once [id] is stale. */
     fun updateLastDiagnostics(id: Long, diagnostics: NetworkDiagnostics) {
-        if (id != currentId) return
+        if (!isLive(id)) return
         lastDiagnostics = diagnostics
     }
 

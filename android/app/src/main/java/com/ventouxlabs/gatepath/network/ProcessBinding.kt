@@ -1,8 +1,11 @@
 package com.ventouxlabs.gatepath.network
 
 import android.net.Network
+import android.util.Log
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+
+private const val TAG = "ProcessBinding"
 
 /**
  * Single owner of the process-wide `bindProcessToNetwork` slot.
@@ -127,15 +130,47 @@ class ProcessBinding(private val binder: NetworkBinder) {
 
     /**
      * Pins the slot to [network] for the duration of [block], serialised
-     * against other borrows on [borrowMutex]. Afterwards the slot is
-     * restored to the current top of the owner stack (null if empty) —
-     * never to a value saved before [block] ran.
+     * against other borrows on [borrowMutex] (which is not reentrant — only
+     * the monitor's probe ever borrows, and a nested borrow would deadlock).
+     * Afterwards the slot is restored to the current top of the owner stack
+     * (null if empty) — never to a value saved before [block] ran.
+     *
+     * Setting [borrowing] and calling [NetworkBinder.bind] happen inside the
+     * same `synchronized(lock)` block, and that block is inside the `try`:
+     * two failure modes this closes. First, an owner [release] or
+     * [releaseAll] landing between "set the flag" and "call bind" would
+     * otherwise be silently undone by the bind that follows — the owner's
+     * `null` would get immediately overwritten by the borrow's network.
+     * Second, if `bind` itself throws, [borrowing] would otherwise stay true
+     * forever: every later [acquire] would push a lease without ever calling
+     * `bind` for it (fail-open) because it would keep taking the
+     * already-borrowing branch. With both inside the `try`, the `finally`
+     * (`borrowing = false; applyTop()`) always runs and self-heals the slot
+     * back to the real owner stack even on that failure path.
+     *
+     * A whole-app-background [releaseAll] that lands *during* this call still
+     * leaves the probe bound to [network] until [block] returns — backgrounding
+     * is not termination, so letting the in-flight probe finish on its own
+     * network is acceptable; [releaseAll]'s guarantee is that the slot is
+     * `null` immediately afterward if no borrow is holding it open, which
+     * still holds here once [block] completes and `applyTop()` runs.
+     *
+     * Unlike [acquire], which treats `bind`'s Boolean as the signal a caller
+     * needs (null lease on refusal), this discards it deliberately: the one
+     * borrower is `CaptivePortalMonitor`'s probe, which scopes its own socket
+     * via `Network.openConnection` rather than depending on the process-wide
+     * bind, so a refused bind here doesn't change what the probe measures.
+     * The refusal is still logged so it's visible in diagnostics.
      */
     suspend fun <T> borrow(network: Network, block: suspend () -> T): T {
         return borrowMutex.withLock {
-            synchronized(lock) { borrowing = true }
-            binder.bind(network)
             try {
+                synchronized(lock) {
+                    borrowing = true
+                    if (!binder.bind(network)) {
+                        Log.w(TAG, "borrow($network): bind refused; probe socket is self-scoped so this is not acted on")
+                    }
+                }
                 block()
             } finally {
                 synchronized(lock) {
