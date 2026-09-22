@@ -174,7 +174,8 @@ class CaptivePortalActivity : ComponentActivity() {
             val handoffUrl = intentPortalUrl
                 ?: (state as? ConfinementState.Confined)?.portalUrl
                 ?: CONNECTIVITY_CHECK_URL
-            render(state, if (state is ConfinementState.Confined) handoffUrl else null, network, handoffUrl)
+            val vpnPresent = VpnKind.fromInterfaces(vpn.interfaces) != VpnKind.NONE
+            render(state, if (state is ConfinementState.Confined) handoffUrl else null, network, handoffUrl, vpnPresent)
         }
     }
 
@@ -184,8 +185,8 @@ class CaptivePortalActivity : ComponentActivity() {
      * evidence bundle belongs to the ViewModel in `MainActivity`, and this
      * entry point has no session of its own to attach it to.
      *
-     * **Unknown carve-out, this entry point only.** From
-     * [ConfinementState.Unknown] the card's action opens the WebView at
+     * **Unknown carve-out, this entry point only, and only without a VPN.**
+     * From [ConfinementState.Unknown] the card's action opens the WebView at
      * [handoffUrl] rather than doing nothing. Reaching this activity at all
      * means the system handed Gatepath a `CaptivePortal` token because *its*
      * probe saw a portal, which is a stronger signal than our own
@@ -194,8 +195,17 @@ class CaptivePortalActivity : ComponentActivity() {
      * [ConfinementState.DnsStrict] keep their existing actions and never open
      * the WebView: for those we know *why* the page cannot load, and opening
      * it would reproduce the blank screen this flow exists to prevent.
+     *
+     * The carve-out is withheld when [vpnPresent] is true. `Unknown` means
+     * [probeErrorReason] could not pin the bound probe's failure to a typed
+     * errno — but under a VPN, an inconclusive probe is far more likely a
+     * tunnelled bind netd refused for a reason this device's platform didn't
+     * surface as a typed [com.ventouxlabs.gatepath.network.ProbeErrorReason]
+     * than a real captive portal. Offering "try signing in anyway" there
+     * would hand a tunnelled user exactly the action this feature exists to
+     * withhold. With no VPN present, `Unknown` keeps the carve-out.
      */
-    private fun render(state: ConfinementState, url: String?, network: Network, handoffUrl: String) {
+    private fun render(state: ConfinementState, url: String?, network: Network, handoffUrl: String, vpnPresent: Boolean) {
         setContent {
             GatepathTheme {
                 if (url != null) {
@@ -214,6 +224,9 @@ class CaptivePortalActivity : ComponentActivity() {
                     val kind = (state as? ConfinementState.Tunnelled)?.vpnKind
                         ?: (state as? ConfinementState.Blocked)?.vpnKind ?: VpnKind.NONE
                     val (label, launch) = VpnAppLauncher.resolve(this, kind)
+                    // Withheld under a VPN — see the carve-out in this
+                    // function's KDoc.
+                    val offerUnknownCarveOut = state is ConfinementState.Unknown && !vpnPresent
                     // Scaffold, not a bare card: enableEdgeToEdge() is active,
                     // so without innerPadding the card draws under the status
                     // and navigation bars.
@@ -229,8 +242,8 @@ class CaptivePortalActivity : ComponentActivity() {
                                     // Unknown's action, repurposed here — see
                                     // the carve-out in this function's KDoc.
                                     ConfinementAction.SHARE_EVIDENCE ->
-                                        if (state is ConfinementState.Unknown) {
-                                            render(state, handoffUrl, network, handoffUrl)
+                                        if (offerUnknownCarveOut) {
+                                            render(state, handoffUrl, network, handoffUrl, vpnPresent)
                                         } else {
                                             Unit
                                         }
@@ -239,8 +252,7 @@ class CaptivePortalActivity : ComponentActivity() {
                             },
                             onShareEvidence = {},
                             modifier = Modifier.padding(innerPadding),
-                            actionLabelOverride =
-                                if (state is ConfinementState.Unknown) "Try signing in anyway" else null,
+                            actionLabelOverride = if (offerUnknownCarveOut) "Try signing in anyway" else null,
                             // No bundle on this entry point — MainActivity owns
                             // sharing. Rendering the button here would show a
                             // control that silently does nothing.

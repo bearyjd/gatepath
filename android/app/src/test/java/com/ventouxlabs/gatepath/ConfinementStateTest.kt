@@ -3,6 +3,7 @@ package com.ventouxlabs.gatepath
 import com.ventouxlabs.gatepath.network.ClassificationInputs
 import com.ventouxlabs.gatepath.network.ConfinementState
 import com.ventouxlabs.gatepath.network.PortalProbeCapture
+import com.ventouxlabs.gatepath.network.ProbeErrorReason
 import com.ventouxlabs.gatepath.network.ProbeResult
 import com.ventouxlabs.gatepath.network.VpnKind
 import com.ventouxlabs.gatepath.network.classify
@@ -15,9 +16,12 @@ class ConfinementStateTest {
     private val capture = PortalProbeCapture.of(302, "text/html", PortalProbeCapture.RedirectSignal.LOCATION_HEADER)
     private val portal = ProbeResult.Portal("http://10.0.0.1/login", capture)
     private val hostPortal = ProbeResult.Portal("https://n143.network-auth.com/splash", capture)
-    private val eperm = ProbeResult.Error("Failed to connect to /10.0.0.1:80: connect failed: EPERM (Operation not permitted)")
-    private val eacces = ProbeResult.Error("connect failed: EACCES (Permission denied)")
-    private val timeout = ProbeResult.Error("timeout")
+    private val eperm = ProbeResult.Error(
+        "Failed to connect to /10.0.0.1:80: connect failed: EPERM (Operation not permitted)",
+        ProbeErrorReason.PERMISSION_DENIED,
+    )
+    private val eacces = ProbeResult.Error("connect failed: EACCES (Permission denied)", ProbeErrorReason.ACCESS_BLOCKED)
+    private val timeout = ProbeResult.Error("timeout", ProbeErrorReason.TIMEOUT)
 
     private fun inputs(
         bound: ProbeResult,
@@ -61,6 +65,30 @@ class ConfinementStateTest {
     @Test
     fun `EACCES on the bound probe is Blocked`() {
         assertEquals(ConfinementState.Blocked(VpnKind.TORGUARD), classify(inputs(eacces, vpn = listOf("torguard0 (unknown)"))))
+    }
+
+    @Test
+    fun `a PERMISSION_DENIED reason is Tunnelled even when the message has no EPERM token`() {
+        // classify() must decide from the typed reason, not the message text —
+        // this message deliberately carries no "EPERM" substring.
+        val err = ProbeResult.Error("libcore rendered something unrecognizable", ProbeErrorReason.PERMISSION_DENIED)
+        assertEquals(ConfinementState.Tunnelled(VpnKind.NONE), classify(inputs(err)))
+    }
+
+    @Test
+    fun `an ACCESS_BLOCKED reason is Blocked even when the message has no EACCES token`() {
+        val err = ProbeResult.Error("libcore rendered something unrecognizable", ProbeErrorReason.ACCESS_BLOCKED)
+        assertEquals(ConfinementState.Blocked(VpnKind.NONE), classify(inputs(err)))
+    }
+
+    @Test
+    fun `an OTHER reason is Unknown even when the message contains EPERM`() {
+        // Pinning the contract: the "EPERM"/"EACCES" substring fallback lives
+        // entirely inside probeErrorReason() (see ProbeErrorReason.kt), never
+        // in classify(). An Error already carrying a derived reason of OTHER
+        // must not be re-parsed from its message here.
+        val err = ProbeResult.Error("some other failure mentioning EPERM in passing", ProbeErrorReason.OTHER)
+        assertTrue(classify(inputs(err)) is ConfinementState.Unknown)
     }
 
     @Test

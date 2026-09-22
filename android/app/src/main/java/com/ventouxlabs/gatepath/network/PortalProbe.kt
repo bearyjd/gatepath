@@ -60,7 +60,7 @@ sealed interface ProbeResult {
     data class Portal(val locationUrl: String, val capture: PortalProbeCapture? = null) : ProbeResult
 
     /** Network error or unexpected response. */
-    data class Error(val message: String) : ProbeResult
+    data class Error(val message: String, val reason: ProbeErrorReason = ProbeErrorReason.OTHER) : ProbeResult
 }
 
 /**
@@ -147,7 +147,7 @@ class PortalProbe {
                 conn.disconnect()
             }
         }.getOrElse { ex ->
-            ProbeResult.Error(ex.message ?: ex.javaClass.simpleName)
+            ProbeResult.Error(ex.message ?: ex.javaClass.simpleName, probeErrorReason(ex))
         }
     }
 }
