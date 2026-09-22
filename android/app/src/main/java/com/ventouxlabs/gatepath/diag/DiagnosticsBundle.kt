@@ -27,16 +27,31 @@ data class BundleMeta(
  * ### Redaction (`redact = true`)
  * Scope: the network-identifying fields the desktop
  * `gatepath-netns-helper/packaging/collect-diagnostics.sh --redact` scrubs —
- * SSID, gateway IP, and portal domain. Applied in two passes so an identifier
- * can't slip through a free-text field:
+ * SSID, gateway IP, and portal domain — plus the certificate fingerprint and
+ * validity window in the evidence section (see point 3). Applied in passes so
+ * an identifier can't slip through a free-text field:
  * 1. **Audit entries** are scrubbed object-level ([redactEntry]) — a `null`
  *    identifier stays `null` (nothing to reveal), matching the desktop sed which
  *    only rewrites quoted string values; [AuditEntry.portalDomain] is always a
  *    string, so it is always replaced.
- * 2. The **diagnosis render** is scrubbed of any identifier we know from the
- *    audit log (a probe error can embed the portal domain, e.g.
- *    `UnknownHostException: portal.example.com`) and has bare IP literals masked
- *    (gateway/DNS answers the probes echo verbatim). See [redactDiagnosisText].
+ * 2. The **diagnosis, evidence and console renders** are scrubbed of any
+ *    identifier we know — from the audit log *and* from the current
+ *    [IncidentEvidence]'s resolver answers, [IncidentEvidence.resolverWifi] /
+ *    [IncidentEvidence.resolverDoh] — and have bare IP literals masked
+ *    unconditionally. The evidence-sourced half matters because a Tunnelled,
+ *    Blocked, DnsStrict, or Unknown incident never opens a session and so
+ *    never writes an audit entry: without it, a hostname the resolver
+ *    answered with — and that the same incident's [IncidentEvidence.bindError]
+ *    or [IncidentEvidence.fallbackError] can independently echo, e.g.
+ *    `UnknownHostException: portal.example.com` — would have nothing to match
+ *    against and would leak. See [redactDiagnosisText].
+ * 3. **Certificate fields** in the evidence section are redacted structurally,
+ *    not by text substitution: [CertSummary.sha256Fingerprint] and the two
+ *    validity epochs are replaced outright under `redact = true`, because a
+ *    venue's certificate fingerprint and validity window identify it about as
+ *    precisely as its SSID. [CertSummary.primaryError] and
+ *    [CertSummary.selfSigned] are kept — low-cardinality and diagnostically
+ *    essential. See [renderEvidence].
  *
  * The **probe capture** needs no pass of its own: [PortalProbeCapture] only
  * admits values that are safe to share, enforced at construction rather than
@@ -91,7 +106,7 @@ object DiagnosticsBundle {
 
         appendLine("--- Latest diagnosis ---")
         val diagText = renderDiagnosis(diagnosis)
-        appendLine(if (redact) redactDiagnosisText(diagText, entries) else diagText)
+        appendLine(if (redact) redactDiagnosisText(diagText, entries, evidence) else diagText)
         appendLine()
 
         appendLine("--- Latest portal probe capture ---")
@@ -99,8 +114,8 @@ object DiagnosticsBundle {
         appendLine()
 
         appendLine("--- Incident evidence ---")
-        val evidenceText = renderEvidence(evidence)
-        appendLine(if (redact) redactDiagnosisText(evidenceText, entries) else evidenceText)
+        val evidenceText = renderEvidence(evidence, redact)
+        appendLine(if (redact) redactDiagnosisText(evidenceText, entries, evidence) else evidenceText)
         appendLine()
 
         appendLine("--- Audit log (audit.jsonl) ---")
@@ -123,7 +138,7 @@ object DiagnosticsBundle {
             }
             for (c in consoleEntries) {
                 val line = "[${c.level}] ${c.sourceHost}:${c.lineNumber} ${c.message}"
-                appendLine(if (redact) redactConsoleText(line, entries) else line)
+                appendLine(if (redact) redactConsoleText(line, entries, evidence) else line)
             }
         }
     }
@@ -147,8 +162,8 @@ object DiagnosticsBundle {
      * replacement is the literal "REDACTED" (8 chars), below the 20-char
      * LONG_TOKEN threshold, so it isn't re-matched by the generic pass.
      */
-    private fun redactConsoleText(text: String, entries: List<AuditEntry>): String {
-        val knownMasked = redactDiagnosisText(text, entries)
+    private fun redactConsoleText(text: String, entries: List<AuditEntry>, evidence: IncidentEvidence?): String {
+        val knownMasked = redactDiagnosisText(text, entries, evidence)
         return knownMasked.replace(JWT, REDACTED).replace(LONG_TOKEN, REDACTED)
     }
 
@@ -160,16 +175,27 @@ object DiagnosticsBundle {
 
     /**
      * Scrubs the diagnosis free-text so redaction stays honest there too:
-     * replaces every identifier we can name from the audit log (longest-first,
-     * so a domain isn't half-masked by a substring) and masks bare IP literals.
+     * replaces every identifier we can name — from the audit log *and* from
+     * the current incident's [IncidentEvidence] — (longest-first, so a domain
+     * isn't half-masked by a substring) and masks bare IP literals.
+     *
+     * The evidence-sourced half is not optional: a Tunnelled, Blocked,
+     * DnsStrict, or Unknown incident never opens a session and so never
+     * writes an audit entry, leaving `entries` empty. Without also reading
+     * [IncidentEvidence.resolverWifi] / [IncidentEvidence.resolverDoh], a
+     * resolver-answer hostname that [IncidentEvidence.bindError] or
+     * [IncidentEvidence.fallbackError] independently echoes would have
+     * nothing in `known` to match against and would leak.
      */
-    private fun redactDiagnosisText(text: String, entries: List<AuditEntry>): String {
+    private fun redactDiagnosisText(text: String, entries: List<AuditEntry>, evidence: IncidentEvidence? = null): String {
         val known = buildSet {
             for (e in entries) {
                 e.ssid?.takeIf { it.isNotBlank() }?.let { add(it) }
                 e.gatewayIp?.takeIf { it.isNotBlank() }?.let { add(it) }
                 e.portalDomain.takeIf { it.isNotBlank() }?.let { add(it) }
             }
+            evidence?.resolverWifi?.forEach { it.takeIf { v -> v.isNotBlank() }?.let { add(it) } }
+            evidence?.resolverDoh?.forEach { it.takeIf { v -> v.isNotBlank() }?.let { add(it) } }
         }.sortedByDescending { it.length }
 
         var out = text
@@ -215,7 +241,7 @@ object DiagnosticsBundle {
         }
     }
 
-    private fun renderEvidence(e: IncidentEvidence?): String {
+    private fun renderEvidence(e: IncidentEvidence?, redact: Boolean): String {
         if (e == null) return "(no incident evidence captured)"
         return buildString {
             appendLine("confinement: ${e.confinement}")
@@ -230,15 +256,34 @@ object DiagnosticsBundle {
             if (c == null) {
                 appendLine("cert: (no certificate error observed)")
             } else {
+                // primaryError and selfSigned are low-cardinality and
+                // diagnostically essential, so they survive redaction; the
+                // fingerprint and validity window identify the venue about as
+                // precisely as its SSID, so both are replaced outright rather
+                // than left to a text-substitution pass over the render.
                 appendLine("cert_primary_error: ${c.primaryError}")
-                appendLine("cert_not_before_epoch_ms: ${c.notBeforeEpochMillis ?: "(absent)"}")
-                appendLine("cert_not_after_epoch_ms: ${c.notAfterEpochMillis ?: "(absent)"}")
+                appendLine("cert_not_before_epoch_ms: ${renderCertEpoch(c.notBeforeEpochMillis, redact)}")
+                appendLine("cert_not_after_epoch_ms: ${renderCertEpoch(c.notAfterEpochMillis, redact)}")
                 appendLine("cert_self_signed: ${c.selfSigned}")
-                appendLine("cert_sha256: ${c.sha256Fingerprint.ifEmpty { "(absent)" }}")
+                appendLine("cert_sha256: ${renderCertFingerprint(c.sha256Fingerprint, redact)}")
             }
             appendLine("bind_error: ${e.bindError ?: "(none)"}")
             append("fallback_error: ${e.fallbackError ?: "(none)"}")
         }
+    }
+
+    /** An absent epoch has nothing to reveal, so it stays `(absent)` even under redaction. */
+    private fun renderCertEpoch(epochMillis: Long?, redact: Boolean): String = when {
+        epochMillis == null -> "(absent)"
+        redact -> REDACTED
+        else -> epochMillis.toString()
+    }
+
+    /** An absent fingerprint has nothing to reveal, so it stays `(absent)` even under redaction. */
+    private fun renderCertFingerprint(fingerprint: String, redact: Boolean): String = when {
+        fingerprint.isEmpty() -> "(absent)"
+        redact -> REDACTED
+        else -> fingerprint
     }
 
     private fun renderReport(r: DiagnosticReport): String = when (r) {

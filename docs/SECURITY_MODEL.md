@@ -116,6 +116,24 @@ exposure surface, readable by any app holding `READ_LOGS`), the console
 capture file is app-private and only reaches anyone else if the user
 explicitly shares it.
 
+The known-identifier set that backs this substitution is harvested from two
+places, not the audit log alone: the audit entries for the network, and the
+current incident's `IncidentEvidence` (its Wi-Fi and DoH resolver answers).
+Both sources matter because a Tunnelled, Blocked, DnsStrict, or Unknown
+incident never opens a session and so never writes an audit entry — without
+also reading the evidence, a resolver-answered hostname echoed in that same
+incident's bind/fallback error text would have nothing to match against and
+would leak even with redaction on.
+
+The incident-evidence section of the bundle carries one more identifier class
+the passes above don't cover by substitution: a captured TLS certificate's
+SHA-256 fingerprint and its validity window (`cert_not_before`/
+`cert_not_after`) identify the venue about as precisely as its SSID, so
+`--redact` replaces both outright rather than relying on text matching to
+catch them. The certificate's primary error code and whether it is
+self-signed are low-cardinality and diagnostically essential, so both are
+kept in both modes.
+
 If the app process dies mid-session before the buffer flushes (dispose never
 runs), that session's capture is lost silently — no partial flush. Accepted
 for v1: this is best-effort off-device diagnostics, not a guarantee.

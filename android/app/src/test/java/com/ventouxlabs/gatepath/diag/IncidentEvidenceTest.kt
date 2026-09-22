@@ -96,4 +96,78 @@ class IncidentEvidenceTest {
         val out = DiagnosticsBundle.build(meta, emptyList(), null, evidence = null, redact = true)
         assertTrue(out.contains("(no incident evidence captured)"))
     }
+
+    @Test
+    fun `redaction replaces cert fingerprint and validity epochs but keeps error code and self-signed`() {
+        val summary = CertSummary.of(3, 1_700_000_000_000L, 1_700_003_600_000L, true, byteArrayOf(9, 1, 2, 3))
+        val out = DiagnosticsBundle.build(
+            meta, emptyList(), null,
+            evidence = evidence().copy(certSummary = summary),
+            redact = true,
+        )
+        assertFalse(out.contains("1700000000000"))
+        assertFalse(out.contains("1700003600000"))
+        assertFalse("the fingerprint hex must not leak", out.contains(summary.sha256Fingerprint))
+        assertTrue(out.contains("cert_primary_error: 3"))
+        assertTrue(out.contains("cert_self_signed: true"))
+        assertTrue(out.contains("cert_not_before_epoch_ms: REDACTED"))
+        assertTrue(out.contains("cert_not_after_epoch_ms: REDACTED"))
+        assertTrue(out.contains("cert_sha256: REDACTED"))
+    }
+
+    @Test
+    fun `no redaction shows cert fingerprint and validity epochs verbatim`() {
+        val summary = CertSummary.of(3, 1_700_000_000_000L, 1_700_003_600_000L, true, byteArrayOf(9, 1, 2, 3))
+        val out = DiagnosticsBundle.build(
+            meta, emptyList(), null,
+            evidence = evidence().copy(certSummary = summary),
+            redact = false,
+        )
+        assertTrue(out.contains("cert_primary_error: 3"))
+        assertTrue(out.contains("cert_self_signed: true"))
+        assertTrue(out.contains("cert_not_before_epoch_ms: 1700000000000"))
+        assertTrue(out.contains("cert_not_after_epoch_ms: 1700003600000"))
+        assertTrue(out.contains("cert_sha256: ${summary.sha256Fingerprint}"))
+    }
+
+    @Test
+    fun `a null cert summary still reads as prose regardless of redaction`() {
+        val noCert = evidence().copy(certSummary = null)
+        val redacted = DiagnosticsBundle.build(meta, emptyList(), null, evidence = noCert, redact = true)
+        val plain = DiagnosticsBundle.build(meta, emptyList(), null, evidence = noCert, redact = false)
+        assertTrue(redacted.contains("(no certificate error observed)"))
+        assertTrue(plain.contains("(no certificate error observed)"))
+    }
+
+    @Test
+    fun `redaction scrubs a resolver-answer hostname and its echo in free text with no audit entries`() {
+        // Tunnelled/Blocked/DnsStrict/Unknown incidents never open a session, so
+        // they never write an audit entry — `entries` is empty here on purpose.
+        // Before the identifier harvest was widened to also read IncidentEvidence,
+        // this hostname had nothing to match against and leaked verbatim.
+        val hostname = "venue-hijack.example.net"
+        val out = DiagnosticsBundle.build(
+            meta, emptyList(), null,
+            evidence = evidence(bindError = "connect to $hostname failed: EPERM").copy(
+                resolverWifi = listOf(hostname),
+            ),
+            redact = true,
+        )
+        assertFalse("resolver-answer hostname must not leak", out.contains(hostname))
+        assertTrue("unrelated error text is untouched", out.contains("EPERM"))
+    }
+
+    @Test
+    fun `redaction scrubs a doh resolver-answer hostname echoed in free text with no audit entries`() {
+        val hostname = "sinkhole.captive-vendor.example"
+        val out = DiagnosticsBundle.build(
+            meta, emptyList(), null,
+            evidence = evidence(bindError = null).copy(
+                resolverDoh = listOf(hostname),
+                fallbackError = "default route saw $hostname",
+            ),
+            redact = true,
+        )
+        assertFalse("doh resolver-answer hostname must not leak", out.contains(hostname))
+    }
 }
