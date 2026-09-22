@@ -34,13 +34,16 @@ classes it generates itself — it is **not** a substitute for
 `GATEPATH_JVM_TEST_BUILD_DIR` overrides its build directory (parallel runs).
 
 **The two paths can disagree on `android.*` values.** Under Gradle, unit tests
-link the real `android.jar` stubs, whose `android.system.OsConstants` fields
-are filled in natively and therefore read as **0** in a unit test; a stub the
-JVM runner generates would carry the real numbers and hide that. Do not
-reference `OsConstants` (or any natively-initialised `android.*` constant) from
-code the unit tests exercise — `network/ProbeErrorReason.kt` carries its own
-`LinuxErrno` constants for exactly this reason, and there is deliberately no
-`OsConstants` stub in the runner.
+link the real `android.jar` stubs: `android.system.OsConstants` fields are
+filled in natively and read as **0**, and stub constructors are no-ops, so a
+`new ErrnoException("connect", 1).errno` is also **0**. A stub the JVM runner
+generates would carry real values and hide both. So: never reference a
+natively-initialised `android.*` constant from code the unit tests exercise,
+and never construct an `android.*` type in a test expecting its fields to hold
+what you passed. `network/ProbeErrorReason.kt` carries its own `LinuxErrno`
+constants and takes an errno-reader function (production reads
+`ErrnoException.errno`; tests pass their own throwable) for exactly this
+reason, and there is deliberately no `OsConstants` stub in the runner.
 
 **It enumerates its sources by hand.** `MAIN_SOURCES` and `TEST_SOURCES` are
 explicit lists, not globs — add a new SDK-free source or test file to the

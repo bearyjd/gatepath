@@ -184,14 +184,14 @@ echo "=== Compiling main sources (JVM-compatible subset) ==="
 # Stub out android.util.Log so AuditLog.kt compiles without Android SDK
 ANDROID_STUB="$BUILD_DIR/android-stub"
 mkdir -p "$ANDROID_STUB/android/util" "$ANDROID_STUB/android/net" "$ANDROID_STUB/android/system"
-# android.system.ErrnoException stub: PortalProbe walks a failed connect()'s
-# cause chain for the errno so classification does not depend on the rendered
-# message text. Only the members the main sources touch. The message format
-# deliberately omits the errno's name so the JVM path cannot pass through the
-# substring fallback if the typed path ever breaks. There is no OsConstants
-# stub on purpose: the real android.jar's OsConstants fields are filled in
-# natively and read as 0 under Gradle unit tests, so the main sources carry
-# their own errno constants (LinuxErrno) rather than reference OsConstants.
+# android.system.ErrnoException stub so ProbeErrorReason.kt's production errno
+# reader compiles. Only the members the main sources touch. Tests must NOT
+# construct ErrnoException: under Gradle the real android.jar stub's
+# constructor is a no-op and `errno` always reads 0, so any such test passes
+# here and fails there. probeErrorReason takes an errno-reader function for
+# exactly that reason; tests supply their own throwable type. There is no
+# OsConstants stub either: its fields are natively initialised and read as 0
+# under Gradle, so the main sources carry their own LinuxErrno constants.
 cat > "$ANDROID_STUB/android/system/ErrnoException.java" << 'JAVA_EOF'
 package android.system;
 public class ErrnoException extends Exception {

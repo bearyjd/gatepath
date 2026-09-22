@@ -44,18 +44,28 @@ enum class ProbeErrorReason {
 private const val MAX_CAUSE_CHAIN_DEPTH = 16
 
 /**
+ * The production errno reader: the kernel errno an [ErrnoException] carries,
+ * null for any other throwable. Passed to [probeErrorReason] by default and
+ * replaced in unit tests, because `android.jar`'s [ErrnoException] is a stub
+ * whose constructor never assigns `errno` (it always reads 0 under Gradle),
+ * so no test can construct a meaningful one.
+ */
+internal fun androidErrno(t: Throwable): Int? = (t as? ErrnoException)?.errno
+
+/**
  * Derive a [ProbeErrorReason] from a probe failure.
  *
- * Prefers the typed path, chain-wide rather than per node: an [ErrnoException]
- * anywhere in [ex]'s cause chain (bounded, and stopping the moment a node
- * repeats so a self-referential chain still terminates) wins over everything
- * else, because it is the actual kernel errno rather than a rendered string —
- * including over a [java.net.SocketTimeoutException] that merely wraps it.
- * A timeout with no errno anywhere beneath it unambiguously means
- * [ProbeErrorReason.TIMEOUT]. Only when neither is present does this fall
- * back to the historical substring match on [Throwable.message], documented
- * here as a FALLBACK so a platform that never attaches [ErrnoException]
- * classifies no worse than before this type existed.
+ * Prefers the typed path, chain-wide rather than per node: a throwable
+ * anywhere in [ex]'s cause chain for which [errnoOf] yields an errno
+ * (bounded, and stopping the moment a node repeats so a self-referential
+ * chain still terminates) wins over everything else, because it is the
+ * actual kernel errno rather than a rendered string — including over a
+ * [java.net.SocketTimeoutException] that merely wraps it. A timeout with no
+ * errno anywhere beneath it unambiguously means [ProbeErrorReason.TIMEOUT].
+ * Only when neither is present does this fall back to the historical
+ * substring match on [Throwable.message], documented here as a FALLBACK so a
+ * platform that never attaches an errno classifies no worse than before this
+ * type existed.
  *
  * The fallback reads text a gateway can influence (a malformed status line
  * surfaces in the exception message), but its only effect is to force
@@ -63,14 +73,18 @@ private const val MAX_CAUSE_CHAIN_DEPTH = 16
  * can never manufacture a reason that offers one, so the direction is
  * fail-closed.
  */
-internal fun probeErrorReason(ex: Throwable): ProbeErrorReason {
+internal fun probeErrorReason(
+    ex: Throwable,
+    errnoOf: (Throwable) -> Int? = ::androidErrno,
+): ProbeErrorReason {
     var current: Throwable? = ex
     val seen = HashSet<Throwable>()
     var depth = 0
     var sawTimeout = false
     while (current != null && depth < MAX_CAUSE_CHAIN_DEPTH && seen.add(current)) {
-        if (current is ErrnoException) {
-            return current.errno.toProbeErrorReason() ?: ProbeErrorReason.OTHER
+        val errno = errnoOf(current)
+        if (errno != null) {
+            return errno.toProbeErrorReason() ?: ProbeErrorReason.OTHER
         }
         if (current is java.net.SocketTimeoutException) {
             sawTimeout = true
