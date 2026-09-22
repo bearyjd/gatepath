@@ -38,13 +38,16 @@ data class BundleMeta(
  *    identifier we know — from the audit log *and* from the current
  *    [IncidentEvidence]'s resolver answers, [IncidentEvidence.resolverWifi] /
  *    [IncidentEvidence.resolverDoh] — and have bare IP literals masked
- *    unconditionally. The evidence-sourced half matters because a Tunnelled,
- *    Blocked, DnsStrict, or Unknown incident never opens a session and so
- *    never writes an audit entry: without it, a hostname the resolver
- *    answered with — and that the same incident's [IncidentEvidence.bindError]
- *    or [IncidentEvidence.fallbackError] can independently echo, e.g.
- *    `UnknownHostException: portal.example.com` — would have nothing to match
- *    against and would leak. See [redactDiagnosisText].
+ *    unconditionally. The evidence-sourced half is defence in depth, not a
+ *    live leak fix: a Tunnelled, Blocked, DnsStrict, or Unknown incident never
+ *    opens a session and so never writes an audit entry, leaving the audit
+ *    half of the set empty; the resolver fields hold IP literals today, which
+ *    the unconditional IP pass already masks, but harvesting them means any
+ *    non-literal value they ever carry (and its echo in
+ *    [IncidentEvidence.bindError] / [IncidentEvidence.fallbackError]) is
+ *    scrubbed too, instead of depending on that pass. The real gap for
+ *    session-less incidents — the DnsStrict portal host never reaches the
+ *    evidence record at all — is tracked in issue #169. See [redactDiagnosisText].
  * 3. **Certificate fields** in the evidence section are redacted structurally,
  *    not by text substitution: [CertSummary.sha256Fingerprint] and the two
  *    validity epochs are replaced outright under `redact = true`, because a

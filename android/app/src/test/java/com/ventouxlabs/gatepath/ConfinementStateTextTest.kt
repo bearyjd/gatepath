@@ -91,6 +91,26 @@ class ConfinementStateTextTest {
     }
 
     @Test
+    fun `handoff unknown without a vpn offers the sign-in page and never mentions sharing`() {
+        val copy = ConfinementStateText.handoffUnknown(VpnKind.NONE, vpnAppLabel = null)
+        assertEquals(ConfinementAction.SIGN_IN_HERE, copy.action)
+        assertEquals("Try signing in anyway", copy.actionLabel)
+        assertFalse("the handoff screen has no share control", copy.sentence.contains("evidence"))
+    }
+
+    @Test
+    fun `handoff unknown under a vpn offers the vpn app and names it like tunnelled does`() {
+        val known = ConfinementStateText.handoffUnknown(VpnKind.TAILSCALE, vpnAppLabel = "Tailscale")
+        assertEquals(ConfinementAction.OPEN_VPN_APP, known.action)
+        assertEquals("Open VPN app", known.actionLabel)
+        assertTrue(known.sentence.contains("Exclude Gatepath in Tailscale"))
+        assertFalse(known.sentence.contains("evidence"))
+
+        val other = ConfinementStateText.handoffUnknown(VpnKind.OTHER, vpnAppLabel = "  ")
+        assertTrue(other.sentence.contains("Exclude Gatepath in your VPN app"))
+    }
+
+    @Test
     fun `every action has a label`() {
         for (a in ConfinementAction.entries) {
             assertTrue(ConfinementStateText.actionLabel(a).isNotBlank())

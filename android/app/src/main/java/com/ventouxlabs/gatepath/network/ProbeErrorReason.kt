@@ -7,7 +7,7 @@ import android.system.OsConstants
  * Why a captive-portal probe failed, structured instead of parsed from a
  * rendered message string.
  *
- * [ConfinementState.classify] used to decide [ConfinementState.Tunnelled] vs.
+ * [classify] used to decide [ConfinementState.Tunnelled] vs.
  * [ConfinementState.Blocked] by substring-matching "EPERM"/"EACCES" against
  * [ProbeResult.Error.message]. That message is whatever `Throwable.message`
  * (or OEM libcore) happened to render, so any wording drift silently
@@ -47,30 +47,39 @@ private const val MAX_CAUSE_CHAIN_DEPTH = 16
 /**
  * Derive a [ProbeErrorReason] from a probe failure.
  *
- * Prefers the typed path: an [ErrnoException] anywhere in [ex]'s cause chain
- * (bounded, and stopping the moment a node repeats so a self-referential
- * chain still terminates) wins over everything else, because it is the
- * actual kernel errno rather than a rendered string. [java.net.SocketTimeoutException]
- * is checked next — it has no errno of its own but unambiguously means
+ * Prefers the typed path, chain-wide rather than per node: an [ErrnoException]
+ * anywhere in [ex]'s cause chain (bounded, and stopping the moment a node
+ * repeats so a self-referential chain still terminates) wins over everything
+ * else, because it is the actual kernel errno rather than a rendered string —
+ * including over a [java.net.SocketTimeoutException] that merely wraps it.
+ * A timeout with no errno anywhere beneath it unambiguously means
  * [ProbeErrorReason.TIMEOUT]. Only when neither is present does this fall
  * back to the historical substring match on [Throwable.message], documented
  * here as a FALLBACK so a platform that never attaches [ErrnoException]
  * classifies no worse than before this type existed.
+ *
+ * The fallback reads text a gateway can influence (a malformed status line
+ * surfaces in the exception message), but its only effect is to force
+ * PERMISSION_DENIED/ACCESS_BLOCKED, i.e. to *withhold* the sign-in page. It
+ * can never manufacture a reason that offers one, so the direction is
+ * fail-closed.
  */
 internal fun probeErrorReason(ex: Throwable): ProbeErrorReason {
     var current: Throwable? = ex
     val seen = HashSet<Throwable>()
     var depth = 0
+    var sawTimeout = false
     while (current != null && depth < MAX_CAUSE_CHAIN_DEPTH && seen.add(current)) {
         if (current is ErrnoException) {
             return current.errno.toProbeErrorReason() ?: ProbeErrorReason.OTHER
         }
         if (current is java.net.SocketTimeoutException) {
-            return ProbeErrorReason.TIMEOUT
+            sawTimeout = true
         }
         current = current.cause
         depth++
     }
+    if (sawTimeout) return ProbeErrorReason.TIMEOUT
     // FALLBACK: no typed ErrnoException/SocketTimeoutException anywhere in the
     // chain. Match the rendered message the way classify() always has, so a
     // platform that doesn't attach ErrnoException is no worse off.

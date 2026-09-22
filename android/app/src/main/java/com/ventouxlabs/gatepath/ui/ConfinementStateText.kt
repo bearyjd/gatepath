@@ -48,4 +48,38 @@ object ConfinementStateText {
         VpnKind.TORGUARD -> "TorGuard"
         VpnKind.OTHER, VpnKind.NONE -> "your VPN app"
     }
+
+    /**
+     * What the system-handoff entry point (`CaptivePortalActivity`) offers for
+     * [ConfinementState.Unknown]. That screen owns no evidence bundle, so the
+     * default Unknown copy ("Share the evidence.") would name a control it
+     * cannot show. Two cases instead:
+     *
+     * - A VPN interface is up: an inconclusive bound probe under a VPN is far
+     *   more likely a tunnelled bind the platform did not surface as a typed
+     *   errno than a real portal, so the useful next step is the same as
+     *   [ConfinementState.Tunnelled]'s — exclude Gatepath in the VPN app.
+     * - No VPN: the system's own probe saw a portal (that is why the handoff
+     *   happened), which outranks our inconclusive one, so the honest offer
+     *   is to try the sign-in page anyway.
+     */
+    fun handoffUnknown(vpnKind: VpnKind, vpnAppLabel: String?): HandoffUnknownCopy =
+        if (vpnKind == VpnKind.NONE) {
+            HandoffUnknownCopy(
+                sentence = "Gatepath could not work out what this network is doing.",
+                action = ConfinementAction.SIGN_IN_HERE,
+                actionLabel = "Try signing in anyway",
+            )
+        } else {
+            HandoffUnknownCopy(
+                sentence = "Gatepath could not work out what this network is doing, and a VPN is active. " +
+                    "Exclude Gatepath in ${vpnAppLabel?.takeUnless { it.isBlank() } ?: vpnFallbackLabel(vpnKind)} " +
+                    "and try again, or use the system notification.",
+                action = ConfinementAction.OPEN_VPN_APP,
+                actionLabel = actionLabel(ConfinementAction.OPEN_VPN_APP),
+            )
+        }
 }
+
+/** The handoff entry point's rendering of an Unknown state; see [ConfinementStateText.handoffUnknown]. */
+data class HandoffUnknownCopy(val sentence: String, val action: ConfinementAction, val actionLabel: String)

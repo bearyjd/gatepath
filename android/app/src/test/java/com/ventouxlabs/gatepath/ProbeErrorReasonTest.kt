@@ -11,7 +11,7 @@ import java.net.ConnectException
 import java.net.SocketTimeoutException
 
 /**
- * [probeErrorReason] is the typed-errno path [ConfinementState.classify]
+ * [probeErrorReason] is the typed-errno path [com.ventouxlabs.gatepath.network.classify]
  * relies on to tell a tunnelled bind from a genuinely inconclusive probe —
  * see the KDoc on `ProbeErrorReason.kt` for why matching only message text
  * was unsafe.
@@ -62,6 +62,16 @@ class ProbeErrorReasonTest {
     @Test
     fun `SocketTimeoutException with no ErrnoException is TIMEOUT`() {
         assertEquals(ProbeErrorReason.TIMEOUT, probeErrorReason(SocketTimeoutException("timeout")))
+    }
+
+    @Test
+    fun `an errno beneath a SocketTimeoutException wins over the timeout`() {
+        // Chain-wide priority, not per node: the kernel errno is the real
+        // answer even when a timeout wrapper sits above it.
+        val errno = ErrnoException("connect", OsConstants.EPERM)
+        val outer = SocketTimeoutException("timed out")
+        outer.initCause(errno)
+        assertEquals(ProbeErrorReason.PERMISSION_DENIED, probeErrorReason(outer))
     }
 
     @Test

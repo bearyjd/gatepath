@@ -140,11 +140,13 @@ class IncidentEvidenceTest {
     }
 
     @Test
-    fun `redaction scrubs a resolver-answer hostname and its echo in free text with no audit entries`() {
+    fun `redaction scrubs a non-literal resolver answer and its echo in free text with no audit entries`() {
         // Tunnelled/Blocked/DnsStrict/Unknown incidents never open a session, so
         // they never write an audit entry — `entries` is empty here on purpose.
-        // Before the identifier harvest was widened to also read IncidentEvidence,
-        // this hostname had nothing to match against and leaked verbatim.
+        // The resolver fields carry IP literals today, which the unconditional
+        // IP pass masks regardless; this pins the defence-in-depth contract
+        // that a non-literal value in them (which no production path produces
+        // yet) is harvested and scrubbed rather than left to that pass.
         val hostname = "venue-hijack.example.net"
         val out = DiagnosticsBundle.build(
             meta, emptyList(), null,
@@ -158,7 +160,8 @@ class IncidentEvidenceTest {
     }
 
     @Test
-    fun `redaction scrubs a doh resolver-answer hostname echoed in free text with no audit entries`() {
+    fun `redaction scrubs a non-literal doh resolver answer echoed in free text with no audit entries`() {
+        // Same defence-in-depth contract as above, for the DoH answer field.
         val hostname = "sinkhole.captive-vendor.example"
         val out = DiagnosticsBundle.build(
             meta, emptyList(), null,
