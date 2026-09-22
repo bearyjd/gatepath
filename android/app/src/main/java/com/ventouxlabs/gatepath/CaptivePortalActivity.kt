@@ -36,6 +36,7 @@ import com.ventouxlabs.gatepath.network.VpnKind
 import com.ventouxlabs.gatepath.network.classify
 import com.ventouxlabs.gatepath.ui.ConfinementAction
 import com.ventouxlabs.gatepath.ui.ConfinementCard
+import com.ventouxlabs.gatepath.ui.ConfinementStateText
 import com.ventouxlabs.gatepath.ui.PortalScreen
 import com.ventouxlabs.gatepath.ui.VpnAppLauncher
 import com.ventouxlabs.gatepath.ui.theme.GatepathTheme
