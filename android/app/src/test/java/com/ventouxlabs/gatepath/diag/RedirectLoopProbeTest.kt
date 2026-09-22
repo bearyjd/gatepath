@@ -126,17 +126,33 @@ class RedirectLoopProbeTest {
     }
 
     @Test
-    fun `declines without probing when the default route bypass was never measured`() = runBlocking {
+    fun `measures via activeProbe when never measured and proceeds when the measured answer is false`() = runBlocking {
+        var fetched = false
+        val base = ctx(emptyMap(), defaultRouteBypassesCaptive = null)
+        val report = RedirectLoopProbe().run(
+            base.copy(
+                httpFetch = { _, _ -> fetched = true; ok204() },
+                activeProbe = { ProbeResult.Portal("http://portal.test/login") },
+            ),
+        )
+        assertEquals(DiagnosticReport.Healthy, report)
+        assertTrue(fetched)
+    }
+
+    @Test
+    fun `measures via activeProbe when never measured and declines without probing when the measured answer is true`() = runBlocking {
         var fetched = false
         val base = ctx(emptyMap(), defaultRouteBypassesCaptive = null)
         val report = RedirectLoopProbe().run(
             base.copy(
                 httpFetch = { _, _ -> fetched = true; HttpFetchResult(204, null, null, null, null) },
+                activeProbe = { ProbeResult.Validated },
             ),
         )
         assertTrue(report is DiagnosticReport.Inconclusive)
         assertTrue(
-            (report as DiagnosticReport.Inconclusive).probeErrors.single().contains("not measured"),
+            (report as DiagnosticReport.Inconclusive).probeErrors.single()
+                .contains("default route is not the captive network"),
         )
         assertEquals(false, fetched)
     }

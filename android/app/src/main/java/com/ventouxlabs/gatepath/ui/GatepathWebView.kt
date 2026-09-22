@@ -60,7 +60,14 @@ private fun String.urlForLog(): String =
  *
  * Security guarantees (per docs/SECURITY_MODEL.md):
  * - Traffic bound to [network] via a [ProcessBinding] lease — see that class's
- *   KDoc for the owner/borrower model this WebView participates in.
+ *   KDoc for the owner/borrower model this WebView participates in. A refused
+ *   lease fails closed: no `loadUrl` call runs (at any of this composable's
+ *   three load sites), and [onLoadError] is invoked with
+ *   [PortalLoadErrorKind.BIND_REFUSED] instead. This matters beyond the
+ *   ordinary in-app flow — `CaptivePortalActivity`'s system-handoff entry
+ *   point also composes this WebView, from `ConfinementState.Unknown`'s
+ *   `BOUND_VALIDATED` carve-out, where a validated probe does not by itself
+ *   guarantee the process-wide bind succeeded.
  * - JavaScript enabled (required for most portal pages); all other risky settings disabled.
  * - Cookies and DOM storage ENABLED for the session (portals require them for
  *   sign-in), but session-scoped: wiped on dispose along with cache and history.
@@ -204,27 +211,44 @@ fun GatepathWebView(
     }
 
     var lastLoadedUrl by remember { mutableStateOf<String?>(null) }
+    // Non-null only while this composition holds a lease on `network`. Every
+    // loadUrl site below checks this instead of assuming a lease was granted
+    // — see DisposableEffect(network) for why a refusal must fail closed
+    // rather than silently load over whatever route happens to be bound.
+    var lease by remember { mutableStateOf<ProcessBinding.Lease?>(null) }
 
     DisposableEffect(network) {
         // A null lease means ProcessBinding's own bind was refused (e.g.
-        // EPERM under a secure VPN). That should not be reachable here: a
-        // WebView is only ever composed from ConfinementState.Confined,
-        // which means the monitor's probe already bound this exact network
-        // successfully inside CaptivePortalMonitor.probeAndEmit — see
-        // ProcessBinding's KDoc for why a probe's own borrow cannot itself
-        // observe a refusal that happens after it hands the slot back. If
-        // this null branch is ever hit for real, the page loads over
-        // whichever route is currently bound (likely the default route)
-        // instead of the captive network.
-        val lease = processBinding.acquire(network)
-        if (lease == null) {
-            Log.w(TAG, "processBinding.acquire($network) refused; WebView traffic will not follow this network")
+        // EPERM under a secure VPN). This IS reachable in production: a
+        // WebView is not only composed from ConfinementState.Confined — the
+        // system-handoff entry point (CaptivePortalActivity.render()) also
+        // composes PortalScreen from ConfinementState.Unknown, via the
+        // BOUND_VALIDATED "try signing in anyway" carve-out (see
+        // ConfinementStateText.handoffUnknown), where a validated probe does
+        // not guarantee the process-wide bind itself succeeded. Loading the
+        // page anyway would route it over whichever route is currently bound
+        // — likely a VPN's default route — which is the exact leak this app
+        // exists to prevent, so this fails closed instead: no loadUrl runs,
+        // and the caller is told via onLoadError(BIND_REFUSED).
+        val acquiredLease = processBinding.acquire(network)
+        lease = acquiredLease
+        if (acquiredLease == null) {
+            Log.w(TAG, "processBinding.acquire($network) refused; not loading — WebView traffic must not follow an unconfirmed route")
+            onLoadError(
+                PortalLoadError(
+                    kind = PortalLoadErrorKind.BIND_REFUSED,
+                    host = portalHost,
+                    technicalDetail = "acquire($network) refused",
+                ),
+            )
+        } else {
+            webView.loadUrl(url)
+            lastLoadedUrl = url
         }
-        webView.loadUrl(url)
-        lastLoadedUrl = url
 
         onDispose {
-            lease?.let(processBinding::release)
+            acquiredLease?.let(processBinding::release)
+            lease = null
             clearPortalSessionState(webView)
             flushConsoleCapture(context, consoleCapture)
         }
@@ -251,8 +275,15 @@ fun GatepathWebView(
             flushConsoleCapture(context, consoleCapture)
             consoleCapture.clear()
             sessionStartElapsedMs = SystemClock.elapsedRealtime()
-            webView.loadUrl(url)
-            lastLoadedUrl = url
+            // No held lease means DisposableEffect(network) already reported
+            // BIND_REFUSED and is showing the error card; loading a new URL
+            // over an unconfirmed route would defeat that fail-closed check.
+            if (lease != null) {
+                webView.loadUrl(url)
+                lastLoadedUrl = url
+            } else {
+                Log.w(TAG, "skipping loadUrl for url change ($url): no held lease")
+            }
         }
     }
 
@@ -262,8 +293,16 @@ fun GatepathWebView(
         // calling reload(), which would re-fetch whatever (often blank)
         // document the failed load left behind.
         if (reloadToken > 0) {
-            webView.loadUrl(url)
-            lastLoadedUrl = url
+            // Same fail-closed check as above: a BIND_REFUSED error is not
+            // retryable (see PortalLoadErrorText.isRetryable) precisely
+            // because nothing here re-attempts the lease, so this branch is
+            // a defensive backstop rather than something the UI can trigger.
+            if (lease != null) {
+                webView.loadUrl(url)
+                lastLoadedUrl = url
+            } else {
+                Log.w(TAG, "skipping reload ($url): no held lease")
+            }
         }
     }
 

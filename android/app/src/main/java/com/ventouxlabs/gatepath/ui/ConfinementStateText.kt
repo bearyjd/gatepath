@@ -54,24 +54,50 @@ object ConfinementStateText {
      * What the system-handoff entry point (`CaptivePortalActivity`) offers for
      * [ConfinementState.Unknown]. That screen owns no evidence bundle, so the
      * default Unknown copy ("Share the evidence.") would name a control it
-     * cannot show. Three cases instead:
+     * cannot show.
      *
-     * - [reason] is [UnknownReason.BOUND_VALIDATED]: the bound probe actually
-     *   reached the gateway and got a 204, so the bind succeeded and the
-     *   WebView will load regardless of any VPN interface — this always gets
-     *   the sign-in offer, the same carve-out as the no-VPN case below.
-     * - [reason] is [UnknownReason.PROBE_ERROR] and a VPN interface is up: an
+     * [reason] is [UnknownReason.BOUND_VALIDATED] when the *socket-scoped*
+     * probe reached the gateway and got a 204. That proves the probe's own
+     * socket routed correctly — it does **not** prove
+     * `ConnectivityManager.bindProcessToNetwork` itself took, and under a
+     * secure VPN the two can disagree: a probe can validate over one path
+     * while the process-wide bind that the WebView actually depends on was
+     * refused or silently ignored. A validated Wi-Fi probe alongside a system
+     * captive-portal token is itself an odd combination — the system's own
+     * probe may have travelled the VPN rather than the Wi-Fi link — which is
+     * exactly why [processBindHeld] (`lease != null` at the call site, not
+     * the probe result) gates the sign-in offer rather than [reason] alone.
+     *
+     * - [UnknownReason.BOUND_VALIDATED] with [processBindHeld] true, or no
+     *   VPN interface up at all ([vpnKind] is `NONE`, where the distinction
+     *   is moot): the WebView will actually load over the Wi-Fi network, so
+     *   this gets the sign-in offer.
+     * - [UnknownReason.BOUND_VALIDATED] with [processBindHeld] false and a
+     *   VPN interface up: the probe validated but the process bind did not,
+     *   so the WebView would load over the VPN's default route instead —
+     *   the exact leak this feature exists to prevent. Offer the VPN app,
+     *   same as [ConfinementState.Tunnelled].
+     * - [UnknownReason.PROBE_ERROR] and no VPN: the system's own probe saw a
+     *   portal (that is why the handoff happened), which outranks our
+     *   inconclusive one, so the honest offer is to try the sign-in page
+     *   anyway.
+     * - [UnknownReason.PROBE_ERROR] and a VPN interface is up: an
      *   inconclusive bound probe under a VPN is far more likely a tunnelled
      *   bind the platform did not surface as a typed errno than a real
      *   portal, so the useful next step is the same as
      *   [ConfinementState.Tunnelled]'s — exclude Gatepath in the VPN app.
-     * - [reason] is [UnknownReason.PROBE_ERROR] and no VPN: the system's own
-     *   probe saw a portal (that is why the handoff happened), which
-     *   outranks our inconclusive one, so the honest offer is to try the
-     *   sign-in page anyway.
      */
-    fun handoffUnknown(reason: UnknownReason, vpnKind: VpnKind, vpnAppLabel: String?): HandoffUnknownCopy =
-        if (reason == UnknownReason.BOUND_VALIDATED || vpnKind == VpnKind.NONE) {
+    fun handoffUnknown(
+        reason: UnknownReason,
+        vpnKind: VpnKind,
+        vpnAppLabel: String?,
+        processBindHeld: Boolean,
+    ): HandoffUnknownCopy {
+        val offerSignIn = when (reason) {
+            UnknownReason.BOUND_VALIDATED -> processBindHeld || vpnKind == VpnKind.NONE
+            UnknownReason.PROBE_ERROR -> vpnKind == VpnKind.NONE
+        }
+        return if (offerSignIn) {
             HandoffUnknownCopy(
                 sentence = "Gatepath could not work out what this network is doing.",
                 action = ConfinementAction.SIGN_IN_HERE,
@@ -86,6 +112,7 @@ object ConfinementStateText {
                 actionLabel = actionLabel(ConfinementAction.OPEN_VPN_APP),
             )
         }
+    }
 }
 
 /** The handoff entry point's rendering of an Unknown state; see [ConfinementStateText.handoffUnknown]. */

@@ -119,7 +119,8 @@ class PortalLoadErrorTest {
 
     @Test
     fun `transient failures are retryable`() {
-        for (kind in PortalLoadErrorKind.entries - PortalLoadErrorKind.CERT_REJECTED) {
+        val nonRetryable = setOf(PortalLoadErrorKind.CERT_REJECTED, PortalLoadErrorKind.BIND_REFUSED)
+        for (kind in PortalLoadErrorKind.entries - nonRetryable) {
             assertTrue("${kind.name} should be retryable", PortalLoadErrorText.isRetryable(kind))
         }
     }
@@ -128,5 +129,21 @@ class PortalLoadErrorTest {
     fun `cert rejection copy warns rather than reassures`() {
         val body = PortalLoadErrorText.body(error(PortalLoadErrorKind.CERT_REJECTED))
         assertTrue("should warn about signing in, was: $body", body.contains("Avoid signing in"))
+    }
+
+    // ── BIND_REFUSED (fail-closed lease refusal) ───────────────────────────
+
+    @Test
+    fun `bind refusal is not retryable`() {
+        // Nothing re-attempts acquiring the lease, so a retry would just
+        // silently re-skip loadUrl — see PortalLoadErrorText.isRetryable.
+        assertFalse(PortalLoadErrorText.isRetryable(PortalLoadErrorKind.BIND_REFUSED))
+    }
+
+    @Test
+    fun `bind refusal copy names the vpn and the system notification as the real paths forward`() {
+        val body = PortalLoadErrorText.body(error(PortalLoadErrorKind.BIND_REFUSED))
+        assertTrue("should mention the VPN, was: $body", body.contains("VPN"))
+        assertTrue("should mention the system notification, was: $body", body.contains("notification"))
     }
 }

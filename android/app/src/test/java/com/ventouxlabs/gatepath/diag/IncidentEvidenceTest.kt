@@ -207,4 +207,30 @@ class IncidentEvidenceTest {
         assertTrue("unrelated error text is untouched", out.contains("resolve"))
         assertTrue("dns_strict confinement label is untouched", out.contains("confinement: dns_strict"))
     }
+
+    @Test
+    fun `redaction structurally masks a single-label portal host without over-masking the word elsewhere`() {
+        // A single-label host has no '.', so it is deliberately excluded from
+        // the substring-harvest set (it would otherwise scrub every
+        // occurrence of an ordinary word like "login" across the bundle,
+        // e.g. inside "portal_completed"). It must still be hidden — just
+        // structurally, in its own portal_host: line.
+        val out = DiagnosticsBundle.build(
+            meta, emptyList(), null,
+            evidence = evidence(bindError = "login failed", portalHost = "login"),
+            redact = true,
+        )
+        assertTrue("portal_host line must still be redacted", out.contains("portal_host: REDACTED"))
+        assertTrue("the word login elsewhere must survive scrubbing", out.contains("login failed"))
+    }
+
+    @Test
+    fun `no redaction shows a single-label portal host verbatim`() {
+        val out = DiagnosticsBundle.build(
+            meta, emptyList(), null,
+            evidence = evidence(portalHost = "login"),
+            redact = false,
+        )
+        assertTrue(out.contains("portal_host: login"))
+    }
 }

@@ -17,20 +17,19 @@ private const val MAX_HOPS = 5
  * serving *something*, which other probes judge better.
  *
  * Declines with [DiagnosticReport.Inconclusive] when
- * [ProbeContext.defaultRouteBypassesCaptive] is `true` — following redirects
- * over a path that isn't the captive network can't say anything about the
- * captive gateway's redirect behavior — or `null` — this was never measured,
- * so the same risk applies unproven.
+ * [ProbeContext.defaultRouteBypassesCaptiveResolved] resolves `true` —
+ * following redirects over a path that isn't the captive network can't say
+ * anything about the captive gateway's redirect behavior. When the tri-state
+ * was never measured, that resolves lazily via [ProbeContext.activeProbe]
+ * rather than declining — declining on "unmeasured" used to make this probe
+ * no-op on every real incident, since the monitor skips the fallback probe
+ * on exactly that path.
  */
 class RedirectLoopProbe : DiagnosticProbe {
     override val name = "redirect_loop"
 
     override suspend fun run(ctx: ProbeContext): DiagnosticReport {
-        when (ctx.defaultRouteBypassesCaptive) {
-            true -> return defaultRouteNotCaptiveReport(name)
-            null -> return defaultRouteNotMeasuredReport(name)
-            false -> Unit
-        }
+        if (ctx.defaultRouteBypassesCaptiveResolved()) return defaultRouteNotCaptiveReport(name)
         val visited = mutableListOf(ctx.probeUrl)
         var current = ctx.probeUrl
         repeat(MAX_HOPS) { hop ->
