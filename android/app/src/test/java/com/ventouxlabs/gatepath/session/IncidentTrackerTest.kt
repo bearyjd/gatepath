@@ -1,6 +1,5 @@
 package com.ventouxlabs.gatepath.session
 
-import android.net.Network
 import com.ventouxlabs.gatepath.diag.DiagnosisResult
 import com.ventouxlabs.gatepath.diag.DiagnosticReport
 import com.ventouxlabs.gatepath.diag.RecommendedAction
@@ -15,11 +14,22 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNotSame
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
+/**
+ * Uses [Net], a plain data class with real `equals`/`hashCode`, instead of
+ * [android.net.Network]: under Gradle unit tests, `android.net.Network`'s
+ * android.jar stub has a package-private constructor (so it cannot be
+ * constructed here at all) and a stub `equals` that returns false even for
+ * `a == a` (see CLAUDE.md's "two paths can disagree" note). [IncidentTracker]
+ * is generic over the network type for exactly this reason.
+ */
 class IncidentTrackerTest {
+
+    private data class Net(val id: Int)
 
     private fun diagnostics(
         bindError: String? = "EPERM",
@@ -56,8 +66,8 @@ class IncidentTrackerTest {
 
     @Test
     fun `begin publishes confinement and evidence and returns a fresh id each time`() {
-        val tracker = IncidentTracker()
-        val network = Network()
+        val tracker = IncidentTracker<Net>()
+        val network = Net(1)
 
         val begun1 = tracker.begin(network, tunnelledInputs(), ProbePath.BOUND_WIFI, diagnostics())
         assertEquals(1L, begun1.id)
@@ -74,8 +84,8 @@ class IncidentTrackerTest {
 
     @Test
     fun `an update keyed to a previous id is dropped after a second begin`() {
-        val tracker = IncidentTracker()
-        val network = Network()
+        val tracker = IncidentTracker<Net>()
+        val network = Net(1)
 
         val begun1 = tracker.begin(network, tunnelledInputs(), ProbePath.BOUND_WIFI, diagnostics())
         tracker.begin(network, tunnelledInputs(), ProbePath.BOUND_WIFI, diagnostics())
@@ -88,9 +98,9 @@ class IncidentTrackerTest {
 
     @Test
     fun `clearIf with a different network leaves everything`() {
-        val tracker = IncidentTracker()
-        val network = Network()
-        val other = Network()
+        val tracker = IncidentTracker<Net>()
+        val network = Net(1)
+        val other = Net(2)
 
         tracker.begin(network, tunnelledInputs(), ProbePath.BOUND_WIFI, diagnostics())
         val cleared = tracker.clearIf(other)
@@ -103,8 +113,8 @@ class IncidentTrackerTest {
 
     @Test
     fun `clearIf with the matching network clears and a later keyed write is dropped`() {
-        val tracker = IncidentTracker()
-        val network = Network()
+        val tracker = IncidentTracker<Net>()
+        val network = Net(1)
 
         val begun = tracker.begin(network, tunnelledInputs(), ProbePath.BOUND_WIFI, diagnostics())
         val cleared = tracker.clearIf(network)
@@ -121,9 +131,28 @@ class IncidentTrackerTest {
     }
 
     @Test
+    fun `clearIf with an equal but not identical network instance clears`() {
+        // The production case: the same network arrives as different
+        // instances from different callbacks (see NetworkBinder KDoc), so
+        // clearIf must match on equals(), not on reference identity.
+        val tracker = IncidentTracker<Net>()
+        val network = Net(1)
+
+        tracker.begin(network, tunnelledInputs(), ProbePath.BOUND_WIFI, diagnostics())
+        val equalButDistinct = Net(1)
+        assertNotSame(network, equalButDistinct)
+
+        val cleared = tracker.clearIf(equalButDistinct)
+
+        assertTrue(cleared)
+        assertNull(tracker.confinement.value)
+        assertNull(tracker.suspectedNetwork)
+    }
+
+    @Test
     fun `a write keyed to the zero sentinel is dropped after clear, not resurrected`() {
-        val tracker = IncidentTracker()
-        val network = Network()
+        val tracker = IncidentTracker<Net>()
+        val network = Net(1)
 
         tracker.begin(network, tunnelledInputs(), ProbePath.BOUND_WIFI, diagnostics())
         tracker.clear()
@@ -137,8 +166,8 @@ class IncidentTrackerTest {
 
     @Test
     fun `adoptDefaultRouteCapture sets DEFAULT_ROUTE and does not overwrite an existing capture`() {
-        val tracker = IncidentTracker()
-        val network = Network()
+        val tracker = IncidentTracker<Net>()
+        val network = Net(1)
         val boundCapture = PortalProbeCapture.of(302, "text/html", PortalProbeCapture.RedirectSignal.LOCATION_HEADER)
         val freshCapture = PortalProbeCapture.of(200, "text/html", PortalProbeCapture.RedirectSignal.NONE)
 
@@ -164,8 +193,8 @@ class IncidentTrackerTest {
 
     @Test
     fun `setDiagnosis with a stale id is dropped`() {
-        val tracker = IncidentTracker()
-        val network = Network()
+        val tracker = IncidentTracker<Net>()
+        val network = Net(1)
 
         val begun1 = tracker.begin(network, tunnelledInputs(), ProbePath.BOUND_WIFI, diagnostics())
         tracker.begin(network, tunnelledInputs(), ProbePath.BOUND_WIFI, diagnostics())
@@ -176,8 +205,8 @@ class IncidentTrackerTest {
 
     @Test
     fun `setDiagnosis with the current id publishes`() {
-        val tracker = IncidentTracker()
-        val network = Network()
+        val tracker = IncidentTracker<Net>()
+        val network = Net(1)
 
         val begun = tracker.begin(network, tunnelledInputs(), ProbePath.BOUND_WIFI, diagnostics())
         val result = healthyDiagnosis()
@@ -188,8 +217,8 @@ class IncidentTrackerTest {
 
     @Test
     fun `updateLastDiagnostics with a stale id is dropped`() {
-        val tracker = IncidentTracker()
-        val network = Network()
+        val tracker = IncidentTracker<Net>()
+        val network = Net(1)
 
         val begun1 = tracker.begin(network, tunnelledInputs(), ProbePath.BOUND_WIFI, diagnostics())
         tracker.begin(network, tunnelledInputs(), ProbePath.BOUND_WIFI, diagnostics())
@@ -202,8 +231,8 @@ class IncidentTrackerTest {
 
     @Test
     fun `updateLastDiagnostics with the current id replaces lastDiagnostics`() {
-        val tracker = IncidentTracker()
-        val network = Network()
+        val tracker = IncidentTracker<Net>()
+        val network = Net(1)
 
         val begun = tracker.begin(network, tunnelledInputs(), ProbePath.BOUND_WIFI, diagnostics())
         assertEquals(diagnostics(), tracker.lastDiagnostics)
@@ -216,8 +245,8 @@ class IncidentTrackerTest {
 
     @Test
     fun `portalHost is derived from DnsStrict, from a Confined portal url, and null otherwise`() {
-        val tracker = IncidentTracker()
-        val network = Network()
+        val tracker = IncidentTracker<Net>()
+        val network = Net(1)
 
         val dnsStrictInputs = ClassificationInputs(
             bound = ProbeResult.Portal("https://n143.network-auth.com/splash", null),
@@ -246,8 +275,8 @@ class IncidentTrackerTest {
 
     @Test
     fun `currentId tracks the live incident and resets on clear`() {
-        val tracker = IncidentTracker()
-        val network = Network()
+        val tracker = IncidentTracker<Net>()
+        val network = Net(1)
 
         assertEquals(0L, tracker.currentId)
 

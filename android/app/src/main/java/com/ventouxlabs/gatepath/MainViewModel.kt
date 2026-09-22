@@ -91,7 +91,7 @@ class MainViewModel @Inject constructor(
      * writes are what stop a stale diagnostic-engine run for a previous
      * incident from writing into the one currently on screen.
      */
-    private val incidents = IncidentTracker()
+    private val incidents = IncidentTracker<Network>()
 
     /**
      * How the most recent captive incident classified. `null` means no

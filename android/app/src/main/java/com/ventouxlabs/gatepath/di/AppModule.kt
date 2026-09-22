@@ -5,6 +5,7 @@ import android.net.ConnectivityManager
 import android.provider.Settings
 import com.ventouxlabs.gatepath.BuildConfig
 import com.ventouxlabs.gatepath.network.AndroidNetworkBinder
+import com.ventouxlabs.gatepath.network.AndroidProcessBinding
 import com.ventouxlabs.gatepath.network.CONNECTIVITY_CHECK_URL
 import com.ventouxlabs.gatepath.network.CaptivePortalMonitor
 import com.ventouxlabs.gatepath.network.PortalProbe
@@ -42,7 +43,7 @@ object AppModule {
      */
     @Provides
     @Singleton
-    fun provideProcessBinding(connectivityManager: ConnectivityManager): ProcessBinding =
+    fun provideProcessBinding(connectivityManager: ConnectivityManager): AndroidProcessBinding =
         ProcessBinding(AndroidNetworkBinder(connectivityManager))
 
     @Provides
@@ -50,7 +51,7 @@ object AppModule {
     fun provideCaptivePortalMonitor(
         @ApplicationContext context: Context,
         connectivityManager: ConnectivityManager,
-        processBinding: ProcessBinding,
+        processBinding: AndroidProcessBinding,
         probe: PortalProbe,
     ): CaptivePortalMonitor =
         CaptivePortalMonitor(connectivityManager, processBinding, probe, resolveProbeUrl(context))

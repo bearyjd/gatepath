@@ -15,10 +15,18 @@ import android.net.Network
  */
 class AndroidNetworkBinder(
     private val connectivityManager: ConnectivityManager,
-) : NetworkBinder {
+) : NetworkBinder<Network> {
 
     override fun bind(network: Network?): Boolean =
         connectivityManager.bindProcessToNetwork(network)
 
     override fun current(): Network? = connectivityManager.boundNetworkForProcess
 }
+
+/**
+ * [ProcessBinding] parameterised for the real Android [Network] type — the
+ * only production instantiation. Kept here (not in `ProcessBinding.kt`,
+ * which stays SDK-free for `run-jvm-tests.sh`) since this file is already
+ * Android-only.
+ */
+typealias AndroidProcessBinding = ProcessBinding<Network>

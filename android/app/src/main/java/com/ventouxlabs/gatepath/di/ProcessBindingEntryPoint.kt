@@ -1,5 +1,6 @@
 package com.ventouxlabs.gatepath.di
 
+import com.ventouxlabs.gatepath.network.AndroidProcessBinding
 import com.ventouxlabs.gatepath.network.ProcessBinding
 import dagger.hilt.EntryPoint
 import dagger.hilt.InstallIn
@@ -15,5 +16,5 @@ import dagger.hilt.components.SingletonComponent
 @EntryPoint
 @InstallIn(SingletonComponent::class)
 interface ProcessBindingEntryPoint {
-    fun processBinding(): ProcessBinding
+    fun processBinding(): AndroidProcessBinding
 }

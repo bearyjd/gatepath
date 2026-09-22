@@ -34,8 +34,9 @@ import com.ventouxlabs.gatepath.diag.CertSummary
 import com.ventouxlabs.gatepath.diag.ConsoleCaptureBuffer
 import com.ventouxlabs.gatepath.diag.ConsoleCaptureEntry
 import com.ventouxlabs.gatepath.diag.ConsoleCaptureFile
+import com.ventouxlabs.gatepath.network.AndroidProcessBinding
 import com.ventouxlabs.gatepath.network.BlockedDomains
-import com.ventouxlabs.gatepath.network.ProcessBinding
+import com.ventouxlabs.gatepath.network.Lease
 import java.io.File
 import java.net.URI
 
@@ -85,7 +86,7 @@ private fun String.urlForLog(): String =
 fun GatepathWebView(
     url: String,
     network: Network,
-    processBinding: ProcessBinding,
+    processBinding: AndroidProcessBinding,
     onBlockedNavigation: () -> Unit,
     onBlockedResource: () -> Unit,
     onTlsCertErrorBypassed: () -> Unit,
@@ -215,7 +216,7 @@ fun GatepathWebView(
     // loadUrl site below checks this instead of assuming a lease was granted
     // — see DisposableEffect(network) for why a refusal must fail closed
     // rather than silently load over whatever route happens to be bound.
-    var lease by remember { mutableStateOf<ProcessBinding.Lease?>(null) }
+    var lease by remember { mutableStateOf<Lease<Network>?>(null) }
 
     DisposableEffect(network) {
         // A null lease means ProcessBinding's own bind was refused (e.g.

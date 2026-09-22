@@ -88,7 +88,7 @@ sealed interface NetworkEvent {
  */
 class CaptivePortalMonitor(
     private val connectivityManager: ConnectivityManager,
-    private val processBinding: ProcessBinding,
+    private val processBinding: AndroidProcessBinding,
     private val probe: PortalProbe = PortalProbe(),
     // URL Gatepath's own connectivity probe hits. Defaults to the standard
     // gstatic endpoint; debug builds may override it (see AppModule) so the

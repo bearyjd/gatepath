@@ -1,6 +1,6 @@
 package com.ventouxlabs.gatepath
 
-import android.net.Network
+import com.ventouxlabs.gatepath.network.Lease
 import com.ventouxlabs.gatepath.network.NetworkBinder
 import com.ventouxlabs.gatepath.network.ProcessBinding
 import kotlinx.coroutines.delay
@@ -14,29 +14,33 @@ import org.junit.Test
 /**
  * Pure-JVM tests for [ProcessBinding] against a fake [NetworkBinder].
  *
- * android.net.Network's JVM stub (see `run-jvm-tests.sh`) has no
- * equals/hashCode, so distinct `Network()` instances are distinct networks
- * by reference — exactly what these tests need to tell owners and borrows
- * apart.
+ * Uses [Net], a plain data class with real `equals`/`hashCode`, instead of
+ * [android.net.Network]: under Gradle unit tests, `android.net.Network`'s
+ * android.jar stub has a package-private constructor (so it cannot be
+ * constructed here at all) and a stub `equals` that returns false even for
+ * `a == a` (see CLAUDE.md's "two paths can disagree" note). [ProcessBinding]
+ * is generic over the network type for exactly this reason.
  */
 class ProcessBindingTest {
 
-    /** Records every bind() call in order; can be told to refuse or throw for a network. */
-    private class FakeBinder : NetworkBinder {
-        val calls = mutableListOf<Network?>()
-        private var bound: Network? = null
-        private var refused: Network? = null
-        private var throwsOn: Network? = null
+    private data class Net(val id: Int)
 
-        fun refuse(network: Network) {
+    /** Records every bind() call in order; can be told to refuse or throw for a network. */
+    private class FakeBinder : NetworkBinder<Net> {
+        val calls = mutableListOf<Net?>()
+        private var bound: Net? = null
+        private var refused: Net? = null
+        private var throwsOn: Net? = null
+
+        fun refuse(network: Net) {
             refused = network
         }
 
-        fun throwOn(network: Network) {
+        fun throwOn(network: Net) {
             throwsOn = network
         }
 
-        override fun bind(network: Network?): Boolean {
+        override fun bind(network: Net?): Boolean {
             calls.add(network)
             if (network != null && network === throwsOn) throw IllegalStateException("simulated bind failure")
             if (network != null && network === refused) return false
@@ -44,14 +48,14 @@ class ProcessBindingTest {
             return true
         }
 
-        override fun current(): Network? = bound
+        override fun current(): Net? = bound
     }
 
     @Test
     fun `acquire binds, release of the only lease binds null`() {
         val binder = FakeBinder()
         val binding = ProcessBinding(binder)
-        val net = Network()
+        val net = Net(1)
 
         val lease = binding.acquire(net)
         assertNotNull(lease)
@@ -66,8 +70,8 @@ class ProcessBindingTest {
     fun `two owners - B on top, releases unwind B then A then null`() {
         val binder = FakeBinder()
         val binding = ProcessBinding(binder)
-        val netA = Network()
-        val netB = Network()
+        val netA = Net(1)
+        val netB = Net(2)
 
         val leaseA = requireNotNull(binding.acquire(netA))
         val leaseB = requireNotNull(binding.acquire(netB))
@@ -84,8 +88,8 @@ class ProcessBindingTest {
     fun `release out of order leaves the remaining owner bound`() {
         val binder = FakeBinder()
         val binding = ProcessBinding(binder)
-        val netA = Network()
-        val netB = Network()
+        val netA = Net(1)
+        val netB = Net(2)
 
         val leaseA = requireNotNull(binding.acquire(netA))
         val leaseB = requireNotNull(binding.acquire(netB))
@@ -101,13 +105,18 @@ class ProcessBindingTest {
     fun `same network twice keeps it bound until both leases release`() {
         val binder = FakeBinder()
         val binding = ProcessBinding(binder)
-        val net = Network()
+        // Two distinct instances of "the same network" (same id, not the same
+        // reference) — this is the production case: the same network arrives
+        // as different instances from different callbacks (see NetworkBinder
+        // KDoc), so this exercises real equality rather than identity.
+        val net1 = Net(1)
+        val net2 = Net(1)
 
-        val lease1 = requireNotNull(binding.acquire(net))
-        val lease2 = requireNotNull(binding.acquire(net))
+        val lease1 = requireNotNull(binding.acquire(net1))
+        val lease2 = requireNotNull(binding.acquire(net2))
 
         binding.release(lease1)
-        assertEquals(net, binding.current())
+        assertEquals(net1, binding.current())
 
         binding.release(lease2)
         assertNull(binding.current())
@@ -117,7 +126,7 @@ class ProcessBindingTest {
     fun `refused bind returns null and leaves the slot untouched`() {
         val binder = FakeBinder()
         val binding = ProcessBinding(binder)
-        val net = Network()
+        val net = Net(1)
         binder.refuse(net)
 
         val lease = binding.acquire(net)
@@ -129,9 +138,9 @@ class ProcessBindingTest {
     fun `borrow restores to the current owner, not the saved value`() = runTest {
         val binder = FakeBinder()
         val binding = ProcessBinding(binder)
-        val netA = Network()
-        val netB = Network()
-        val probe = Network()
+        val netA = Net(1)
+        val netB = Net(2)
+        val probe = Net(3)
 
         val leaseA = requireNotNull(binding.acquire(netA))
 
@@ -148,8 +157,8 @@ class ProcessBindingTest {
     fun `borrow with no owner ends at null even if an owner acquired and released during it`() = runTest {
         val binder = FakeBinder()
         val binding = ProcessBinding(binder)
-        val probe = Network()
-        val net = Network()
+        val probe = Net(1)
+        val net = Net(2)
 
         binding.borrow(probe) {
             val lease = requireNotNull(binding.acquire(net))
@@ -164,9 +173,9 @@ class ProcessBindingTest {
     fun `two concurrent borrows serialise`() = runTest {
         val binder = FakeBinder()
         val binding = ProcessBinding(binder)
-        val netA = Network()
-        val netB = Network()
-        val observed = mutableListOf<Network?>()
+        val netA = Net(1)
+        val netB = Net(2)
+        val observed = mutableListOf<Net?>()
 
         val jobA = launch {
             binding.borrow(netA) {
@@ -198,8 +207,8 @@ class ProcessBindingTest {
     fun `releaseAll during a borrow ends at null immediately, not only after the borrow finishes`() = runTest {
         val binder = FakeBinder()
         val binding = ProcessBinding(binder)
-        val net = Network()
-        val probe = Network()
+        val net = Net(1)
+        val probe = Net(2)
 
         requireNotNull(binding.acquire(net))
 
@@ -219,11 +228,11 @@ class ProcessBindingTest {
     fun `acquire during a borrow always succeeds even for a network the binder will refuse`() = runTest {
         val binder = FakeBinder()
         val binding = ProcessBinding(binder)
-        val probe = Network()
-        val badNet = Network()
+        val probe = Net(1)
+        val badNet = Net(2)
         binder.refuse(badNet)
 
-        var leaseDuringBorrow: ProcessBinding.Lease? = null
+        var leaseDuringBorrow: Lease<Net>? = null
         binding.borrow(probe) {
             // acquire cannot test the real bind without disturbing the
             // borrow's pinned network (see the class KDoc), so it always
@@ -246,8 +255,8 @@ class ProcessBindingTest {
     fun `a borrow whose bind throws leaves borrowing false afterwards, so acquire binds normally`() = runTest {
         val binder = FakeBinder()
         val binding = ProcessBinding(binder)
-        val probe = Network()
-        val net = Network()
+        val probe = Net(1)
+        val net = Net(2)
         binder.throwOn(probe)
 
         try {
@@ -271,8 +280,8 @@ class ProcessBindingTest {
     fun `releaseAll immediately before a borrow's pin still ends with the slot null after the borrow`() = runTest {
         val binder = FakeBinder()
         val binding = ProcessBinding(binder)
-        val net = Network()
-        val probe = Network()
+        val net = Net(1)
+        val probe = Net(2)
 
         val lease = requireNotNull(binding.acquire(net))
         binding.releaseAll()
@@ -294,8 +303,8 @@ class ProcessBindingTest {
     fun `release of a stale lease after releaseAll is a no-op`() {
         val binder = FakeBinder()
         val binding = ProcessBinding(binder)
-        val netA = Network()
-        val netB = Network()
+        val netA = Net(1)
+        val netB = Net(2)
 
         val leaseA = requireNotNull(binding.acquire(netA))
         binding.releaseAll()
