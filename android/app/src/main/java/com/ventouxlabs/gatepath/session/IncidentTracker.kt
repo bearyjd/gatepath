@@ -1,6 +1,5 @@
 package com.ventouxlabs.gatepath.session
 
-import android.net.Network
 import com.ventouxlabs.gatepath.diag.DiagnosisResult
 import com.ventouxlabs.gatepath.diag.IncidentEvidence
 import com.ventouxlabs.gatepath.network.ClassificationInputs
@@ -28,16 +27,20 @@ import java.net.URI
  * newer incident has begun — this is what stops a stale diagnostic-engine
  * run for incident 1 from writing into incident 2's published record.
  *
- * Pure Kotlin aside from [android.net.Network] (an opaque handle compared
- * only by reference/equality here), so this is exercised by the no-SDK JVM
- * suite.
+ * Pure Kotlin, so this is exercised by the no-SDK JVM suite. Generic over
+ * the network type [N] — production instantiates this with
+ * [android.net.Network], but this file stays free of that Android SDK type:
+ * its android.jar stub has a package-private constructor and a stub
+ * `equals`/`hashCode` under Gradle unit tests (see CLAUDE.md's "two paths
+ * can disagree" note), so tests here use a plain data class with real
+ * equality instead of ever constructing one.
  *
  * **Threading:** main-thread confined. Every write here arrives from
  * `MainViewModel`'s `viewModelScope` (`Dispatchers.Main.immediate`); this
  * class has no synchronization of its own and relies on that single-threaded
  * confinement, not on any locking here.
  */
-class IncidentTracker {
+class IncidentTracker<N : Any> {
 
     private val _confinement = MutableStateFlow<ConfinementState?>(null)
     val confinement: StateFlow<ConfinementState?> = _confinement.asStateFlow()
@@ -49,7 +52,7 @@ class IncidentTracker {
     val diagnosis: StateFlow<DiagnosisResult?> = _diagnosis.asStateFlow()
 
     /** Network from the most recent incident — target for manual re-runs. */
-    var suspectedNetwork: Network? = null
+    var suspectedNetwork: N? = null
         private set
 
     /**
@@ -96,7 +99,7 @@ class IncidentTracker {
      * `MainViewModel.handleIncident` did, plus [IncidentEvidence.portalHost].
      */
     fun begin(
-        network: Network,
+        network: N,
         inputs: ClassificationInputs,
         boundPath: ProbePath,
         diagnostics: NetworkDiagnostics,
@@ -163,7 +166,7 @@ class IncidentTracker {
      * Returns whether it cleared. Guards a caller that reacts to a network
      * event for a network other than the one the live incident suspects.
      */
-    fun clearIf(network: Network): Boolean {
+    fun clearIf(network: N): Boolean {
         if (network != suspectedNetwork) return false
         clear()
         return true

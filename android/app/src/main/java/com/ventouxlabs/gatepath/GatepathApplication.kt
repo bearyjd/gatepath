@@ -5,7 +5,7 @@ import android.util.Log
 import androidx.lifecycle.ProcessLifecycleOwner
 import com.ventouxlabs.gatepath.audit.AuditLog
 import com.ventouxlabs.gatepath.di.ProcessBindingEntryPoint
-import com.ventouxlabs.gatepath.network.ProcessBinding
+import com.ventouxlabs.gatepath.network.AndroidProcessBinding
 import dagger.hilt.android.EntryPointAccessors
 import dagger.hilt.android.HiltAndroidApp
 
@@ -16,7 +16,7 @@ private const val TAG = "GatepathApp"
 @HiltAndroidApp
 class GatepathApplication : Application() {
 
-    private val processBinding: ProcessBinding by lazy {
+    private val processBinding: AndroidProcessBinding by lazy {
         EntryPointAccessors.fromApplication(this, ProcessBindingEntryPoint::class.java).processBinding()
     }
 

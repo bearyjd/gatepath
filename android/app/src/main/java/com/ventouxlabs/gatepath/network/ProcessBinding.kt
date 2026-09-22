@@ -1,11 +1,20 @@
 package com.ventouxlabs.gatepath.network
 
-import android.net.Network
 import android.util.Log
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
 private const val TAG = "ProcessBinding"
+
+/**
+ * Opaque token for one acquired binding, for a [ProcessBinding] over network
+ * type [N]. Compared by identity only. Top-level (not nested in
+ * [ProcessBinding]) so a caller can name the type without qualifying it
+ * against a specific [ProcessBinding] instantiation — see
+ * `AndroidNetworkBinder.kt`'s `AndroidProcessBinding` typealias for the one
+ * production instantiation's spelling.
+ */
+class Lease<N : Any> internal constructor(internal val network: N)
 
 /**
  * Single owner of the process-wide `bindProcessToNetwork` slot.
@@ -62,14 +71,20 @@ private const val TAG = "ProcessBinding"
  * main thread and are guarded by a plain lock. [borrow] runs on a background
  * dispatcher and serialises concurrent borrows on a [Mutex] so two probes
  * never interleave their bind calls.
+ *
+ * Generic over the network type [N]: production always instantiates this
+ * with [android.net.Network] (see `AndroidNetworkBinder.kt`'s
+ * `AndroidProcessBinding` typealias), but this file stays free of that
+ * Android SDK type so it can be exercised by `run-jvm-tests.sh`'s no-SDK
+ * suite. `android.net.Network`'s android.jar stub has a package-private
+ * constructor and a stub `equals`/`hashCode` under Gradle unit tests (see
+ * CLAUDE.md's "two paths can disagree" note), so `ProcessBindingTest` uses a
+ * plain data class with real equality instead of ever constructing one.
  */
-class ProcessBinding(private val binder: NetworkBinder) {
-
-    /** Opaque token for one acquired binding. Compared by identity only. */
-    class Lease internal constructor(internal val network: Network)
+class ProcessBinding<N : Any>(private val binder: NetworkBinder<N>) {
 
     private val lock = Any()
-    private val stack = ArrayList<Lease>()
+    private val stack = ArrayList<Lease<N>>()
     private val borrowMutex = Mutex()
     private var borrowing = false
 
@@ -80,7 +95,7 @@ class ProcessBinding(private val binder: NetworkBinder) {
      * slot. See the class KDoc for the deferred-bind behavior while a
      * [borrow] is in flight.
      */
-    fun acquire(network: Network): Lease? {
+    fun acquire(network: N): Lease<N>? {
         synchronized(lock) {
             if (borrowing) {
                 val lease = Lease(network)
@@ -101,7 +116,7 @@ class ProcessBinding(private val binder: NetworkBinder) {
      * stack is empty, unless a [borrow] is in flight, in which case the
      * rebind is deferred until it ends.
      */
-    fun release(lease: Lease) {
+    fun release(lease: Lease<N>) {
         synchronized(lock) {
             stack.remove(lease)
             if (borrowing) return
@@ -126,7 +141,7 @@ class ProcessBinding(private val binder: NetworkBinder) {
     }
 
     /** The binder's own view of the current binding, for diagnostics/logging. */
-    fun current(): Network? = binder.current()
+    fun current(): N? = binder.current()
 
     /**
      * Pins the slot to [network] for the duration of [block], serialised
@@ -162,7 +177,7 @@ class ProcessBinding(private val binder: NetworkBinder) {
      * bind, so a refused bind here doesn't change what the probe measures.
      * The refusal is still logged so it's visible in diagnostics.
      */
-    suspend fun <T> borrow(network: Network, block: suspend () -> T): T {
+    suspend fun <T> borrow(network: N, block: suspend () -> T): T {
         return borrowMutex.withLock {
             try {
                 synchronized(lock) {

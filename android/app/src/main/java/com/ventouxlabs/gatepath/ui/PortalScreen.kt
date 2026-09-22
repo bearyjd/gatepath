@@ -25,7 +25,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.ventouxlabs.gatepath.BuildConfig
 import com.ventouxlabs.gatepath.diag.CertSummary
-import com.ventouxlabs.gatepath.network.ProcessBinding
+import com.ventouxlabs.gatepath.network.AndroidProcessBinding
 
 /**
  * Full-screen portal sheet.
@@ -40,7 +40,7 @@ import com.ventouxlabs.gatepath.network.ProcessBinding
 fun PortalScreen(
     portalUrl: String,
     network: Network,
-    processBinding: ProcessBinding,
+    processBinding: AndroidProcessBinding,
     onDismiss: () -> Unit,
     onBlockedNavigation: () -> Unit,
     onBlockedResource: () -> Unit,

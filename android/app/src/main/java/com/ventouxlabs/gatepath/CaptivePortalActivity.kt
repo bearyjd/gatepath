@@ -25,13 +25,14 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.lifecycleScope
+import com.ventouxlabs.gatepath.network.AndroidProcessBinding
 import com.ventouxlabs.gatepath.network.CONNECTIVITY_CHECK_URL
 import com.ventouxlabs.gatepath.network.CaptivePortalMonitor
 import com.ventouxlabs.gatepath.network.ClassificationInputs
 import com.ventouxlabs.gatepath.network.ConfinementState
+import com.ventouxlabs.gatepath.network.Lease
 import com.ventouxlabs.gatepath.network.PortalProbe
 import com.ventouxlabs.gatepath.network.ProbeResult
-import com.ventouxlabs.gatepath.network.ProcessBinding
 import com.ventouxlabs.gatepath.network.VpnDetector
 import com.ventouxlabs.gatepath.network.VpnKind
 import com.ventouxlabs.gatepath.network.classify
@@ -58,9 +59,9 @@ import javax.inject.Inject
  *     used to report sign-in completion or dismissal back to the system.
  *
  *   - [ConnectivityManager.EXTRA_NETWORK] — the captive [Network]. The
- *     activity acquires a [ProcessBinding.Lease] on this network so the
- *     WebView's traffic routes via the captive interface — see
- *     [ProcessBinding] for the owner/borrower model this participates in.
+ *     activity acquires a [Lease] on this network so the WebView's traffic
+ *     routes via the captive interface — see [ProcessBinding] for the
+ *     owner/borrower model this participates in.
  *
  *   - [ConnectivityManager.EXTRA_CAPTIVE_PORTAL_URL] — the URL the captive
  *     portal redirected to (the actual sign-in page). Available API 28+.
@@ -81,7 +82,7 @@ class CaptivePortalActivity : ComponentActivity() {
     lateinit var connectivityManager: ConnectivityManager
 
     @Inject
-    lateinit var processBinding: ProcessBinding
+    lateinit var processBinding: AndroidProcessBinding
 
     @Inject
     lateinit var probe: PortalProbe
@@ -106,7 +107,7 @@ class CaptivePortalActivity : ComponentActivity() {
      * model this participates in. Null until acquired (or if acquisition was
      * refused).
      */
-    private var lease: ProcessBinding.Lease? = null
+    private var lease: Lease<Network>? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)

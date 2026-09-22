@@ -44,6 +44,10 @@ what you passed. `network/ProbeErrorReason.kt` carries its own `LinuxErrno`
 constants and takes an errno-reader function (production reads
 `ErrnoException.errno`; tests pass their own throwable) for exactly this
 reason, and there is deliberately no `OsConstants` stub in the runner.
+`android.net.Network`'s android.jar stub has a package-private constructor
+and a stub `equals`/`hashCode`, so tests never construct one either:
+`ProcessBinding` and `IncidentTracker` are generic over the network type, and
+their tests use a plain data class with real equality instead.
 
 **It enumerates its sources by hand.** `MAIN_SOURCES` and `TEST_SOURCES` are
 explicit lists, not globs — add a new SDK-free source or test file to the

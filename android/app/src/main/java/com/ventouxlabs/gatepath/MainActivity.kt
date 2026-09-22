@@ -16,8 +16,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.lifecycleScope
 import com.ventouxlabs.gatepath.diag.IncidentEvidence
+import com.ventouxlabs.gatepath.network.AndroidProcessBinding
 import com.ventouxlabs.gatepath.network.ConfinementState
-import com.ventouxlabs.gatepath.network.ProcessBinding
 import com.ventouxlabs.gatepath.network.VpnKind
 import com.ventouxlabs.gatepath.session.PortalSession
 import com.ventouxlabs.gatepath.share.DiagnosticsSharer
@@ -41,7 +41,7 @@ class MainActivity : ComponentActivity() {
     lateinit var connectivityManager: ConnectivityManager
 
     @Inject
-    lateinit var processBinding: ProcessBinding
+    lateinit var processBinding: AndroidProcessBinding
 
     private val viewModel: MainViewModel by viewModels()
 
