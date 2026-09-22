@@ -260,10 +260,13 @@ class MainViewModel @Inject constructor(
             // reenter, not portalDetected: after a dismiss or a lost network
             // the session is Completed, which portalDetected rejects, so a
             // second captive network in the same process would never open.
-            val next = sessionManager.reenter(_session.value, state.portalUrl)
-            _session.value = next
-            // Latch, retarget and open only on a transition that actually
-            // happened. A rejected reenter leaves the session untouched and
+            val result = sessionManager.reenter(_session.value, state.portalUrl)
+            // Latch, retarget and open only when `result` is Accepted. Branching
+            // on the ReenterResult type — not on the returned session's type —
+            // is what makes this safe: a rejected reenter from a session that
+            // is already Detected returns that same Detected session, which
+            // `is PortalSession.Detected` could not tell apart from a real
+            // transition. An Accepted reenter leaves the session untouched and
             // opens nothing, so claiming the session was confined would attach
             // this incident's verdict to whatever session is really running.
             //
@@ -276,10 +279,16 @@ class MainViewModel @Inject constructor(
             // CaptiveNetworkLost, losing the portal_completed audit entry.
             // `suspectedNetwork` above keeps the "latest incident" meaning for
             // rerunDiagnostics; `signInHere` sets this field from there itself.
-            if (next is PortalSession.Detected) {
-                sessionWasConfined = true
-                _activeNetwork.value = event.network
-                openPortal()
+            when (result) {
+                is PortalSessionManager.ReenterResult.Accepted -> {
+                    _session.value = result.session
+                    sessionWasConfined = true
+                    _activeNetwork.value = event.network
+                    openPortal()
+                }
+                is PortalSessionManager.ReenterResult.Rejected -> {
+                    _session.value = result.current
+                }
             }
         }
         runDiagnosticEngine(event.network, event.diagnostics)
@@ -428,14 +437,19 @@ class MainViewModel @Inject constructor(
         val network = suspectedNetwork ?: return
         val state = _confinement.value as? ConfinementState.Confined ?: return
         if (_session.value is PortalSession.Active) return
-        val next = sessionManager.reenter(_session.value, state.portalUrl)
-        _session.value = next
-        // Same ordering as handleIncident: latch, retarget and open only when
-        // the transition succeeded.
-        if (next is PortalSession.Detected) {
-            sessionWasConfined = true
-            _activeNetwork.value = network
-            openPortal()
+        val result = sessionManager.reenter(_session.value, state.portalUrl)
+        // Same ordering as handleIncident: branch on ReenterResult, not on the
+        // returned session's type, and latch/retarget/open only on Accepted.
+        when (result) {
+            is PortalSessionManager.ReenterResult.Accepted -> {
+                _session.value = result.session
+                sessionWasConfined = true
+                _activeNetwork.value = network
+                openPortal()
+            }
+            is PortalSessionManager.ReenterResult.Rejected -> {
+                _session.value = result.current
+            }
         }
     }
 
