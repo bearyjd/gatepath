@@ -2,7 +2,6 @@ package com.ventouxlabs.gatepath.ui
 
 import android.content.Context
 import android.graphics.Bitmap
-import android.net.ConnectivityManager
 import android.net.Network
 import android.net.Uri
 import android.net.http.SslError
@@ -36,6 +35,7 @@ import com.ventouxlabs.gatepath.diag.ConsoleCaptureBuffer
 import com.ventouxlabs.gatepath.diag.ConsoleCaptureEntry
 import com.ventouxlabs.gatepath.diag.ConsoleCaptureFile
 import com.ventouxlabs.gatepath.network.BlockedDomains
+import com.ventouxlabs.gatepath.network.ProcessBinding
 import java.io.File
 import java.net.URI
 
@@ -59,7 +59,8 @@ private fun String.urlForLog(): String =
  * Composable that hosts a security-hardened [WebView] bound to the captive-portal [Network].
  *
  * Security guarantees (per docs/SECURITY_MODEL.md):
- * - Traffic bound to [network] via [ConnectivityManager.bindProcessToNetwork].
+ * - Traffic bound to [network] via a [ProcessBinding] lease — see that class's
+ *   KDoc for the owner/borrower model this WebView participates in.
  * - JavaScript enabled (required for most portal pages); all other risky settings disabled.
  * - Cookies and DOM storage ENABLED for the session (portals require them for
  *   sign-in), but session-scoped: wiped on dispose along with cache and history.
@@ -77,7 +78,7 @@ private fun String.urlForLog(): String =
 fun GatepathWebView(
     url: String,
     network: Network,
-    connectivityManager: ConnectivityManager,
+    processBinding: ProcessBinding,
     onBlockedNavigation: () -> Unit,
     onBlockedResource: () -> Unit,
     onTlsCertErrorBypassed: () -> Unit,
@@ -205,12 +206,25 @@ fun GatepathWebView(
     var lastLoadedUrl by remember { mutableStateOf<String?>(null) }
 
     DisposableEffect(network) {
-        connectivityManager.bindProcessToNetwork(network)
+        // A null lease means ProcessBinding's own bind was refused (e.g.
+        // EPERM under a secure VPN). That should not be reachable here: a
+        // WebView is only ever composed from ConfinementState.Confined,
+        // which means the monitor's probe already bound this exact network
+        // successfully inside CaptivePortalMonitor.probeAndEmit — see
+        // ProcessBinding's KDoc for why a probe's own borrow cannot itself
+        // observe a refusal that happens after it hands the slot back. If
+        // this null branch is ever hit for real, the page loads over
+        // whichever route is currently bound (likely the default route)
+        // instead of the captive network.
+        val lease = processBinding.acquire(network)
+        if (lease == null) {
+            Log.w(TAG, "processBinding.acquire($network) refused; WebView traffic will not follow this network")
+        }
         webView.loadUrl(url)
         lastLoadedUrl = url
 
         onDispose {
-            connectivityManager.bindProcessToNetwork(null)
+            lease?.let(processBinding::release)
             clearPortalSessionState(webView)
             flushConsoleCapture(context, consoleCapture)
         }

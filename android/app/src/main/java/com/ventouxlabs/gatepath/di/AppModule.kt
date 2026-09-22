@@ -4,9 +4,11 @@ import android.content.Context
 import android.net.ConnectivityManager
 import android.provider.Settings
 import com.ventouxlabs.gatepath.BuildConfig
+import com.ventouxlabs.gatepath.network.AndroidNetworkBinder
 import com.ventouxlabs.gatepath.network.CONNECTIVITY_CHECK_URL
 import com.ventouxlabs.gatepath.network.CaptivePortalMonitor
 import com.ventouxlabs.gatepath.network.PortalProbe
+import com.ventouxlabs.gatepath.network.ProcessBinding
 import com.ventouxlabs.gatepath.session.PortalSessionManager
 import dagger.Module
 import dagger.Provides
@@ -30,14 +32,28 @@ object AppModule {
     @Singleton
     fun providePortalProbe(): PortalProbe = PortalProbe()
 
+    /**
+     * Single process-wide owner of `bindProcessToNetwork`. See
+     * `ProcessBinding`'s KDoc and `SECURITY_MODEL.md`'s "Caveat —
+     * bindProcessToNetwork is process-wide" section: every writer (the
+     * monitor's probe, WebView screens, the system-handoff activity, the
+     * background watchdog) goes through this one `@Singleton` instance
+     * instead of racing its own save/restore.
+     */
+    @Provides
+    @Singleton
+    fun provideProcessBinding(connectivityManager: ConnectivityManager): ProcessBinding =
+        ProcessBinding(AndroidNetworkBinder(connectivityManager))
+
     @Provides
     @Singleton
     fun provideCaptivePortalMonitor(
         @ApplicationContext context: Context,
         connectivityManager: ConnectivityManager,
+        processBinding: ProcessBinding,
         probe: PortalProbe,
     ): CaptivePortalMonitor =
-        CaptivePortalMonitor(connectivityManager, probe, resolveProbeUrl(context))
+        CaptivePortalMonitor(connectivityManager, processBinding, probe, resolveProbeUrl(context))
 
     /**
      * Debug builds honour the system's `captive_portal_http_url` override so

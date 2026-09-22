@@ -1,35 +1,54 @@
 package com.ventouxlabs.gatepath
 
 import android.app.Application
-import android.content.Context
-import android.net.ConnectivityManager
 import android.util.Log
 import androidx.lifecycle.ProcessLifecycleOwner
 import com.ventouxlabs.gatepath.audit.AuditLog
+import com.ventouxlabs.gatepath.network.ProcessBinding
+import dagger.hilt.EntryPoint
+import dagger.hilt.InstallIn
+import dagger.hilt.android.EntryPointAccessors
 import dagger.hilt.android.HiltAndroidApp
+import dagger.hilt.components.SingletonComponent
 
 @Suppress("unused") // Application class referenced from AndroidManifest.
 
 private const val TAG = "GatepathApp"
 
+/**
+ * [GatepathApplication] is not an `@AndroidEntryPoint` (that annotation is
+ * for Activities/Services/Fragments/Views) and Hilt does not field-inject the
+ * `@HiltAndroidApp` Application class itself, so `ProcessBinding` — a
+ * `@Singleton` from [com.ventouxlabs.gatepath.di.AppModule] — is fetched via
+ * this entry point instead of `@Inject`.
+ */
+@EntryPoint
+@InstallIn(SingletonComponent::class)
+interface ProcessBindingEntryPoint {
+    fun processBinding(): ProcessBinding
+}
+
 @HiltAndroidApp
 class GatepathApplication : Application() {
+
+    private val processBinding: ProcessBinding by lazy {
+        EntryPointAccessors.fromApplication(this, ProcessBindingEntryPoint::class.java).processBinding()
+    }
 
     override fun onCreate() {
         super.onCreate()
         AuditLog.init(filesDir)
-        // Watchdog: clear any leftover process-network binding when the WHOLE
-        // app goes to background. ProcessLifecycleOwner debounces across
+        // Watchdog: release every owner's lease (and force-bind null) when the
+        // WHOLE app goes to background. ProcessLifecycleOwner debounces across
         // per-Activity pause/resume transitions (rotation, single-task switch,
         // intent-launched activity), so routine in-app navigation does NOT
         // trigger a clear. See SECURITY_MODEL.md "Caveat — bindProcessToNetwork
-        // is process-wide" for the leak class this defends against.
+        // is process-wide" for the leak class this defends against, and
+        // ProcessBinding's KDoc for why releaseAll() is safe to call even with
+        // a borrow (the monitor's probe) in flight.
         ProcessLifecycleOwner.get().lifecycle.addObserver(
             BindWatchdog {
-                clearProcessNetworkBinding(
-                    this,
-                    "ProcessLifecycleOwner.onStop (app backgrounded)",
-                )
+                clearProcessNetworkBinding("ProcessLifecycleOwner.onStop (app backgrounded)")
             }
         )
     }
@@ -38,21 +57,16 @@ class GatepathApplication : Application() {
         // Belt-and-braces: clear the binding on orderly shutdown. Android
         // rarely calls this, but when it does we want the process to leave
         // a clean kernel state.
-        clearProcessNetworkBinding(this, "onTerminate")
+        clearProcessNetworkBinding("onTerminate")
         super.onTerminate()
     }
-}
 
-/**
- * Idempotent: calling with no active binding is a no-op. Top-level so the
- * watchdog can call it without a Context dependency.
- */
-private fun clearProcessNetworkBinding(ctx: Context, reason: String) {
-    runCatching {
-        val cm = ctx.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
-        cm?.bindProcessToNetwork(null)
-        Log.d(TAG, "Cleared process network binding ($reason)")
-    }.onFailure { ex ->
-        Log.w(TAG, "Failed to clear process network binding ($reason): ${ex.message}")
+    private fun clearProcessNetworkBinding(reason: String) {
+        runCatching {
+            processBinding.releaseAll()
+            Log.d(TAG, "Released all process-binding leases ($reason)")
+        }.onFailure { ex ->
+            Log.w(TAG, "Failed to release process-binding leases ($reason): ${ex.message}")
+        }
     }
 }

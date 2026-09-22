@@ -88,6 +88,7 @@ sealed interface NetworkEvent {
  */
 class CaptivePortalMonitor(
     private val connectivityManager: ConnectivityManager,
+    private val processBinding: ProcessBinding,
     private val probe: PortalProbe = PortalProbe(),
     // URL Gatepath's own connectivity probe hits. Defaults to the standard
     // gstatic endpoint; debug builds may override it (see AppModule) so the
@@ -128,12 +129,8 @@ class CaptivePortalMonitor(
             if (!probed.add(network)) return
             ioScope.launch {
                 Log.d(TAG, "Probing network $network (bind path)")
-                val previousBinding = connectivityManager.boundNetworkForProcess
-                val bindResult = try {
-                    connectivityManager.bindProcessToNetwork(network)
+                val bindResult = processBinding.borrow(network) {
                     probe.probe(network, testUrl = probeUrl)
-                } finally {
-                    connectivityManager.bindProcessToNetwork(previousBinding)
                 }
                 if (bindResult is ProbeResult.Validated) {
                     // Capability said NOT validated; the Wi-Fi itself answered 204. Not an incident.
