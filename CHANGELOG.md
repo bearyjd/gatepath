@@ -34,6 +34,20 @@ detailed status lives in [`docs/ROADMAP.md`](docs/ROADMAP.md).
 - **Android:** the audit log could record `unconfined` for a confined
   session — never shipped; found in review while adding the confinement
   field, not observed in the wild.
+- **Android:** confinement classification matched `EPERM`/`EACCES` by
+  substring in the probe's rendered error message rather than the errno, so
+  a reworded platform message could turn a tunnelled or blocked bind into
+  `Unknown`, the one state that offered "Try signing in anyway"; the reason
+  is now typed from the errno, and the system-handoff screen offers the VPN
+  app instead of the sign-in page when a VPN is up — never shipped; found in
+  review.
+- **Android:** a rejected session re-entry from an already-detected state
+  was read as accepted, latching the wrong network — never shipped; found in
+  review.
+- **Android:** the redacted diagnostics bundle rendered the gateway
+  certificate's fingerprint and validity window, and scrubbed no
+  resolver-answered hostname from incidents that never opened a session —
+  never shipped; found in review.
 - **e2e-android:** the host-side assertions now fail on absent evidence per
   mode (audit log, gateway log, VPN sink) instead of treating a missing
   artifact as an implicit pass.

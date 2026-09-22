@@ -234,9 +234,14 @@ class SessionStateTest {
     // dismissed, which leaves the session Completed. portalDetected only
     // accepts Monitoring, so without reenter the button is a no-op in exactly
     // the situation it exists for.
+    //
+    // reenter returns a ReenterResult rather than a bare PortalSession
+    // precisely so callers cannot mistake a Rejected result for an Accepted
+    // one when the current session already happens to be Detected — see
+    // PortalSessionManager.ReenterResult's kdoc.
 
     @Test
-    fun `reenter from Completed yields Detected with the url`() {
+    fun `reenter from Completed yields Accepted with Detected carrying the url`() {
         val completed = PortalSession.Completed(
             closeReason = CloseReason.USER_DISMISSED,
             openedUtc = opened,
@@ -244,16 +249,40 @@ class SessionStateTest {
             portalUrl = portalUrl,
         )
         val result = manager.reenter(completed, portalUrl)
-        assertTrue(result is PortalSession.Detected)
-        assertEquals(portalUrl, (result as PortalSession.Detected).portalUrl)
+        assertTrue(result is PortalSessionManager.ReenterResult.Accepted)
+        val accepted = result as PortalSessionManager.ReenterResult.Accepted
+        assertEquals(portalUrl, accepted.session.portalUrl)
     }
 
     @Test
-    fun `reenter from Active is rejected`() {
+    fun `reenter from Monitoring yields Accepted with Detected carrying the url`() {
+        val result = manager.reenter(PortalSession.Monitoring, portalUrl)
+        assertTrue(result is PortalSessionManager.ReenterResult.Accepted)
+        val accepted = result as PortalSessionManager.ReenterResult.Accepted
+        assertEquals(portalUrl, accepted.session.portalUrl)
+    }
+
+    @Test
+    fun `reenter from Active is Rejected and leaves current session unchanged`() {
         val before = manager.rejectedTransitions.get()
         val active = PortalSession.Active(portalUrl, opened)
         val result = manager.reenter(active, portalUrl)
-        assertEquals(active, result)
+        assertTrue(result is PortalSessionManager.ReenterResult.Rejected)
+        assertEquals(active, (result as PortalSessionManager.ReenterResult.Rejected).current)
+        assertEquals(before + 1, manager.rejectedTransitions.get())
+    }
+
+    @Test
+    fun `reenter from Detected is Rejected and leaves current session unchanged`() {
+        // This is the case the ReenterResult type exists to guard: the
+        // current session is already Detected, so a caller that checked
+        // "is PortalSession.Detected" on the return value instead of the
+        // ReenterResult type would wrongly treat this rejection as accepted.
+        val before = manager.rejectedTransitions.get()
+        val detected = PortalSession.Detected(portalUrl = "http://old.example.com/login")
+        val result = manager.reenter(detected, portalUrl)
+        assertTrue(result is PortalSessionManager.ReenterResult.Rejected)
+        assertEquals(detected, (result as PortalSessionManager.ReenterResult.Rejected).current)
         assertEquals(before + 1, manager.rejectedTransitions.get())
     }
 

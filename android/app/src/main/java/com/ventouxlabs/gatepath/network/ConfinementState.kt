@@ -15,6 +15,10 @@ import java.net.URI
  * (`NetworkController::checkUserNetworkAccessLocked`). Every VPN client we
  * care about is secure, so `bindProcessToNetwork(wifi)` fails with EPERM on
  * every connect while the VPN covers us. EACCES is the lockdown PROHIBIT rule.
+ *
+ * [classify] decides EPERM/EACCES from [ProbeErrorReason], not by matching
+ * text in the probe's error message — see [probeErrorReason] for how the
+ * errno is recovered from the exception's cause chain.
  */
 sealed interface ConfinementState {
     val schemaName: String
@@ -62,10 +66,19 @@ fun classify(inputs: ClassificationInputs): ConfinementState {
                 ConfinementState.Confined(bound.locationUrl, bound.capture)
             }
         }
-        is ProbeResult.Error -> when {
-            bound.message.contains("EPERM") -> ConfinementState.Tunnelled(vpnKind)
-            bound.message.contains("EACCES") -> ConfinementState.Blocked(vpnKind)
-            else -> ConfinementState.Unknown(bound.message, fallbackMessage(inputs.fallback))
+        is ProbeResult.Error -> when (bound.reason) {
+            // The fallback substring match lives entirely inside
+            // probeErrorReason() (see ProbeErrorReason.kt) — an Error whose
+            // message happens to contain "EPERM"/"EACCES" but whose derived
+            // reason is OTHER falls through to Unknown here, not Tunnelled/
+            // Blocked. classify() only ever looks at the typed reason.
+            ProbeErrorReason.PERMISSION_DENIED -> ConfinementState.Tunnelled(vpnKind)
+            ProbeErrorReason.ACCESS_BLOCKED -> ConfinementState.Blocked(vpnKind)
+            ProbeErrorReason.CONNECTION_REFUSED,
+            ProbeErrorReason.UNREACHABLE,
+            ProbeErrorReason.TIMEOUT,
+            ProbeErrorReason.OTHER,
+            -> ConfinementState.Unknown(bound.message, fallbackMessage(inputs.fallback))
         }
         is ProbeResult.Validated -> ConfinementState.Unknown("bound probe returned 204", fallbackMessage(inputs.fallback))
     }

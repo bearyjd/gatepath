@@ -116,6 +116,30 @@ exposure surface, readable by any app holding `READ_LOGS`), the console
 capture file is app-private and only reaches anyone else if the user
 explicitly shares it.
 
+The known-identifier set that backs this substitution is harvested from two
+places, not the audit log alone: the audit entries for the network, and the
+current incident's `IncidentEvidence` (its Wi-Fi and DoH resolver answers).
+The second source is defence in depth rather than a live leak fix. A
+Tunnelled, Blocked, DnsStrict, or Unknown incident never opens a session and
+so never writes an audit entry, which leaves the audit half of the set empty
+for exactly those incidents. The resolver fields hold IP literals today, and
+the unconditional IP-literal pass already masks those; harvesting them means
+any non-literal value they ever carry (and its echo in the same incident's
+bind/fallback error text) is scrubbed by substitution as well, instead of
+depending on that pass. The remaining gap for session-less incidents is that
+the DnsStrict portal host never reaches the evidence record at all; that is
+tracked in issue #169.
+
+The incident-evidence section of the bundle carries one more identifier class
+the passes above don't cover by substitution: a captured TLS certificate's
+SHA-256 fingerprint (`cert_sha256`) and its validity window
+(`cert_not_before_epoch_ms`/`cert_not_after_epoch_ms`) identify the venue
+about as precisely as its SSID, so `--redact` replaces all three outright
+rather than relying on text matching to catch them. The certificate's primary
+error code (`cert_primary_error`) and whether it is self-signed
+(`cert_self_signed`) are low-cardinality and diagnostically essential, so both
+are kept in both modes.
+
 If the app process dies mid-session before the buffer flushes (dispose never
 runs), that session's capture is lost silently — no partial flush. Accepted
 for v1: this is best-effort off-device diagnostics, not a guarantee.

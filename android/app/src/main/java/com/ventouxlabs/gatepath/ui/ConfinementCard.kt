@@ -32,10 +32,17 @@ fun ConfinementCard(
     /**
      * Replaces the primary button's label without changing which
      * [ConfinementAction] it dispatches. Exists for the system-handoff
-     * carve-out in `CaptivePortalActivity`, where `Unknown` offers to open the
-     * WebView anyway; leave it null everywhere else.
+     * entry point (`CaptivePortalActivity`), which renders `Unknown` with its
+     * own copy from [ConfinementStateText.handoffUnknown]; leave it null
+     * everywhere else.
      */
     actionLabelOverride: String? = null,
+    /**
+     * Replaces the sentence for the same reason as [actionLabelOverride]: the
+     * default `Unknown` sentence tells the user to share evidence, and the
+     * handoff entry point has no share control to point at.
+     */
+    sentenceOverride: String? = null,
     /**
      * Whether to offer the secondary "Share evidence" button at all. False on
      * entry points that own no evidence bundle — `CaptivePortalActivity` has no
@@ -51,7 +58,10 @@ fun ConfinementCard(
         tonalElevation = 2.dp,
     ) {
         Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Text(ConfinementStateText.sentence(state, vpnAppLabel), style = MaterialTheme.typography.bodyLarge)
+            Text(
+                sentenceOverride ?: ConfinementStateText.sentence(state, vpnAppLabel),
+                style = MaterialTheme.typography.bodyLarge,
+            )
             Button(onClick = { onAction(action) }) {
                 Text(actionLabelOverride ?: ConfinementStateText.actionLabel(action))
             }

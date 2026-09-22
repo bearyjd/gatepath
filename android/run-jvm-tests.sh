@@ -115,7 +115,9 @@ download_jar "$GOOGLE_MAVEN/androidx/arch/core/core-common/2.2.0/core-common-2.2
 
 SRC_MAIN="$ANDROID_ROOT/app/src/main/java"
 SRC_TEST="$ANDROID_ROOT/app/src/test/java"
-BUILD_DIR="$ANDROID_ROOT/build/jvm-test"
+# Overridable so several checkouts (or parallel workers on one checkout) can
+# run the suite without clobbering each other's compiled classes.
+BUILD_DIR="${GATEPATH_JVM_TEST_BUILD_DIR:-$ANDROID_ROOT/build/jvm-test}"
 CLASSES_MAIN="$BUILD_DIR/classes/main"
 CLASSES_TEST="$BUILD_DIR/classes/test"
 
@@ -126,6 +128,7 @@ MAIN_SOURCES=(
     "$SRC_MAIN/com/ventouxlabs/gatepath/audit/AuditEntry.kt"
     "$SRC_MAIN/com/ventouxlabs/gatepath/audit/AuditLog.kt"
     "$SRC_MAIN/com/ventouxlabs/gatepath/network/BlockedDomains.kt"
+    "$SRC_MAIN/com/ventouxlabs/gatepath/network/ProbeErrorReason.kt"
     "$SRC_MAIN/com/ventouxlabs/gatepath/network/PortalProbe.kt"
     "$SRC_MAIN/com/ventouxlabs/gatepath/network/PortalRedirectHint.kt"
     "$SRC_MAIN/com/ventouxlabs/gatepath/network/PortalProbeCapture.kt"
@@ -180,7 +183,27 @@ echo ""
 echo "=== Compiling main sources (JVM-compatible subset) ==="
 # Stub out android.util.Log so AuditLog.kt compiles without Android SDK
 ANDROID_STUB="$BUILD_DIR/android-stub"
-mkdir -p "$ANDROID_STUB/android/util" "$ANDROID_STUB/android/net"
+mkdir -p "$ANDROID_STUB/android/util" "$ANDROID_STUB/android/net" "$ANDROID_STUB/android/system"
+# android.system.ErrnoException stub so ProbeErrorReason.kt's production errno
+# reader compiles. Only the members the main sources touch. Tests must NOT
+# construct ErrnoException: under Gradle the real android.jar stub's
+# constructor is a no-op and `errno` always reads 0, so any such test passes
+# here and fails there. probeErrorReason takes an errno-reader function for
+# exactly that reason; tests supply their own throwable type. There is no
+# OsConstants stub either: its fields are natively initialised and read as 0
+# under Gradle, so the main sources carry their own LinuxErrno constants.
+cat > "$ANDROID_STUB/android/system/ErrnoException.java" << 'JAVA_EOF'
+package android.system;
+public class ErrnoException extends Exception {
+    public final int errno;
+    public final String functionName;
+    public ErrnoException(String functionName, int errno) {
+        super(functionName + " failed: errno " + errno);
+        this.functionName = functionName;
+        this.errno = errno;
+    }
+}
+JAVA_EOF
 cat > "$ANDROID_STUB/android/util/Log.java" << 'JAVA_EOF'
 package android.util;
 public class Log {
@@ -204,7 +227,10 @@ public class Network {
     }
 }
 JAVA_EOF
-javac -d "$ANDROID_STUB" "$ANDROID_STUB/android/util/Log.java" "$ANDROID_STUB/android/net/Network.java"
+javac -d "$ANDROID_STUB" \
+    "$ANDROID_STUB/android/util/Log.java" \
+    "$ANDROID_STUB/android/net/Network.java" \
+    "$ANDROID_STUB/android/system/ErrnoException.java"
 
 kotlinc \
     -Xplugin="$SERIALIZATION_PLUGIN" \
@@ -221,6 +247,7 @@ TEST_SOURCES=(
     "$SRC_TEST/com/ventouxlabs/gatepath/AuditSchemaParityTest.kt"
     "$SRC_TEST/com/ventouxlabs/gatepath/AuditTailParityTest.kt"
     "$SRC_TEST/com/ventouxlabs/gatepath/PortalProbeTest.kt"
+    "$SRC_TEST/com/ventouxlabs/gatepath/ProbeErrorReasonTest.kt"
     "$SRC_TEST/com/ventouxlabs/gatepath/PortalRedirectHintTest.kt"
     "$SRC_TEST/com/ventouxlabs/gatepath/PortalProbeCaptureTest.kt"
     "$SRC_TEST/com/ventouxlabs/gatepath/HttpFetcherTest.kt"

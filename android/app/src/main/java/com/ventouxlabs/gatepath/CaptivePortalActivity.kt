@@ -36,6 +36,7 @@ import com.ventouxlabs.gatepath.network.VpnKind
 import com.ventouxlabs.gatepath.network.classify
 import com.ventouxlabs.gatepath.ui.ConfinementAction
 import com.ventouxlabs.gatepath.ui.ConfinementCard
+import com.ventouxlabs.gatepath.ui.ConfinementStateText
 import com.ventouxlabs.gatepath.ui.PortalScreen
 import com.ventouxlabs.gatepath.ui.VpnAppLauncher
 import com.ventouxlabs.gatepath.ui.theme.GatepathTheme
@@ -174,7 +175,8 @@ class CaptivePortalActivity : ComponentActivity() {
             val handoffUrl = intentPortalUrl
                 ?: (state as? ConfinementState.Confined)?.portalUrl
                 ?: CONNECTIVITY_CHECK_URL
-            render(state, if (state is ConfinementState.Confined) handoffUrl else null, network, handoffUrl)
+            val vpnKind = VpnKind.fromInterfaces(vpn.interfaces)
+            render(state, if (state is ConfinementState.Confined) handoffUrl else null, network, handoffUrl, vpnKind)
         }
     }
 
@@ -184,18 +186,34 @@ class CaptivePortalActivity : ComponentActivity() {
      * evidence bundle belongs to the ViewModel in `MainActivity`, and this
      * entry point has no session of its own to attach it to.
      *
-     * **Unknown carve-out, this entry point only.** From
-     * [ConfinementState.Unknown] the card's action opens the WebView at
-     * [handoffUrl] rather than doing nothing. Reaching this activity at all
-     * means the system handed Gatepath a `CaptivePortal` token because *its*
-     * probe saw a portal, which is a stronger signal than our own
-     * inconclusive one — so the honest offer is "try anyway", not a dead end.
+     * **Unknown is rendered with this entry point's own copy**
+     * ([ConfinementStateText.handoffUnknown]), because the default Unknown
+     * action is "share evidence" and there is nothing here to share:
+     *
+     * - With no VPN interface up, the card offers to open the WebView at
+     *   [handoffUrl] anyway. Reaching this activity at all means the system
+     *   handed Gatepath a `CaptivePortal` token because *its* probe saw a
+     *   portal, which outranks our own inconclusive one — so the honest
+     *   offer is "try anyway", not a dead end.
+     * - With a VPN interface up ([vpnKind] is not `NONE`), the card offers
+     *   "Open VPN app" instead, exactly as [ConfinementState.Tunnelled] does.
+     *   `Unknown` means the probe's failure had no typed errno
+     *   ([com.ventouxlabs.gatepath.network.probeErrorReason]), and under a
+     *   VPN an inconclusive probe is far more likely a tunnelled bind the
+     *   platform did not surface than a real portal. Offering "try signing
+     *   in anyway" there would hand a tunnelled user the one action this
+     *   feature exists to withhold; offering nothing would leave a button
+     *   that does nothing. Known limitation, tracked in issue #169: Unknown
+     *   also covers a bound probe that returned 204, where the bind
+     *   succeeded and the WebView would load — distinguishing that needs a
+     *   reason on the Unknown state, so for now it gets the VPN advice too.
+     *
      * [ConfinementState.Tunnelled], [ConfinementState.Blocked] and
      * [ConfinementState.DnsStrict] keep their existing actions and never open
      * the WebView: for those we know *why* the page cannot load, and opening
      * it would reproduce the blank screen this flow exists to prevent.
      */
-    private fun render(state: ConfinementState, url: String?, network: Network, handoffUrl: String) {
+    private fun render(state: ConfinementState, url: String?, network: Network, handoffUrl: String, vpnKind: VpnKind) {
         setContent {
             GatepathTheme {
                 if (url != null) {
@@ -211,9 +229,17 @@ class CaptivePortalActivity : ComponentActivity() {
                         onCertSummary = {},
                     )
                 } else {
-                    val kind = (state as? ConfinementState.Tunnelled)?.vpnKind
-                        ?: (state as? ConfinementState.Blocked)?.vpnKind ?: VpnKind.NONE
+                    val kind = when (state) {
+                        is ConfinementState.Tunnelled -> state.vpnKind
+                        is ConfinementState.Blocked -> state.vpnKind
+                        is ConfinementState.Unknown -> vpnKind
+                        is ConfinementState.Confined, is ConfinementState.DnsStrict -> VpnKind.NONE
+                    }
                     val (label, launch) = VpnAppLauncher.resolve(this, kind)
+                    // Unknown gets this entry point's own sentence and action;
+                    // see this function's KDoc. Null for every other state.
+                    val handoffUnknown = (state as? ConfinementState.Unknown)
+                        ?.let { ConfinementStateText.handoffUnknown(vpnKind, label) }
                     // Scaffold, not a bare card: enableEdgeToEdge() is active,
                     // so without innerPadding the card draws under the status
                     // and navigation bars.
@@ -222,25 +248,27 @@ class CaptivePortalActivity : ComponentActivity() {
                             state = state,
                             vpnAppLabel = label,
                             onAction = { action ->
-                                when (action) {
+                                // The card dispatches the state's default
+                                // action (SHARE_EVIDENCE for Unknown); on
+                                // this entry point that means the handoff
+                                // copy's action instead.
+                                val effective = handoffUnknown?.action ?: action
+                                when (effective) {
                                     ConfinementAction.OPEN_VPN_APP -> startActivity(launch)
                                     ConfinementAction.OPEN_NETWORK_SETTINGS ->
                                         startActivity(Intent(Settings.ACTION_WIRELESS_SETTINGS))
-                                    // Unknown's action, repurposed here — see
-                                    // the carve-out in this function's KDoc.
-                                    ConfinementAction.SHARE_EVIDENCE ->
-                                        if (state is ConfinementState.Unknown) {
-                                            render(state, handoffUrl, network, handoffUrl)
-                                        } else {
-                                            Unit
-                                        }
-                                    ConfinementAction.SIGN_IN_HERE -> Unit
+                                    ConfinementAction.SIGN_IN_HERE ->
+                                        render(state, handoffUrl, network, handoffUrl, vpnKind)
+                                    // Unreachable here: Unknown is the only
+                                    // state whose default action is sharing,
+                                    // and it is remapped above.
+                                    ConfinementAction.SHARE_EVIDENCE -> Unit
                                 }
                             },
                             onShareEvidence = {},
                             modifier = Modifier.padding(innerPadding),
-                            actionLabelOverride =
-                                if (state is ConfinementState.Unknown) "Try signing in anyway" else null,
+                            actionLabelOverride = handoffUnknown?.actionLabel,
+                            sentenceOverride = handoffUnknown?.sentence,
                             // No bundle on this entry point — MainActivity owns
                             // sharing. Rendering the button here would show a
                             // control that silently does nothing.

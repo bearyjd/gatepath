@@ -33,21 +33,37 @@ class PortalSessionManager {
     }
 
     /**
+     * Result of [reenter]. Callers must branch on this rather than inspecting
+     * the returned session's type — a rejected reenter from a session that is
+     * already [PortalSession.Detected] returns that same [PortalSession.Detected]
+     * unchanged, which is indistinguishable from an accepted transition if a
+     * caller only checks `is PortalSession.Detected`.
+     */
+    sealed interface ReenterResult {
+        /** The transition happened; [session] is the new [PortalSession.Detected]. */
+        data class Accepted(val session: PortalSession.Detected) : ReenterResult
+
+        /** The transition was invalid for [current]; the session is untouched. */
+        data class Rejected(val current: PortalSession) : ReenterResult
+    }
+
+    /**
      * Completed | Monitoring → Detected: the user asked to sign in again after
      * dismissing, from the confinement card that stays on screen.
      *
      * [portalDetected] cannot serve this: it accepts only [PortalSession.Monitoring],
      * and a dismiss leaves the session [PortalSession.Completed], which is
      * precisely the state "Sign in here" exists to recover from. Re-entering
-     * from [PortalSession.Active] is rejected — there is already a window open.
+     * from [PortalSession.Active] or [PortalSession.Detected] is rejected —
+     * there is already a window open (or about to be).
      */
-    fun reenter(current: PortalSession, portalUrl: String): PortalSession {
+    fun reenter(current: PortalSession, portalUrl: String): ReenterResult {
         return when (current) {
             is PortalSession.Completed, is PortalSession.Monitoring ->
-                PortalSession.Detected(portalUrl = portalUrl)
+                ReenterResult.Accepted(PortalSession.Detected(portalUrl = portalUrl))
             else -> {
                 rejectedTransitions.incrementAndGet()
-                current
+                ReenterResult.Rejected(current)
             }
         }
     }
