@@ -1,6 +1,7 @@
 package com.ventouxlabs.gatepath
 
 import com.ventouxlabs.gatepath.network.ConfinementState
+import com.ventouxlabs.gatepath.network.UnknownReason
 import com.ventouxlabs.gatepath.network.VpnKind
 import com.ventouxlabs.gatepath.ui.ConfinementAction
 import com.ventouxlabs.gatepath.ui.ConfinementStateText
@@ -16,7 +17,7 @@ class ConfinementStateTextTest {
         ConfinementState.Tunnelled(VpnKind.TAILSCALE),
         ConfinementState.Blocked(VpnKind.TORGUARD),
         ConfinementState.DnsStrict("n143.network-auth.com"),
-        ConfinementState.Unknown("timeout", null),
+        ConfinementState.Unknown("timeout", null, UnknownReason.PROBE_ERROR),
     )
 
     @Test
@@ -65,7 +66,11 @@ class ConfinementStateTextTest {
             ConfinementState.Tunnelled(VpnKind.OTHER),
             ConfinementState.Blocked(VpnKind.NONE),
             ConfinementState.DnsStrict("n143.network-auth.com"),
-            ConfinementState.Unknown("connect to http://gw.example/x?token=abc failed", "http://other.example/?sid=1")
+            ConfinementState.Unknown(
+                "connect to http://gw.example/x?token=abc failed",
+                "http://other.example/?sid=1",
+                UnknownReason.PROBE_ERROR,
+            )
         )
         val urlMarkers = listOf("http://", "https://", "?", "token=", "sid=")
 

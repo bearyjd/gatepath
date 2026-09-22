@@ -17,7 +17,7 @@ class DnsHijackProbeTest {
     private fun ctx(
         systemAnswers: List<String>,
         doh: HttpFetchResult,
-        defaultRouteBypassesCaptive: Boolean = false,
+        defaultRouteBypassesCaptive: Boolean? = false,
     ) = ProbeContext(
         networkId = "test",
         isPrivateDnsActive = false,
@@ -113,6 +113,24 @@ class DnsHijackProbeTest {
         assertTrue(
             (report as DiagnosticReport.Inconclusive).probeErrors.single()
                 .contains("default route is not the captive network"),
+        )
+        assertEquals(false, resolveHostCalled)
+    }
+
+    @Test
+    fun `declines without probing when the default route bypass was never measured`() = runBlocking {
+        var resolveHostCalled = false
+        val base = ctx(
+            systemAnswers = emptyList(),
+            doh = HttpFetchResult(200, null, null, dohBody("1.2.3.4"), null),
+            defaultRouteBypassesCaptive = null,
+        )
+        val report = DnsHijackProbe().run(
+            base.copy(resolveHost = { resolveHostCalled = true; emptyList() }),
+        )
+        assertTrue(report is DiagnosticReport.Inconclusive)
+        assertTrue(
+            (report as DiagnosticReport.Inconclusive).probeErrors.single().contains("not measured"),
         )
         assertEquals(false, resolveHostCalled)
     }

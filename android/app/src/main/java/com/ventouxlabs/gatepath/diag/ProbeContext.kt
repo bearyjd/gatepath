@@ -35,11 +35,13 @@ data class ProbeContext(
 
     /**
      * `true` when the default route demonstrably is not the captive network
-     * (the fallback probe got a 204 through it). Probes that interrogate the
-     * captive path itself must not report a finding in this state — see
-     * [defaultRouteNotCaptiveReport].
+     * (the fallback probe got a 204 through it); `false` when it demonstrably
+     * is; `null` when this was never measured (e.g. no fallback probe ran).
+     * Probes that interrogate the captive path itself must not report a
+     * finding in either the `true` or the `null` case — see
+     * [defaultRouteNotCaptiveReport] and [defaultRouteNotMeasuredReport].
      */
-    val defaultRouteBypassesCaptive: Boolean = false,
+    val defaultRouteBypassesCaptive: Boolean? = null,
 
     /** URL the monitor's own connectivity probe uses (debug builds may override — see AppModule). */
     val probeUrl: String = CONNECTIVITY_CHECK_URL,
@@ -69,4 +71,16 @@ data class ProbeContext(
 internal fun defaultRouteNotCaptiveReport(probeName: String): DiagnosticReport =
     DiagnosticReport.Inconclusive(
         listOf("$probeName: default route is not the captive network — this check would test the wrong path"),
+    )
+
+/**
+ * Standard `Inconclusive` for a probe that needs to know whether the default
+ * route bypasses the captive network, but that measurement
+ * ([ProbeContext.defaultRouteBypassesCaptive]) was never taken — e.g. no
+ * fallback probe ran for this incident. Declining honestly beats guessing
+ * which path the check would actually be testing.
+ */
+internal fun defaultRouteNotMeasuredReport(probeName: String): DiagnosticReport =
+    DiagnosticReport.Inconclusive(
+        listOf("$probeName: default route bypass was not measured — this check would test an unknown path"),
     )

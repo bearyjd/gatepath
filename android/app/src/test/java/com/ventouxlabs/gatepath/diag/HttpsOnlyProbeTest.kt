@@ -11,7 +11,7 @@ class HttpsOnlyProbeTest {
 
     private var fetchedUrl: String? = null
 
-    private fun ctx(http: ProbeResult, httpsResult: HttpFetchResult, defaultRouteBypassesCaptive: Boolean = false) = ProbeContext(
+    private fun ctx(http: ProbeResult, httpsResult: HttpFetchResult, defaultRouteBypassesCaptive: Boolean? = false) = ProbeContext(
         networkId = "test",
         isPrivateDnsActive = false,
         privateDnsServer = null,
@@ -73,6 +73,20 @@ class HttpsOnlyProbeTest {
         assertTrue(
             (report as DiagnosticReport.Inconclusive).probeErrors.single()
                 .contains("default route is not the captive network"),
+        )
+        assertEquals(false, activeProbeCalled)
+    }
+
+    @Test
+    fun `declines without probing when the default route bypass was never measured`() = runBlocking {
+        var activeProbeCalled = false
+        val base = ctx(ProbeResult.Validated, HttpFetchResult(204, null, null, null, null), defaultRouteBypassesCaptive = null)
+        val report = HttpsOnlyProbe().run(
+            base.copy(activeProbe = { activeProbeCalled = true; ProbeResult.Validated }),
+        )
+        assertTrue(report is DiagnosticReport.Inconclusive)
+        assertTrue(
+            (report as DiagnosticReport.Inconclusive).probeErrors.single().contains("not measured"),
         )
         assertEquals(false, activeProbeCalled)
     }
