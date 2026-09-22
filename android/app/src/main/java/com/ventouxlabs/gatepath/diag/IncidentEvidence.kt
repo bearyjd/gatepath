@@ -25,4 +25,16 @@ data class IncidentEvidence(
     val privateDnsStrict: Boolean,
     val bindError: String?,
     val fallbackError: String?,
+    /**
+     * The captive portal's host, when known without opening a session: the
+     * [com.ventouxlabs.gatepath.network.ConfinementState.DnsStrict] state's
+     * own host, or the host of a
+     * [com.ventouxlabs.gatepath.network.ConfinementState.Confined] state's
+     * portal URL. `null` for every other state, or when the URL has no
+     * parseable host. Session-less incidents (Tunnelled, Blocked, DnsStrict,
+     * Unknown) never write an audit entry, so this is the one identifier that
+     * lets the redaction harvest scrub a DnsStrict host echoed elsewhere in
+     * the evidence's free text — see issue #169.
+     */
+    val portalHost: String?,
 )

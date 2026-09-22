@@ -37,17 +37,19 @@ data class BundleMeta(
  * 2. The **diagnosis, evidence and console renders** are scrubbed of any
  *    identifier we know — from the audit log *and* from the current
  *    [IncidentEvidence]'s resolver answers, [IncidentEvidence.resolverWifi] /
- *    [IncidentEvidence.resolverDoh] — and have bare IP literals masked
- *    unconditionally. The evidence-sourced half is defence in depth, not a
- *    live leak fix: a Tunnelled, Blocked, DnsStrict, or Unknown incident never
- *    opens a session and so never writes an audit entry, leaving the audit
- *    half of the set empty; the resolver fields hold IP literals today, which
- *    the unconditional IP pass already masks, but harvesting them means any
- *    non-literal value they ever carry (and its echo in
- *    [IncidentEvidence.bindError] / [IncidentEvidence.fallbackError]) is
- *    scrubbed too, instead of depending on that pass. The real gap for
- *    session-less incidents — the DnsStrict portal host never reaches the
- *    evidence record at all — is tracked in issue #169. See [redactDiagnosisText].
+ *    [IncidentEvidence.resolverDoh], and its [IncidentEvidence.portalHost] —
+ *    and have bare IP literals masked unconditionally. The evidence-sourced
+ *    half is defence in depth, not solely a live leak fix: a Tunnelled,
+ *    Blocked, DnsStrict, or Unknown incident never opens a session and so
+ *    never writes an audit entry, leaving the audit half of the set empty;
+ *    [IncidentEvidence.portalHost] is exactly the identifier that closes that
+ *    gap for a session-less DnsStrict incident (previously tracked in issue
+ *    #169 — the host never reached the evidence record at all). The resolver
+ *    fields hold IP literals today, which the unconditional IP pass already
+ *    masks, but harvesting all three means any non-literal value they ever
+ *    carry (and its echo in [IncidentEvidence.bindError] /
+ *    [IncidentEvidence.fallbackError]) is scrubbed too, instead of depending
+ *    on that pass. See [redactDiagnosisText].
  * 3. **Certificate fields** in the evidence section are redacted structurally,
  *    not by text substitution: [CertSummary.sha256Fingerprint] and the two
  *    validity epochs are replaced outright under `redact = true`, because a
@@ -199,6 +201,7 @@ object DiagnosticsBundle {
             }
             evidence?.resolverWifi?.forEach { it.takeIf { v -> v.isNotBlank() }?.let { add(it) } }
             evidence?.resolverDoh?.forEach { it.takeIf { v -> v.isNotBlank() }?.let { add(it) } }
+            evidence?.portalHost?.takeIf { it.isNotBlank() }?.let { add(it) }
         }.sortedByDescending { it.length }
 
         var out = text
@@ -248,6 +251,7 @@ object DiagnosticsBundle {
         if (e == null) return "(no incident evidence captured)"
         return buildString {
             appendLine("confinement: ${e.confinement}")
+            appendLine("portal_host: ${e.portalHost ?: "(absent)"}")
             appendLine("probe_path: ${e.probePath}")
             appendLine("vpn_kind: ${e.vpnKind}")
             appendLine("vpn_interfaces: ${if (e.vpnInterfaces.isEmpty()) "(none)" else e.vpnInterfaces.joinToString(", ")}")

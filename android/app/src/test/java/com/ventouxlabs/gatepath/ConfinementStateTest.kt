@@ -5,6 +5,7 @@ import com.ventouxlabs.gatepath.network.ConfinementState
 import com.ventouxlabs.gatepath.network.PortalProbeCapture
 import com.ventouxlabs.gatepath.network.ProbeErrorReason
 import com.ventouxlabs.gatepath.network.ProbeResult
+import com.ventouxlabs.gatepath.network.UnknownReason
 import com.ventouxlabs.gatepath.network.VpnKind
 import com.ventouxlabs.gatepath.network.classify
 import org.junit.Assert.assertEquals
@@ -82,25 +83,28 @@ class ConfinementStateTest {
     }
 
     @Test
-    fun `an OTHER reason is Unknown even when the message contains EPERM`() {
+    fun `an OTHER reason is Unknown with a PROBE_ERROR reason even when the message contains EPERM`() {
         // Pinning the contract: the "EPERM"/"EACCES" substring fallback lives
         // entirely inside probeErrorReason() (see ProbeErrorReason.kt), never
         // in classify(). An Error already carrying a derived reason of OTHER
         // must not be re-parsed from its message here.
         val err = ProbeResult.Error("some other failure mentioning EPERM in passing", ProbeErrorReason.OTHER)
-        assertTrue(classify(inputs(err)) is ConfinementState.Unknown)
+        val s = classify(inputs(err))
+        assertTrue(s is ConfinementState.Unknown)
+        assertEquals(UnknownReason.PROBE_ERROR, (s as ConfinementState.Unknown).reason)
     }
 
     @Test
-    fun `any other bound error is Unknown and keeps both error strings`() {
+    fun `any other bound error is Unknown, keeps both error strings, and carries a PROBE_ERROR reason`() {
         val s = classify(inputs(timeout, fallback = ProbeResult.Error("unreachable")))
-        assertEquals(ConfinementState.Unknown("timeout", "unreachable"), s)
+        assertEquals(ConfinementState.Unknown("timeout", "unreachable", UnknownReason.PROBE_ERROR), s)
     }
 
     @Test
-    fun `bound 204 is Unknown because a validated wifi is not an incident`() {
+    fun `bound 204 is Unknown with a BOUND_VALIDATED reason because a validated wifi is not an incident`() {
         val s = classify(inputs(ProbeResult.Validated))
         assertTrue(s is ConfinementState.Unknown)
+        assertEquals(UnknownReason.BOUND_VALIDATED, (s as ConfinementState.Unknown).reason)
     }
 
     @Test
@@ -108,7 +112,7 @@ class ConfinementStateTest {
         val names = listOf(
             ConfinementState.Confined("u", null), ConfinementState.Tunnelled(VpnKind.NONE),
             ConfinementState.Blocked(VpnKind.NONE), ConfinementState.DnsStrict("h"),
-            ConfinementState.Unknown(null, null),
+            ConfinementState.Unknown(null, null, UnknownReason.PROBE_ERROR),
         ).map { it.schemaName }
         assertEquals(listOf("confined", "tunnelled", "blocked", "dns_strict", "unknown"), names)
         assertEquals(names.size, names.toSet().size)

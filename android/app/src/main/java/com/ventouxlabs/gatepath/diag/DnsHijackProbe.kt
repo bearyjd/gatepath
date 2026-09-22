@@ -34,15 +34,20 @@ private const val TYPE_A = 1
  * and DoH returned at least one public address.
  *
  * Declines with [DiagnosticReport.Inconclusive] when
- * [ProbeContext.defaultRouteBypassesCaptive] is set — the system resolver in
- * that state belongs to the bypassing network (VPN/cellular), not the
- * captive one, so a hijack verdict here would be about the wrong network.
+ * [ProbeContext.defaultRouteBypassesCaptive] is `true` — the system resolver
+ * in that state belongs to the bypassing network (VPN/cellular), not the
+ * captive one, so a hijack verdict here would be about the wrong network —
+ * or `null` — this was never measured, so the same risk applies unproven.
  */
 class DnsHijackProbe : DiagnosticProbe {
     override val name = "dns_hijack"
 
     override suspend fun run(ctx: ProbeContext): DiagnosticReport {
-        if (ctx.defaultRouteBypassesCaptive) return defaultRouteNotCaptiveReport(name)
+        when (ctx.defaultRouteBypassesCaptive) {
+            true -> return defaultRouteNotCaptiveReport(name)
+            null -> return defaultRouteNotMeasuredReport(name)
+            false -> Unit
+        }
         val host = runCatching { URL(ctx.probeUrl).host }.getOrNull()
             ?: return DiagnosticReport.Inconclusive(listOf("dns_hijack: unparseable probe url"))
 
