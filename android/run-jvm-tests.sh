@@ -115,7 +115,9 @@ download_jar "$GOOGLE_MAVEN/androidx/arch/core/core-common/2.2.0/core-common-2.2
 
 SRC_MAIN="$ANDROID_ROOT/app/src/main/java"
 SRC_TEST="$ANDROID_ROOT/app/src/test/java"
-BUILD_DIR="$ANDROID_ROOT/build/jvm-test"
+# Overridable so several checkouts (or parallel workers on one checkout) can
+# run the suite without clobbering each other's compiled classes.
+BUILD_DIR="${GATEPATH_JVM_TEST_BUILD_DIR:-$ANDROID_ROOT/build/jvm-test}"
 CLASSES_MAIN="$BUILD_DIR/classes/main"
 CLASSES_TEST="$BUILD_DIR/classes/test"
 
@@ -180,7 +182,33 @@ echo ""
 echo "=== Compiling main sources (JVM-compatible subset) ==="
 # Stub out android.util.Log so AuditLog.kt compiles without Android SDK
 ANDROID_STUB="$BUILD_DIR/android-stub"
-mkdir -p "$ANDROID_STUB/android/util" "$ANDROID_STUB/android/net"
+mkdir -p "$ANDROID_STUB/android/util" "$ANDROID_STUB/android/net" "$ANDROID_STUB/android/system"
+# android.system.ErrnoException / OsConstants stubs: PortalProbe walks a failed
+# connect()'s cause chain for the errno so classification does not depend on
+# the rendered message text. Only the members the main sources touch.
+cat > "$ANDROID_STUB/android/system/ErrnoException.java" << 'JAVA_EOF'
+package android.system;
+public class ErrnoException extends Exception {
+    public final int errno;
+    public final String functionName;
+    public ErrnoException(String functionName, int errno) {
+        super(functionName + " failed: errno " + errno);
+        this.functionName = functionName;
+        this.errno = errno;
+    }
+}
+JAVA_EOF
+cat > "$ANDROID_STUB/android/system/OsConstants.java" << 'JAVA_EOF'
+package android.system;
+public final class OsConstants {
+    public static final int EPERM = 1;
+    public static final int EACCES = 13;
+    public static final int ENETUNREACH = 101;
+    public static final int ECONNREFUSED = 111;
+    public static final int ETIMEDOUT = 110;
+    private OsConstants() {}
+}
+JAVA_EOF
 cat > "$ANDROID_STUB/android/util/Log.java" << 'JAVA_EOF'
 package android.util;
 public class Log {
@@ -204,7 +232,11 @@ public class Network {
     }
 }
 JAVA_EOF
-javac -d "$ANDROID_STUB" "$ANDROID_STUB/android/util/Log.java" "$ANDROID_STUB/android/net/Network.java"
+javac -d "$ANDROID_STUB" \
+    "$ANDROID_STUB/android/util/Log.java" \
+    "$ANDROID_STUB/android/net/Network.java" \
+    "$ANDROID_STUB/android/system/ErrnoException.java" \
+    "$ANDROID_STUB/android/system/OsConstants.java"
 
 kotlinc \
     -Xplugin="$SERIALIZATION_PLUGIN" \
