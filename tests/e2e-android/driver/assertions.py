@@ -644,8 +644,10 @@ def check_diagnostics_bundle(
     captured)` when it is null. Which one a real bundle must show depends on
     mode, so this check is mode-specific rather than a single "field present"
     test that both modes shared before. `excluding` validates, and
-    NetworkValidated's clearIncidentState() nulls `_evidence` BEFORE this
-    bundle is pulled — so the bundle must show the CLEARED prose, and a
+    NetworkValidated's `IncidentTracker.clearIf(network)` clears the evidence
+    for that same network BEFORE this bundle is pulled (the harness has one
+    Wi-Fi network, so it always matches) — so the bundle must show the
+    CLEARED prose, and a
     `confinement: ` line here means a previous incident's evidence outlived
     the incident it describes (bundle.evidence_cleared, mirroring
     bundle.capture_cleared below). `covering` never validates anything, so
@@ -707,8 +709,8 @@ def check_diagnostics_bundle(
                 ok("bundle.redacted", f"{len(identifiers)} identifier(s) scrubbed")
 
     # Evidence-cleared / confinement schema check — mode-specific, per the
-    # docstring above. `excluding` validates and clearIncidentState() clears
-    # `_evidence` before this bundle is pulled, so the bundle must show the
+    # docstring above. `excluding` validates and the tracker's clearIf() for
+    # that network clears the evidence before this bundle is pulled, so the bundle must show the
     # cleared prose; a `confinement: ` line here is the evidence-block analog
     # of bundle.capture_cleared below — it means the evidence outlived the
     # incident it describes. `covering` never validates anything, so nothing
