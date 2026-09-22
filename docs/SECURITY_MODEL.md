@@ -126,9 +126,9 @@ for exactly those incidents. The resolver fields hold IP literals today, and
 the unconditional IP-literal pass already masks those; harvesting them means
 any non-literal value they ever carry (and its echo in the same incident's
 bind/fallback error text) is scrubbed by substitution as well, instead of
-depending on that pass. The remaining gap for session-less incidents is that
-the DnsStrict portal host never reaches the evidence record at all; that is
-tracked in issue #169.
+depending on that pass. A session-less incident's portal host also reaches
+this set via `IncidentEvidence.portalHost` (from `DnsStrict`, or a `Confined`
+state's portal URL), scrubbed under `--redact` like the rest of it.
 
 The incident-evidence section of the bundle carries one more identifier class
 the passes above don't cover by substitution: a captured TLS certificate's

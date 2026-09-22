@@ -215,6 +215,24 @@ class IncidentTrackerTest {
         assertNull(tracker.evidence.value?.portalHost)
     }
 
+    @Test
+    fun `currentId tracks the live incident and resets on clear`() {
+        val tracker = IncidentTracker()
+        val network = Network()
+
+        assertEquals(0L, tracker.currentId)
+
+        val begun1 = tracker.begin(network, tunnelledInputs(), ProbePath.BOUND_WIFI, diagnostics())
+        assertEquals(begun1.id, tracker.currentId)
+
+        val begun2 = tracker.begin(network, tunnelledInputs(), ProbePath.BOUND_WIFI, diagnostics())
+        assertEquals(begun2.id, tracker.currentId)
+        assertNotEquals(begun1.id, tracker.currentId)
+
+        tracker.clear()
+        assertEquals(0L, tracker.currentId)
+    }
+
     private fun healthyDiagnosis() = DiagnosisResult(
         top = DiagnosticReport.Healthy,
         checks = emptyList(),

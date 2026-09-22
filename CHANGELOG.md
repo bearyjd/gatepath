@@ -51,6 +51,19 @@ detailed status lives in [`docs/ROADMAP.md`](docs/ROADMAP.md).
 - **e2e-android:** the host-side assertions now fail on absent evidence per
   mode (audit log, gateway log, VPN sink) instead of treating a missing
   artifact as an implicit pass.
+- **Android:** `bindProcessToNetwork` had four independent unbind sites (the
+  monitor's probe, the WebView's dispose, the system-handoff activity's
+  `onDestroy`, the background watchdog) racing on one process-global slot, so
+  one caller releasing could unbind a network another caller still needed; a
+  single `ProcessBinding` owner/borrower now serializes every bind and unbind
+  — never shipped; found in review.
+- **Android:** the incident's confinement, evidence, and diagnosis were five
+  unkeyed `MainViewModel` fields, so a stale diagnostic-engine run for a
+  previous incident could overwrite the one on screen; `IncidentTracker` now
+  owns this state behind id-versioned writes, and an adopted default-route
+  probe capture relabels its `probePath` instead of misdescribing itself as
+  bound Wi-Fi (the tri-state `defaultRouteBypassesCaptive` closes a related
+  gap) — never shipped; found in review.
 
 ## [1.0.1] - 2026-08-06
 
