@@ -16,15 +16,18 @@ import com.ventouxlabs.gatepath.network.ProbeResult
  * deferred.
  *
  * Declines with [DiagnosticReport.Inconclusive] when
- * [ProbeContext.defaultRouteBypassesCaptive] is set — HTTP/HTTPS parity over
- * a path that isn't the captive network says nothing about the captive
- * gateway.
+ * [ProbeContext.defaultRouteBypassesCaptiveResolved] resolves `true` —
+ * HTTP/HTTPS parity over a path that isn't the captive network says nothing
+ * about the captive gateway. When the tri-state was never measured, that
+ * resolves lazily via [ProbeContext.activeProbe] rather than declining —
+ * declining on "unmeasured" used to make this probe no-op on every real
+ * incident, since the monitor skips the fallback probe on exactly that path.
  */
 class HttpsOnlyProbe : DiagnosticProbe {
     override val name = "https_only"
 
     override suspend fun run(ctx: ProbeContext): DiagnosticReport {
-        if (ctx.defaultRouteBypassesCaptive) return defaultRouteNotCaptiveReport(name)
+        if (ctx.defaultRouteBypassesCaptiveResolved()) return defaultRouteNotCaptiveReport(name)
         when (ctx.activeProbe()) {
             is ProbeResult.Portal, is ProbeResult.Error -> return DiagnosticReport.Healthy
             is ProbeResult.Validated -> Unit

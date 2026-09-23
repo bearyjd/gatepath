@@ -1,6 +1,7 @@
 package com.ventouxlabs.gatepath
 
 import com.ventouxlabs.gatepath.network.ConfinementState
+import com.ventouxlabs.gatepath.network.UnknownReason
 import com.ventouxlabs.gatepath.network.VpnKind
 import com.ventouxlabs.gatepath.ui.ConfinementAction
 import com.ventouxlabs.gatepath.ui.ConfinementStateText
@@ -16,7 +17,7 @@ class ConfinementStateTextTest {
         ConfinementState.Tunnelled(VpnKind.TAILSCALE),
         ConfinementState.Blocked(VpnKind.TORGUARD),
         ConfinementState.DnsStrict("n143.network-auth.com"),
-        ConfinementState.Unknown("timeout", null),
+        ConfinementState.Unknown("timeout", null, UnknownReason.PROBE_ERROR),
     )
 
     @Test
@@ -65,7 +66,11 @@ class ConfinementStateTextTest {
             ConfinementState.Tunnelled(VpnKind.OTHER),
             ConfinementState.Blocked(VpnKind.NONE),
             ConfinementState.DnsStrict("n143.network-auth.com"),
-            ConfinementState.Unknown("connect to http://gw.example/x?token=abc failed", "http://other.example/?sid=1")
+            ConfinementState.Unknown(
+                "connect to http://gw.example/x?token=abc failed",
+                "http://other.example/?sid=1",
+                UnknownReason.PROBE_ERROR,
+            )
         )
         val urlMarkers = listOf("http://", "https://", "?", "token=", "sid=")
 
@@ -92,7 +97,9 @@ class ConfinementStateTextTest {
 
     @Test
     fun `handoff unknown without a vpn offers the sign-in page and never mentions sharing`() {
-        val copy = ConfinementStateText.handoffUnknown(VpnKind.NONE, vpnAppLabel = null)
+        val copy = ConfinementStateText.handoffUnknown(
+            UnknownReason.PROBE_ERROR, VpnKind.NONE, vpnAppLabel = null, processBindHeld = false,
+        )
         assertEquals(ConfinementAction.SIGN_IN_HERE, copy.action)
         assertEquals("Try signing in anyway", copy.actionLabel)
         assertFalse("the handoff screen has no share control", copy.sentence.contains("evidence"))
@@ -100,14 +107,55 @@ class ConfinementStateTextTest {
 
     @Test
     fun `handoff unknown under a vpn offers the vpn app and names it like tunnelled does`() {
-        val known = ConfinementStateText.handoffUnknown(VpnKind.TAILSCALE, vpnAppLabel = "Tailscale")
+        val known = ConfinementStateText.handoffUnknown(
+            UnknownReason.PROBE_ERROR, VpnKind.TAILSCALE, vpnAppLabel = "Tailscale", processBindHeld = false,
+        )
         assertEquals(ConfinementAction.OPEN_VPN_APP, known.action)
         assertEquals("Open VPN app", known.actionLabel)
         assertTrue(known.sentence.contains("Exclude Gatepath in Tailscale"))
         assertFalse(known.sentence.contains("evidence"))
 
-        val other = ConfinementStateText.handoffUnknown(VpnKind.OTHER, vpnAppLabel = "  ")
+        val other = ConfinementStateText.handoffUnknown(
+            UnknownReason.PROBE_ERROR, VpnKind.OTHER, vpnAppLabel = "  ", processBindHeld = false,
+        )
         assertTrue(other.sentence.contains("Exclude Gatepath in your VPN app"))
+    }
+
+    @Test
+    fun `handoff unknown with a validated bind and a held process bind offers sign-in even under a vpn`() {
+        val copy = ConfinementStateText.handoffUnknown(
+            UnknownReason.BOUND_VALIDATED, VpnKind.TAILSCALE, vpnAppLabel = "Tailscale", processBindHeld = true,
+        )
+        assertEquals(ConfinementAction.SIGN_IN_HERE, copy.action)
+        assertEquals("Try signing in anyway", copy.actionLabel)
+        assertFalse("the handoff screen has no share control", copy.sentence.contains("evidence"))
+        assertFalse("a validated bind must not be told to exclude the vpn", copy.sentence.contains("Exclude Gatepath"))
+    }
+
+    @Test
+    fun `handoff unknown with a validated probe but no process bind under a vpn still offers the vpn app`() {
+        // BOUND_VALIDATED only proves the socket-scoped probe got a 204; it
+        // does not prove bindProcessToNetwork actually took. Under a secure
+        // VPN those can disagree, so without a held process-bind lease this
+        // must not offer the sign-in page — the WebView would load over the
+        // VPN's default route instead of the Wi-Fi network.
+        val copy = ConfinementStateText.handoffUnknown(
+            UnknownReason.BOUND_VALIDATED, VpnKind.TAILSCALE, vpnAppLabel = "Tailscale", processBindHeld = false,
+        )
+        assertEquals(ConfinementAction.OPEN_VPN_APP, copy.action)
+        assertEquals("Open VPN app", copy.actionLabel)
+        assertTrue(copy.sentence.contains("Exclude Gatepath in Tailscale"))
+    }
+
+    @Test
+    fun `handoff unknown with a validated bind and no vpn offers sign-in regardless of process bind`() {
+        // No VPN interface up at all: the process-bind distinction doesn't
+        // matter because there's no tunnel for the bind to disagree with.
+        val copy = ConfinementStateText.handoffUnknown(
+            UnknownReason.BOUND_VALIDATED, VpnKind.NONE, vpnAppLabel = null, processBindHeld = false,
+        )
+        assertEquals(ConfinementAction.SIGN_IN_HERE, copy.action)
+        assertEquals("Try signing in anyway", copy.actionLabel)
     }
 
     @Test

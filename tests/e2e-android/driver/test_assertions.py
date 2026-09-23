@@ -282,8 +282,8 @@ def test_resurrected_body_field_fails():
 
 
 def test_excluding_mode_evidence_outliving_validation_fails():
-    # excluding mode: NetworkValidated's clearIncidentState() clears
-    # `_evidence` before this bundle is pulled, so the bundle must show the
+    # excluding mode: NetworkValidated's IncidentTracker.clearIf(network) clears
+    # the evidence before this bundle is pulled, so the bundle must show the
     # cleared prose. A bundle that still carries `confinement: confined`
     # here means a previous incident's evidence outlived the incident it
     # describes — the evidence-block analog of

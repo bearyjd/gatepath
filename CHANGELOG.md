@@ -19,6 +19,11 @@ detailed status lives in [`docs/ROADMAP.md`](docs/ROADMAP.md).
   offered only when the Wi-Fi binding is verified; otherwise the app says
   exactly why and what to do. The `CaptivePending` troubleshooting list and
   the incorrect "restricted network" explanation are gone.
+- **Android:** the system-handoff screen's `Unknown` carve-out now offers
+  "Try signing in anyway" under a VPN only when the network's probe
+  validated *and* the process-wide Wi-Fi bind was actually held — a
+  validated probe alone doesn't prove the bind succeeded, and under a
+  secure VPN the two can disagree.
 - **Audit log schema v2:** `blocked_*` counters renamed to `observed_*`; new
   required `confinement` field on both platforms. Readers accept v1 lines.
 
@@ -39,8 +44,8 @@ detailed status lives in [`docs/ROADMAP.md`](docs/ROADMAP.md).
   a reworded platform message could turn a tunnelled or blocked bind into
   `Unknown`, the one state that offered "Try signing in anyway"; the reason
   is now typed from the errno, and the system-handoff screen offers the VPN
-  app instead of the sign-in page when a VPN is up — never shipped; found in
-  review.
+  app instead of the sign-in page when a VPN is up and the process-wide bind
+  is not actually held — never shipped; found in review.
 - **Android:** a rejected session re-entry from an already-detected state
   was read as accepted, latching the wrong network — never shipped; found in
   review.
@@ -51,6 +56,32 @@ detailed status lives in [`docs/ROADMAP.md`](docs/ROADMAP.md).
 - **e2e-android:** the host-side assertions now fail on absent evidence per
   mode (audit log, gateway log, VPN sink) instead of treating a missing
   artifact as an implicit pass.
+- **Android:** `bindProcessToNetwork` had four independent unbind sites (the
+  monitor's probe, the WebView's dispose, the system-handoff activity's
+  `onDestroy`, the background watchdog) racing on one process-global slot, so
+  one caller releasing could unbind a network another caller still needed; a
+  single `ProcessBinding` owner/borrower now serializes every bind and unbind
+  — never shipped; found in review.
+- **Android:** the incident's confinement, evidence, and diagnosis were five
+  unkeyed `MainViewModel` fields, so a stale diagnostic-engine run for a
+  previous incident could overwrite the one on screen; `IncidentTracker` now
+  owns this state behind id-versioned writes, and an adopted default-route
+  probe capture relabels its `probePath` instead of misdescribing itself as
+  bound Wi-Fi (the tri-state `defaultRouteBypassesCaptive` closes a related
+  gap) — never shipped; found in review.
+- **Android:** `portal_host` on the incident-evidence record closes a
+  redaction gap for session-less incidents (Tunnelled, Blocked, DnsStrict,
+  Unknown) — those never open a session and so never write an audit entry,
+  which previously left the redaction pass's known-identifier set without
+  the portal host to scrub — never shipped; found in review.
+- **Android:** a WebView whose `ProcessBinding` lease was refused loaded the
+  portal page anyway, over whichever route was currently bound (potentially
+  a VPN's default route) instead of the captive Wi-Fi network — the leak
+  this app exists to prevent. This is reachable from the system-handoff
+  screen's `BOUND_VALIDATED` carve-out, where a validated probe does not by
+  itself prove the process-wide bind succeeded. The WebView now fails
+  closed: a refused lease skips every load and shows an error card instead
+  — never shipped; found in review.
 
 ## [1.0.1] - 2026-08-06
 

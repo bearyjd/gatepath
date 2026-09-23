@@ -16,6 +16,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.lifecycleScope
 import com.ventouxlabs.gatepath.diag.IncidentEvidence
+import com.ventouxlabs.gatepath.network.AndroidProcessBinding
 import com.ventouxlabs.gatepath.network.ConfinementState
 import com.ventouxlabs.gatepath.network.VpnKind
 import com.ventouxlabs.gatepath.session.PortalSession
@@ -38,6 +39,9 @@ class MainActivity : ComponentActivity() {
 
     @Inject
     lateinit var connectivityManager: ConnectivityManager
+
+    @Inject
+    lateinit var processBinding: AndroidProcessBinding
 
     private val viewModel: MainViewModel by viewModels()
 
@@ -89,7 +93,7 @@ class MainActivity : ComponentActivity() {
                             PortalScreen(
                                 portalUrl = s.portalUrl,
                                 network = network,
-                                connectivityManager = connectivityManager,
+                                processBinding = processBinding,
                                 onDismiss = viewModel::onDismiss,
                                 onBlockedNavigation = viewModel::onBlockedNavigation,
                                 onBlockedResource = viewModel::onBlockedResource,

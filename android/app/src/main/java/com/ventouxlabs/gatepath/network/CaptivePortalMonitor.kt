@@ -88,6 +88,7 @@ sealed interface NetworkEvent {
  */
 class CaptivePortalMonitor(
     private val connectivityManager: ConnectivityManager,
+    private val processBinding: AndroidProcessBinding,
     private val probe: PortalProbe = PortalProbe(),
     // URL Gatepath's own connectivity probe hits. Defaults to the standard
     // gstatic endpoint; debug builds may override it (see AppModule) so the
@@ -128,12 +129,8 @@ class CaptivePortalMonitor(
             if (!probed.add(network)) return
             ioScope.launch {
                 Log.d(TAG, "Probing network $network (bind path)")
-                val previousBinding = connectivityManager.boundNetworkForProcess
-                val bindResult = try {
-                    connectivityManager.bindProcessToNetwork(network)
+                val bindResult = processBinding.borrow(network) {
                     probe.probe(network, testUrl = probeUrl)
-                } finally {
-                    connectivityManager.bindProcessToNetwork(previousBinding)
                 }
                 if (bindResult is ProbeResult.Validated) {
                     // Capability said NOT validated; the Wi-Fi itself answered 204. Not an incident.
@@ -159,11 +156,13 @@ class CaptivePortalMonitor(
                     network = network,
                     bindError = (bindResult as? ProbeResult.Error)?.message,
                     fallbackError = (fallbackResult as? ProbeResult.Error)?.message,
-                    // False when the fallback was skipped — the field is a
-                    // plain Boolean with no "not measured" value, and a skip
-                    // only happens when the bound probe already found the
-                    // portal, where nothing downstream consults it.
-                    defaultRouteBypassesCaptive = fallbackResult is ProbeResult.Validated,
+                    // Null when the fallback was skipped (only happens when
+                    // the bound probe already found the portal) — "not
+                    // measured", not a guessed false. The probes that gate on
+                    // this decline (report Inconclusive) on null rather than
+                    // assuming the default route does or doesn't bypass the
+                    // captive network.
+                    defaultRouteBypassesCaptive = fallbackResult?.let { it is ProbeResult.Validated },
                 )
                 val inputs = ClassificationInputs(
                     bound = bindResult,
@@ -285,7 +284,7 @@ class CaptivePortalMonitor(
         network: Network,
         bindError: String?,
         fallbackError: String?,
-        defaultRouteBypassesCaptive: Boolean,
+        defaultRouteBypassesCaptive: Boolean?,
     ): NetworkDiagnostics = buildDiagnostics(network, bindError, fallbackError, defaultRouteBypassesCaptive)
 
     /**
@@ -298,7 +297,7 @@ class CaptivePortalMonitor(
         network: Network,
         bindError: String?,
         fallbackError: String?,
-        defaultRouteBypassesCaptive: Boolean,
+        defaultRouteBypassesCaptive: Boolean?,
     ): NetworkDiagnostics {
         val linkProps = runCatching { connectivityManager.getLinkProperties(network) }.getOrNull()
         val vpn = runCatching { VpnDetector.detect() }.getOrNull()

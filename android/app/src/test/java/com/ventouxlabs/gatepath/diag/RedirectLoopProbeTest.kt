@@ -13,7 +13,7 @@ class RedirectLoopProbeTest {
     private fun ok204() = HttpFetchResult(204, null, null, null, null)
     private fun page200() = HttpFetchResult(200, null, null, "<html>portal</html>", null)
 
-    private fun ctx(responses: Map<String, HttpFetchResult>, defaultRouteBypassesCaptive: Boolean = false) = ProbeContext(
+    private fun ctx(responses: Map<String, HttpFetchResult>, defaultRouteBypassesCaptive: Boolean? = false) = ProbeContext(
         networkId = "test",
         isPrivateDnsActive = false,
         privateDnsServer = null,
@@ -115,6 +115,38 @@ class RedirectLoopProbeTest {
         val report = RedirectLoopProbe().run(
             base.copy(
                 httpFetch = { _, _ -> fetched = true; HttpFetchResult(204, null, null, null, null) },
+            ),
+        )
+        assertTrue(report is DiagnosticReport.Inconclusive)
+        assertTrue(
+            (report as DiagnosticReport.Inconclusive).probeErrors.single()
+                .contains("default route is not the captive network"),
+        )
+        assertEquals(false, fetched)
+    }
+
+    @Test
+    fun `measures via activeProbe when never measured and proceeds when the measured answer is false`() = runBlocking {
+        var fetched = false
+        val base = ctx(emptyMap(), defaultRouteBypassesCaptive = null)
+        val report = RedirectLoopProbe().run(
+            base.copy(
+                httpFetch = { _, _ -> fetched = true; ok204() },
+                activeProbe = { ProbeResult.Portal("http://portal.test/login") },
+            ),
+        )
+        assertEquals(DiagnosticReport.Healthy, report)
+        assertTrue(fetched)
+    }
+
+    @Test
+    fun `measures via activeProbe when never measured and declines without probing when the measured answer is true`() = runBlocking {
+        var fetched = false
+        val base = ctx(emptyMap(), defaultRouteBypassesCaptive = null)
+        val report = RedirectLoopProbe().run(
+            base.copy(
+                httpFetch = { _, _ -> fetched = true; HttpFetchResult(204, null, null, null, null) },
+                activeProbe = { ProbeResult.Validated },
             ),
         )
         assertTrue(report is DiagnosticReport.Inconclusive)

@@ -13,7 +13,7 @@ class IncidentEvidenceTest {
 
     private val meta = BundleMeta("2026-09-19T00:00:00Z", "1.1.0", 3, "16", 36)
 
-    private fun evidence(bindError: String? = null) = IncidentEvidence(
+    private fun evidence(bindError: String? = null, portalHost: String? = null) = IncidentEvidence(
         confinement = "tunnelled",
         probePath = ProbePath.BOUND_WIFI,
         probeCapture = PortalProbeCapture.of(302, "text/html", PortalProbeCapture.RedirectSignal.LOCATION_HEADER),
@@ -25,10 +25,14 @@ class IncidentEvidenceTest {
         privateDnsStrict = false,
         bindError = bindError,
         fallbackError = null,
+        portalHost = portalHost,
     )
 
     @Test
     fun `field set is guarded`() {
+        // Deliberately updated for portalHost (issue #169): the field is an
+        // identifier, exported into the shared bundle, and rendered/redacted
+        // like every other one here — reviewed on purpose, not overlooked.
         val declared = IncidentEvidence::class.java.declaredFields
             .filterNot { Modifier.isStatic(it.modifiers) }.map { it.name }.toSet()
         assertEquals(
@@ -37,6 +41,7 @@ class IncidentEvidenceTest {
             setOf(
                 "confinement", "probePath", "probeCapture", "resolverWifi", "resolverDoh",
                 "certSummary", "vpnKind", "vpnInterfaces", "privateDnsStrict", "bindError", "fallbackError",
+                "portalHost",
             ),
             declared,
         )
@@ -172,5 +177,60 @@ class IncidentEvidenceTest {
             redact = true,
         )
         assertFalse("doh resolver-answer hostname must not leak", out.contains(hostname))
+    }
+
+    @Test
+    fun `bundle renders portal_host or absent`() {
+        val withHost = DiagnosticsBundle.build(
+            meta, emptyList(), null,
+            evidence = evidence(portalHost = "n143.network-auth.com"), redact = false,
+        )
+        assertTrue(withHost.contains("portal_host: n143.network-auth.com"))
+
+        val withoutHost = DiagnosticsBundle.build(meta, emptyList(), null, evidence = evidence(), redact = false)
+        assertTrue(withoutHost.contains("portal_host: (absent)"))
+    }
+
+    @Test
+    fun `redaction scrubs the portal host and its echo in bind error for a session-less DnsStrict incident`() {
+        // Tunnelled/Blocked/DnsStrict/Unknown incidents never open a session,
+        // so `entries` is empty here on purpose (see the two tests above) —
+        // portalHost is the identifier that closes the gap issue #169 tracked
+        // for exactly this DnsStrict case.
+        val host = "n143.captive-vendor.example"
+        val out = DiagnosticsBundle.build(
+            meta, emptyList(), null,
+            evidence = evidence(bindError = "resolve $host failed", portalHost = host).copy(confinement = "dns_strict"),
+            redact = true,
+        )
+        assertFalse("portal host must not leak", out.contains(host))
+        assertTrue("unrelated error text is untouched", out.contains("resolve"))
+        assertTrue("dns_strict confinement label is untouched", out.contains("confinement: dns_strict"))
+    }
+
+    @Test
+    fun `redaction structurally masks a single-label portal host without over-masking the word elsewhere`() {
+        // A single-label host has no '.', so it is deliberately excluded from
+        // the substring-harvest set (it would otherwise scrub every
+        // occurrence of an ordinary word like "login" across the bundle,
+        // e.g. inside "portal_completed"). It must still be hidden — just
+        // structurally, in its own portal_host: line.
+        val out = DiagnosticsBundle.build(
+            meta, emptyList(), null,
+            evidence = evidence(bindError = "login failed", portalHost = "login"),
+            redact = true,
+        )
+        assertTrue("portal_host line must still be redacted", out.contains("portal_host: REDACTED"))
+        assertTrue("the word login elsewhere must survive scrubbing", out.contains("login failed"))
+    }
+
+    @Test
+    fun `no redaction shows a single-label portal host verbatim`() {
+        val out = DiagnosticsBundle.build(
+            meta, emptyList(), null,
+            evidence = evidence(portalHost = "login"),
+            redact = false,
+        )
+        assertTrue(out.contains("portal_host: login"))
     }
 }

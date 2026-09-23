@@ -45,6 +45,17 @@ enum class PortalLoadErrorKind {
 
     /** Anything else, including the WebView's own ERROR_UNKNOWN. */
     UNKNOWN,
+
+    /**
+     * `ProcessBinding.acquire` refused the lease for this network (e.g.
+     * `EPERM` under a secure VPN). Unlike every other kind here, this is
+     * never derived from [fromWebViewErrorCode] — [GatepathWebView] builds it
+     * directly, before any `loadUrl` call, because without a held lease the
+     * page would otherwise load over whatever route is currently bound
+     * (likely a VPN's default route) instead of the captive Wi-Fi network —
+     * the exact leak this app exists to prevent.
+     */
+    BIND_REFUSED,
     ;
 
     companion object {
@@ -87,6 +98,7 @@ object PortalLoadErrorText {
         PortalLoadErrorKind.REDIRECT_LOOP -> "The network kept redirecting"
         PortalLoadErrorKind.TLS_HANDSHAKE_FAILED -> "Secure connection failed"
         PortalLoadErrorKind.UNKNOWN -> "The sign-in page didn't load"
+        PortalLoadErrorKind.BIND_REFUSED -> "Gatepath could not confine this page to the Wi-Fi network"
     }
 
     fun body(error: PortalLoadError): String {
@@ -118,6 +130,11 @@ object PortalLoadErrorText {
             PortalLoadErrorKind.UNKNOWN ->
                 "Gatepath couldn't load $where and the network didn't say why. " +
                     "Try again, or run diagnostics to look closer."
+
+            PortalLoadErrorKind.BIND_REFUSED ->
+                "Gatepath could not confine $where to the Wi-Fi network, most likely because " +
+                    "a VPN is blocking the connection. Exclude Gatepath in your VPN app, or use " +
+                    "the system \"Sign in to network\" notification to sign in instead."
         }
     }
 
@@ -126,6 +143,11 @@ object PortalLoadErrorText {
         // Retrying a rejected certificate just re-rejects it, and inviting the
         // user to retry a possible tampering signal is the wrong nudge.
         PortalLoadErrorKind.CERT_REJECTED -> false
+        // The lease was refused once at composition time; nothing in this
+        // WebView re-attempts acquiring it, so a Try-again button here would
+        // just re-skip loadUrl silently. The VPN app / system notification
+        // named in the body are the only paths that can actually help.
+        PortalLoadErrorKind.BIND_REFUSED -> false
         else -> true
     }
 }

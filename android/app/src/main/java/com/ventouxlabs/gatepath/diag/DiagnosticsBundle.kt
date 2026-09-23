@@ -37,17 +37,30 @@ data class BundleMeta(
  * 2. The **diagnosis, evidence and console renders** are scrubbed of any
  *    identifier we know — from the audit log *and* from the current
  *    [IncidentEvidence]'s resolver answers, [IncidentEvidence.resolverWifi] /
- *    [IncidentEvidence.resolverDoh] — and have bare IP literals masked
- *    unconditionally. The evidence-sourced half is defence in depth, not a
- *    live leak fix: a Tunnelled, Blocked, DnsStrict, or Unknown incident never
- *    opens a session and so never writes an audit entry, leaving the audit
- *    half of the set empty; the resolver fields hold IP literals today, which
- *    the unconditional IP pass already masks, but harvesting them means any
+ *    [IncidentEvidence.resolverDoh], and its [IncidentEvidence.portalHost]
+ *    when it has a `.` in it — and have bare IP literals masked
+ *    unconditionally. The evidence-sourced half is defence in depth, not
+ *    solely a live leak fix: a Tunnelled, Blocked, DnsStrict, or Unknown
+ *    incident never opens a session and so never writes an audit entry,
+ *    leaving the audit half of the set empty; [IncidentEvidence.portalHost]
+ *    is exactly the identifier that closes that gap for a session-less
+ *    DnsStrict incident (previously tracked in issue #169 — the host never
+ *    reached the evidence record at all). The resolver fields hold IP
+ *    literals today, which the unconditional IP pass already masks, but
+ *    harvesting them (and a dotted [IncidentEvidence.portalHost]) means any
  *    non-literal value they ever carry (and its echo in
  *    [IncidentEvidence.bindError] / [IncidentEvidence.fallbackError]) is
- *    scrubbed too, instead of depending on that pass. The real gap for
- *    session-less incidents — the DnsStrict portal host never reaches the
- *    evidence record at all — is tracked in issue #169. See [redactDiagnosisText].
+ *    scrubbed too, instead of depending on that pass. See
+ *    [redactDiagnosisText].
+ *
+ *    The `.` requirement on [IncidentEvidence.portalHost] exists because
+ *    captive portals routinely use a single-label host (`login`, `wifi`,
+ *    `gateway`) — harvesting that as a substring-replace target would scrub
+ *    every occurrence of an ordinary word across the whole bundle, e.g.
+ *    inside `portal_completed`. A single-label host is still redacted, just
+ *    structurally rather than by substring: its own `portal_host:` line in
+ *    [renderEvidence] becomes `REDACTED` outright under `redact = true`,
+ *    the same way the certificate fields in point 3 are.
  * 3. **Certificate fields** in the evidence section are redacted structurally,
  *    not by text substitution: [CertSummary.sha256Fingerprint] and the two
  *    validity epochs are replaced outright under `redact = true`, because a
@@ -199,6 +212,11 @@ object DiagnosticsBundle {
             }
             evidence?.resolverWifi?.forEach { it.takeIf { v -> v.isNotBlank() }?.let { add(it) } }
             evidence?.resolverDoh?.forEach { it.takeIf { v -> v.isNotBlank() }?.let { add(it) } }
+            // A single-label host (see the class doc's point 2) is deliberately
+            // excluded here — it is redacted structurally in renderEvidence's
+            // `portal_host:` line instead, so it doesn't scrub that word
+            // wherever else it appears in the bundle.
+            evidence?.portalHost?.takeIf { it.isNotBlank() && it.contains('.') }?.let { add(it) }
         }.sortedByDescending { it.length }
 
         var out = text
@@ -248,6 +266,7 @@ object DiagnosticsBundle {
         if (e == null) return "(no incident evidence captured)"
         return buildString {
             appendLine("confinement: ${e.confinement}")
+            appendLine("portal_host: ${renderPortalHost(e.portalHost, redact)}")
             appendLine("probe_path: ${e.probePath}")
             appendLine("vpn_kind: ${e.vpnKind}")
             appendLine("vpn_interfaces: ${if (e.vpnInterfaces.isEmpty()) "(none)" else e.vpnInterfaces.joinToString(", ")}")
@@ -273,6 +292,20 @@ object DiagnosticsBundle {
             appendLine("bind_error: ${e.bindError ?: "(none)"}")
             append("fallback_error: ${e.fallbackError ?: "(none)"}")
         }
+    }
+
+    /**
+     * `portal_host:` is redacted structurally, not by the substring pass in
+     * [redactDiagnosisText] — that pass only harvests a dotted host (see the
+     * class doc's point 2), so a single-label host like `login` would
+     * otherwise render unredacted here even though it's exactly the
+     * identifier this line exists to hide. An absent host has nothing to
+     * reveal, so it stays `(absent)` even under redaction.
+     */
+    private fun renderPortalHost(host: String?, redact: Boolean): String = when {
+        host == null -> "(absent)"
+        redact -> REDACTED
+        else -> host
     }
 
     /** An absent epoch has nothing to reveal, so it stays `(absent)` even under redaction. */

@@ -17,7 +17,7 @@ class DnsHijackProbeTest {
     private fun ctx(
         systemAnswers: List<String>,
         doh: HttpFetchResult,
-        defaultRouteBypassesCaptive: Boolean = false,
+        defaultRouteBypassesCaptive: Boolean? = false,
     ) = ProbeContext(
         networkId = "test",
         isPrivateDnsActive = false,
@@ -108,6 +108,52 @@ class DnsHijackProbeTest {
         )
         val report = DnsHijackProbe().run(
             base.copy(resolveHost = { resolveHostCalled = true; emptyList() }),
+        )
+        assertTrue(report is DiagnosticReport.Inconclusive)
+        assertTrue(
+            (report as DiagnosticReport.Inconclusive).probeErrors.single()
+                .contains("default route is not the captive network"),
+        )
+        assertEquals(false, resolveHostCalled)
+    }
+
+    @Test
+    fun `measures via activeProbe when never measured and proceeds when the measured answer is false`() = runBlocking {
+        var resolveHostCalled = false
+        val base = ctx(
+            systemAnswers = emptyList(),
+            doh = HttpFetchResult(200, null, null, dohBody("1.2.3.4"), null),
+            defaultRouteBypassesCaptive = null,
+        )
+        val report = DnsHijackProbe().run(
+            base.copy(
+                resolveHost = { resolveHostCalled = true; emptyList() },
+                activeProbe = { ProbeResult.Portal("http://portal.test/login") },
+            ),
+        )
+        // The default route was measured as still captive, so the probe
+        // proceeds to its own logic — which declines here for an unrelated
+        // reason (no system answers), not for "unmeasured".
+        assertTrue(report is DiagnosticReport.Inconclusive)
+        assertTrue(
+            (report as DiagnosticReport.Inconclusive).probeErrors.single().contains("no answers"),
+        )
+        assertTrue(resolveHostCalled)
+    }
+
+    @Test
+    fun `measures via activeProbe when never measured and declines when the measured answer is true`() = runBlocking {
+        var resolveHostCalled = false
+        val base = ctx(
+            systemAnswers = emptyList(),
+            doh = HttpFetchResult(200, null, null, dohBody("1.2.3.4"), null),
+            defaultRouteBypassesCaptive = null,
+        )
+        val report = DnsHijackProbe().run(
+            base.copy(
+                resolveHost = { resolveHostCalled = true; emptyList() },
+                activeProbe = { ProbeResult.Validated },
+            ),
         )
         assertTrue(report is DiagnosticReport.Inconclusive)
         assertTrue(

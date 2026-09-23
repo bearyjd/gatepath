@@ -3,6 +3,8 @@ package com.ventouxlabs.gatepath.diag
 import com.ventouxlabs.gatepath.network.CONNECTIVITY_CHECK_URL
 import com.ventouxlabs.gatepath.network.HttpFetchResult
 import com.ventouxlabs.gatepath.network.ProbeResult
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 /**
  * Snapshot of network state + a callable for active probes, passed to every
@@ -35,11 +37,16 @@ data class ProbeContext(
 
     /**
      * `true` when the default route demonstrably is not the captive network
-     * (the fallback probe got a 204 through it). Probes that interrogate the
-     * captive path itself must not report a finding in this state — see
-     * [defaultRouteNotCaptiveReport].
+     * (the fallback probe got a 204 through it); `false` when it demonstrably
+     * is; `null` when this was never measured (e.g. no fallback probe ran).
+     * Probes that interrogate the captive path itself must not report a
+     * finding without knowing which of these holds — read this only via
+     * [defaultRouteBypassesCaptiveResolved], never directly, so a `null` is
+     * measured rather than silently treated as "unknown, so decline" (see
+     * that function's doc for why declining on `null` is a detection
+     * regression, not a safe default).
      */
-    val defaultRouteBypassesCaptive: Boolean = false,
+    val defaultRouteBypassesCaptive: Boolean? = null,
 
     /** URL the monitor's own connectivity probe uses (debug builds may override — see AppModule). */
     val probeUrl: String = CONNECTIVITY_CHECK_URL,
@@ -59,7 +66,49 @@ data class ProbeContext(
     val nowEpochMillis: () -> Long = System::currentTimeMillis,
 
     val activeProbe: suspend () -> ProbeResult,
-)
+) {
+    // Not a constructor property: excluded from equals/hashCode/copy/toString,
+    // so `copy()` (as every probe test's `base.copy(...)` does) starts a fresh,
+    // unmeasured memo rather than inheriting a stale one from the original
+    // instance. Per-instance, not per-probe: [DiagnosticProbe] forbids a probe
+    // from retaining state across calls, but this state belongs to the shared
+    // [ProbeContext] one engine run builds and passes to every probe, so a
+    // battery of probes that all ask the same question pays for the
+    // measurement once, not once per probe.
+    private val resolveMutex = Mutex()
+    private var resolvedMemo: Boolean? = null
+
+    /**
+     * The honest answer to "does the default route bypass the captive
+     * network", resolved rather than declined. Returns
+     * [defaultRouteBypassesCaptive] directly when it is non-null. When it is
+     * `null` — no fallback probe ran for this incident — measures it once via
+     * [activeProbe]: a [ProbeResult.Validated] result means the default route
+     * reached validation on its own, independent of the captive network, i.e.
+     * it bypasses it.
+     *
+     * This exists because `null` used to mean "decline" for every probe that
+     * reads [defaultRouteBypassesCaptive] (see [defaultRouteNotCaptiveReport]).
+     * But the monitor emits `null` precisely when it skipped the fallback
+     * probe, which happens on the same path — a captive-network incident —
+     * that DNS-hijack, HTTPS-only-captive and redirect-loop detection exist
+     * to cover. Declining there made those three probes silently no-op on
+     * every real incident. Measuring lazily, once, and caching the result
+     * restores detection without repeating the probe per caller.
+     *
+     * Guarded by [resolveMutex] so two probes racing to resolve the same
+     * unmeasured context don't each trigger their own [activeProbe] call.
+     */
+    suspend fun defaultRouteBypassesCaptiveResolved(): Boolean {
+        defaultRouteBypassesCaptive?.let { return it }
+        resolveMutex.withLock {
+            resolvedMemo?.let { return it }
+            val measured = activeProbe() is ProbeResult.Validated
+            resolvedMemo = measured
+            return measured
+        }
+    }
+}
 
 /**
  * Standard `Inconclusive` for a probe that can only answer by talking to the

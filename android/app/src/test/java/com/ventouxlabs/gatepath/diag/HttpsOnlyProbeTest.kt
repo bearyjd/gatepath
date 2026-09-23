@@ -11,7 +11,7 @@ class HttpsOnlyProbeTest {
 
     private var fetchedUrl: String? = null
 
-    private fun ctx(http: ProbeResult, httpsResult: HttpFetchResult, defaultRouteBypassesCaptive: Boolean = false) = ProbeContext(
+    private fun ctx(http: ProbeResult, httpsResult: HttpFetchResult, defaultRouteBypassesCaptive: Boolean? = false) = ProbeContext(
         networkId = "test",
         isPrivateDnsActive = false,
         privateDnsServer = null,
@@ -75,5 +75,47 @@ class HttpsOnlyProbeTest {
                 .contains("default route is not the captive network"),
         )
         assertEquals(false, activeProbeCalled)
+    }
+
+    @Test
+    fun `measures via activeProbe when never measured and proceeds to httpFetch when the measured answer is false`() = runBlocking {
+        var httpFetchCalled = false
+        var activeProbeCalls = 0
+        val base = ctx(ProbeResult.Validated, HttpFetchResult(204, null, null, null, null), defaultRouteBypassesCaptive = null)
+        val report = HttpsOnlyProbe().run(
+            base.copy(
+                httpFetch = { url, _ -> fetchedUrl = url; httpFetchCalled = true; HttpFetchResult(204, null, null, null, null) },
+                // First call is the tri-state measurement (Portal => default
+                // route still captive => proceed); the probe's own second
+                // call is its real "is HTTP fine" check.
+                activeProbe = {
+                    activeProbeCalls++
+                    if (activeProbeCalls == 1) ProbeResult.Portal("http://portal.test/login") else ProbeResult.Validated
+                },
+            ),
+        )
+        assertEquals(DiagnosticReport.Healthy, report)
+        assertTrue(httpFetchCalled)
+        assertEquals(2, activeProbeCalls)
+    }
+
+    @Test
+    fun `measures via activeProbe when never measured and declines without httpFetch when the measured answer is true`() = runBlocking {
+        var httpFetchCalled = false
+        var activeProbeCalls = 0
+        val base = ctx(ProbeResult.Validated, HttpFetchResult(204, null, null, null, null), defaultRouteBypassesCaptive = null)
+        val report = HttpsOnlyProbe().run(
+            base.copy(
+                httpFetch = { _, _ -> httpFetchCalled = true; HttpFetchResult(204, null, null, null, null) },
+                activeProbe = { activeProbeCalls++; ProbeResult.Validated },
+            ),
+        )
+        assertTrue(report is DiagnosticReport.Inconclusive)
+        assertTrue(
+            (report as DiagnosticReport.Inconclusive).probeErrors.single()
+                .contains("default route is not the captive network"),
+        )
+        assertEquals(false, httpFetchCalled)
+        assertEquals(1, activeProbeCalls)
     }
 }

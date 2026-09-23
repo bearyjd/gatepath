@@ -25,10 +25,12 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.lifecycleScope
+import com.ventouxlabs.gatepath.network.AndroidProcessBinding
 import com.ventouxlabs.gatepath.network.CONNECTIVITY_CHECK_URL
 import com.ventouxlabs.gatepath.network.CaptivePortalMonitor
 import com.ventouxlabs.gatepath.network.ClassificationInputs
 import com.ventouxlabs.gatepath.network.ConfinementState
+import com.ventouxlabs.gatepath.network.Lease
 import com.ventouxlabs.gatepath.network.PortalProbe
 import com.ventouxlabs.gatepath.network.ProbeResult
 import com.ventouxlabs.gatepath.network.VpnDetector
@@ -57,9 +59,9 @@ import javax.inject.Inject
  *     used to report sign-in completion or dismissal back to the system.
  *
  *   - [ConnectivityManager.EXTRA_NETWORK] — the captive [Network]. The
- *     activity binds the process to this network via
- *     [ConnectivityManager.bindProcessToNetwork] so the WebView's traffic
- *     routes via the captive interface.
+ *     activity acquires a [Lease] on this network so the WebView's traffic
+ *     routes via the captive interface — see [ProcessBinding] for the
+ *     owner/borrower model this participates in.
  *
  *   - [ConnectivityManager.EXTRA_CAPTIVE_PORTAL_URL] — the URL the captive
  *     portal redirected to (the actual sign-in page). Available API 28+.
@@ -80,6 +82,9 @@ class CaptivePortalActivity : ComponentActivity() {
     lateinit var connectivityManager: ConnectivityManager
 
     @Inject
+    lateinit var processBinding: AndroidProcessBinding
+
+    @Inject
     lateinit var probe: PortalProbe
 
     /**
@@ -97,10 +102,12 @@ class CaptivePortalActivity : ComponentActivity() {
     private var reported = false
 
     /**
-     * The network this activity bound the process to in [onCreate], so
-     * [onDestroy] releases only a binding it still owns. Null until bound.
+     * The lease this activity acquired in [onCreate], so [onDestroy] can
+     * release exactly that lease — see [ProcessBinding] for the owner-stack
+     * model this participates in. Null until acquired (or if acquisition was
+     * refused).
      */
-    private var boundNetwork: Network? = null
+    private var lease: Lease<Network>? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -124,7 +131,7 @@ class CaptivePortalActivity : ComponentActivity() {
         // API levels. Fall back to the currently-bound or active network if
         // the extra is missing.
         val network: Network? = readNetworkExtra(intent)
-            ?: connectivityManager.boundNetworkForProcess
+            ?: processBinding.current()
             ?: connectivityManager.activeNetwork
 
         if (network == null) {
@@ -134,15 +141,13 @@ class CaptivePortalActivity : ComponentActivity() {
             return
         }
 
-        // Bind the process to the captive network so the WebView's traffic
-        // routes via that interface. Ownership is claimed only when the bind
-        // actually took: under a secure VPN it is refused (EPERM — the
-        // Tunnelled/Blocked path), and claiming a slot we never set would let
-        // onDestroy clear a binding another screen legitimately owns.
-        if (connectivityManager.bindProcessToNetwork(network)) {
-            boundNetwork = network
-        } else {
-            Log.w(TAG, "bindProcessToNetwork($network) refused; not claiming the binding")
+        // Acquire a lease on the captive network so the WebView's traffic
+        // routes via that interface. A refused acquire (e.g. EPERM under a
+        // secure VPN — the Tunnelled/Blocked path) returns null and claims
+        // nothing; classification below still runs and explains why.
+        lease = processBinding.acquire(network)
+        if (lease == null) {
+            Log.w(TAG, "processBinding.acquire($network) refused; not claiming the binding")
         }
 
         Log.i(
@@ -203,10 +208,14 @@ class CaptivePortalActivity : ComponentActivity() {
      *   platform did not surface than a real portal. Offering "try signing
      *   in anyway" there would hand a tunnelled user the one action this
      *   feature exists to withhold; offering nothing would leave a button
-     *   that does nothing. Known limitation, tracked in issue #169: Unknown
-     *   also covers a bound probe that returned 204, where the bind
-     *   succeeded and the WebView would load — distinguishing that needs a
-     *   reason on the Unknown state, so for now it gets the VPN advice too.
+     *   that does nothing. A bound probe that actually returned 204 is told
+     *   apart from a genuine probe error by
+     *   [com.ventouxlabs.gatepath.network.UnknownReason.BOUND_VALIDATED] on
+     *   the state, but that alone only proves the probe's own socket routed
+     *   correctly — not that [lease] (the process-wide bind the WebView
+     *   actually depends on) was granted. The sign-in offer under a VPN is
+     *   kept only when [lease] is also non-null; see
+     *   [ConfinementStateText.handoffUnknown].
      *
      * [ConfinementState.Tunnelled], [ConfinementState.Blocked] and
      * [ConfinementState.DnsStrict] keep their existing actions and never open
@@ -220,7 +229,7 @@ class CaptivePortalActivity : ComponentActivity() {
                     PortalScreen(
                         portalUrl = url,
                         network = network,
-                        connectivityManager = connectivityManager,
+                        processBinding = processBinding,
                         onDismiss = ::reportSignedIn,
                         onBlockedNavigation = {},
                         onBlockedResource = {},
@@ -239,7 +248,7 @@ class CaptivePortalActivity : ComponentActivity() {
                     // Unknown gets this entry point's own sentence and action;
                     // see this function's KDoc. Null for every other state.
                     val handoffUnknown = (state as? ConfinementState.Unknown)
-                        ?.let { ConfinementStateText.handoffUnknown(vpnKind, label) }
+                        ?.let { ConfinementStateText.handoffUnknown(it.reason, vpnKind, label, processBindHeld = lease != null) }
                     // Scaffold, not a bare card: enableEdgeToEdge() is active,
                     // so without innerPadding the card draws under the status
                     // and navigation bars.
@@ -330,45 +339,14 @@ class CaptivePortalActivity : ComponentActivity() {
         if (!reported) {
             captivePortal?.ignoreNetwork()
         }
-        // Undo onCreate's process-global bind. The bind is set on the process,
-        // which this activity shares with MainViewModel, so it outlives the
-        // activity. On the WebView path PortalScreen's own DisposableEffect
-        // clears it; three paths here never compose a WebView at all (the
-        // classification placeholder, the Tunnelled/Blocked/DnsStrict card,
-        // and an Unknown card the user never taps). GatepathApplication's
-        // BindWatchdog is a backstop, but it only fires when the whole app
-        // backgrounds — backing out of a handoff card into MainActivity keeps
-        // the app foregrounded, so without this the process stays bound to the
-        // captive Wi-Fi and the diagnostic engine's deliberately-unbound probes
-        // travel it instead of the default route.
-        //
-        // Conditional, not unconditional: the binding is one slot shared by
-        // every screen in the process. MainActivity's PortalScreen may have
-        // bound the process to a *different* network while this card was up
-        // (the monitor opens sessions on its own now, and the system handoff
-        // arrives independently). Nulling that binding here would send the
-        // live portal WebView's traffic over the default route — the leak the
-        // no-leak sentinel exists to disprove. So release only what this
-        // activity set: if the slot no longer holds our network, someone else
-        // owns it and it is theirs to clear (PortalScreen's own onDispose does).
-        //
-        // Residuals, tracked for the follow-up (both need a refcounted binding
-        // owner rather than a per-caller compare):
-        //  (a) if another screen bound the *same* network, this check cannot
-        //      tell the two owners apart;
-        //  (b) CaptivePortalMonitor.probeAndEmit is a borrower, not an owner:
-        //      it saves the slot, binds its probe network, and writes the saved
-        //      value back in a `finally` on Dispatchers.IO. If a probe is in
-        //      flight when this runs, that write-back restores our network
-        //      after we cleared it, and the process ends up bound with nobody
-        //      left to release it. Pre-existing — the old unconditional
-        //      null-bind lost the same race — and BindWatchdog remains the
-        //      only backstop.
-        val ours = boundNetwork
-        if (ours != null && connectivityManager.boundNetworkForProcess == ours) {
-            connectivityManager.bindProcessToNetwork(null)
-        }
-        boundNetwork = null
+        // Release this activity's own lease, if it holds one. This is safe
+        // under MainActivity's live WebView (which holds its own lease on the
+        // owner stack) precisely because ProcessBinding tracks owners by
+        // lease, not by comparing the process-wide slot's current value —
+        // see ProcessBinding's KDoc for the full owner/borrower model this
+        // replaced the old per-caller compare-and-null with.
+        lease?.let(processBinding::release)
+        lease = null
     }
 
     @Suppress("DEPRECATION")

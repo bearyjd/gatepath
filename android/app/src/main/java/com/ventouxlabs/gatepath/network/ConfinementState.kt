@@ -39,7 +39,11 @@ sealed interface ConfinementState {
         override val schemaName get() = "dns_strict"
     }
 
-    data class Unknown(val bindError: String?, val fallbackError: String?) : ConfinementState {
+    data class Unknown(
+        val bindError: String?,
+        val fallbackError: String?,
+        val reason: UnknownReason,
+    ) : ConfinementState {
         override val schemaName get() = "unknown"
     }
 }
@@ -78,9 +82,10 @@ fun classify(inputs: ClassificationInputs): ConfinementState {
             ProbeErrorReason.UNREACHABLE,
             ProbeErrorReason.TIMEOUT,
             ProbeErrorReason.OTHER,
-            -> ConfinementState.Unknown(bound.message, fallbackMessage(inputs.fallback))
+            -> ConfinementState.Unknown(bound.message, fallbackMessage(inputs.fallback), UnknownReason.PROBE_ERROR)
         }
-        is ProbeResult.Validated -> ConfinementState.Unknown("bound probe returned 204", fallbackMessage(inputs.fallback))
+        is ProbeResult.Validated ->
+            ConfinementState.Unknown("bound probe returned 204", fallbackMessage(inputs.fallback), UnknownReason.BOUND_VALIDATED)
     }
 }
 

@@ -76,9 +76,12 @@ data class NetworkDiagnostics(
     /**
      * `true` when the userspace fallback probe returned 204 — i.e. the
      * device's default route reaches the internet without passing through
-     * the captive gateway (VPN tunnel or cellular). Diagnostic probes that
-     * need to interrogate the captive network itself cannot do so in this
-     * state, and say so rather than reporting a result for the wrong path.
+     * the captive gateway (VPN tunnel or cellular). `false` when the fallback
+     * probe demonstrably did not bypass the captive network. `null` when no
+     * fallback probe ran, so this was never measured. Diagnostic probes that
+     * need to interrogate the captive network itself cannot do so in the
+     * `true` or `null` case, and say so rather than reporting a result for an
+     * unknown or wrong path.
      */
-    val defaultRouteBypassesCaptive: Boolean,
+    val defaultRouteBypassesCaptive: Boolean?,
 )
