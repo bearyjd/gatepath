@@ -46,6 +46,9 @@ fun PortalScreen(
     onBlockedResource: () -> Unit,
     onTlsCertErrorBypassed: () -> Unit,
     onCertSummary: (CertSummary) -> Unit,
+    // Forwarded to GatepathWebView so its console capture is tagged with the
+    // incident that opened this session. Null when there is none.
+    incidentId: Long? = null,
     modifier: Modifier = Modifier,
 ) {
     var loadError by remember { mutableStateOf<PortalLoadError?>(null) }
@@ -84,6 +87,7 @@ fun PortalScreen(
                 onLoadStarted = { loadError = null },
                 onLoadError = { loadError = it },
                 reloadToken = reloadToken,
+                incidentId = incidentId,
                 modifier = Modifier.fillMaxSize(),
             )
 

@@ -11,8 +11,18 @@ const val CONSOLE_CAPTURE_FILE_NAME = "webview-console.jsonl"
  * Outcome of reading a flushed console-capture file. Mirrors
  * [com.ventouxlabs.gatepath.audit.AuditReadResult]'s honesty: a corrupt line
  * is counted, not silently dropped.
+ *
+ * [incidentId] is the first non-null [ConsoleCaptureEntry.incidentId] among
+ * [entries], and it speaks for the whole file because a file cannot mix ids:
+ * `GatepathWebView` captures the tag by value once, when the WebView is
+ * constructed (a stated invariant there, not an accident), and every flush
+ * overwrites the file with that one WebView's buffer. Null when no entry
+ * carries one (an old-shape file, or a session that never had an incident).
+ * If the capture site ever reads the id live, this must become mixed-id aware.
  */
-data class ConsoleCaptureReadResult(val entries: List<ConsoleCaptureEntry>, val unreadable: Int)
+data class ConsoleCaptureReadResult(val entries: List<ConsoleCaptureEntry>, val unreadable: Int) {
+    val incidentId: Long? = entries.firstNotNullOfOrNull { it.incidentId }
+}
 
 /**
  * File I/O for [ConsoleCaptureEntry] snapshots: flush-on-session-end,

@@ -472,4 +472,129 @@ class DiagnosticsBundleTest {
         )
         assertFalse(clean.contains("console_messages_unreadable"))
     }
+
+    /**
+     * A capture file whose every line is corrupt yields no entries, and used
+     * to render exactly like no capture at all — the count was only printed
+     * inside the non-empty branch. ConsoleCaptureReadResult promises a corrupt
+     * line is counted, not silently dropped; the bundle has to honour that.
+     */
+    @Test
+    fun `a fully corrupt console capture is reported as unreadable, not as no capture`() {
+        val allCorrupt = DiagnosticsBundle.build(
+            meta, entries = emptyList(), diagnosis = null,
+            consoleEntries = emptyList(), consoleUnreadable = 3, redact = false,
+        )
+        assertTrue(allCorrupt.contains("console_messages_unreadable: 3"))
+        assertTrue(allCorrupt.contains("(no readable console messages)"))
+        assertFalse(allCorrupt.contains("(no console messages captured)"))
+
+        val none = DiagnosticsBundle.build(
+            meta, entries = emptyList(), diagnosis = null,
+            consoleEntries = emptyList(), consoleUnreadable = 0, redact = false,
+        )
+        assertTrue(none.contains("(no console messages captured)"))
+        assertFalse(none.contains("console_messages_unreadable"))
+    }
+
+    @Test
+    fun `console header tags the incident id when the capture carries one`() {
+        val out = DiagnosticsBundle.build(
+            meta, entries = emptyList(), diagnosis = null,
+            consoleEntries = listOf(consoleEntry("hi")),
+            consoleIncidentId = 7L,
+            redact = false,
+        )
+        assertTrue(out.contains("--- WebView console (incident 7) ---"))
+    }
+
+    @Test
+    fun `console header says incident unknown when the capture predates tagging`() {
+        val out = DiagnosticsBundle.build(
+            meta, entries = emptyList(), diagnosis = null,
+            consoleEntries = listOf(consoleEntry("hi")),
+            consoleIncidentId = null,
+            redact = false,
+        )
+        assertTrue(out.contains("--- WebView console (most recent capture; incident unknown) ---"))
+    }
+
+    @Test
+    fun `mismatch line appears only when both incident ids are known and differ`() {
+        val mismatched = DiagnosticsBundle.build(
+            meta, entries = emptyList(), diagnosis = null,
+            consoleEntries = listOf(consoleEntry("hi")),
+            consoleIncidentId = 3L,
+            currentIncidentId = 5L,
+            redact = false,
+        )
+        assertTrue(
+            mismatched.contains(
+                "console_capture_incident_mismatch: captured during incident 3, evidence above is incident 5",
+            ),
+        )
+
+        val matched = DiagnosticsBundle.build(
+            meta, entries = emptyList(), diagnosis = null,
+            consoleEntries = listOf(consoleEntry("hi")),
+            consoleIncidentId = 5L,
+            currentIncidentId = 5L,
+            redact = false,
+        )
+        assertFalse(matched.contains("console_capture_incident_mismatch"))
+
+        val currentUnknown = DiagnosticsBundle.build(
+            meta, entries = emptyList(), diagnosis = null,
+            consoleEntries = listOf(consoleEntry("hi")),
+            consoleIncidentId = 3L,
+            currentIncidentId = null,
+            redact = false,
+        )
+        assertFalse(currentUnknown.contains("console_capture_incident_mismatch"))
+        assertFalse(currentUnknown.contains("console_capture_incident_unknown"))
+    }
+
+    /**
+     * An untagged capture (system-handoff activity, debug force-active path,
+     * or a pre-tagging file) shared while an incident is current is exactly
+     * the pairing the tag exists to prevent, so it must be called out — not
+     * left to read as "presumably this incident". With no incident current
+     * there is nothing above to pair with, so nothing is said.
+     */
+    @Test
+    fun `untagged capture under a current incident is called out, and silent when nothing is current`() {
+        val consoleUnknown = DiagnosticsBundle.build(
+            meta, entries = emptyList(), diagnosis = null,
+            consoleEntries = listOf(consoleEntry("hi")),
+            consoleIncidentId = null,
+            currentIncidentId = 5L,
+            redact = false,
+        )
+        assertTrue(
+            consoleUnknown.contains(
+                "console_capture_incident_unknown: capture is untagged, evidence above is incident 5",
+            ),
+        )
+        assertFalse(consoleUnknown.contains("console_capture_incident_mismatch"))
+
+        val bothUnknown = DiagnosticsBundle.build(
+            meta, entries = emptyList(), diagnosis = null,
+            consoleEntries = listOf(consoleEntry("hi")),
+            consoleIncidentId = null,
+            currentIncidentId = null,
+            redact = false,
+        )
+        assertFalse(bothUnknown.contains("console_capture_incident_unknown"))
+        assertFalse(bothUnknown.contains("console_capture_incident_mismatch"))
+
+        val emptyCapture = DiagnosticsBundle.build(
+            meta, entries = emptyList(), diagnosis = null,
+            consoleEntries = emptyList(),
+            consoleIncidentId = null,
+            currentIncidentId = 5L,
+            redact = false,
+        )
+        assertTrue(emptyCapture.contains("(no console messages captured)"))
+        assertFalse(emptyCapture.contains("console_capture_incident_unknown"))
+    }
 }

@@ -168,8 +168,25 @@ class MainViewModel @Inject constructor(
      * network. Latching the id at session-open time is what makes that
      * write droppable once the session it actually describes is no longer
      * live.
+     *
+     * Backed by a [MutableStateFlow], not a bare `var`, because
+     * `MainActivity` needs to read it reactively: it is forwarded into
+     * `GatepathWebView` as the incident id the WebView console capture
+     * should be tagged with, and that composition must recompose when a new
+     * session opens or the current one closes — a plain `var` would only be
+     * correct at the moment it's read.
      */
-    private var sessionIncidentId: Long = 0L
+    private val _sessionIncidentId = MutableStateFlow(0L)
+    val sessionIncidentId: StateFlow<Long> = _sessionIncidentId.asStateFlow()
+
+    /**
+     * The [IncidentTracker] id of whatever incident is current right now
+     * (`0L` when none), for `MainActivity`'s "Share diagnostics" call —
+     * unlike [sessionIncidentId], this is read once at share time on the main
+     * thread, not observed, so a plain getter is enough and no flow is needed.
+     */
+    val currentIncidentId: Long
+        get() = incidents.currentId
 
     /**
      * Handle to the in-flight session-timeout coroutine. Cancelled when the
@@ -291,7 +308,7 @@ class MainViewModel @Inject constructor(
                 is PortalSessionManager.ReenterResult.Accepted -> {
                     _session.value = result.session
                     sessionWasConfined = true
-                    sessionIncidentId = begun.id
+                    _sessionIncidentId.value = begun.id
                     _activeNetwork.value = event.network
                     openPortal()
                 }
@@ -439,7 +456,7 @@ class MainViewModel @Inject constructor(
      * once the session it actually describes is no longer live.
      */
     fun onCertSummary(summary: CertSummary) {
-        incidents.updateEvidence(sessionIncidentId) { it.copy(certSummary = summary) }
+        incidents.updateEvidence(_sessionIncidentId.value) { it.copy(certSummary = summary) }
     }
 
     /**
@@ -470,7 +487,7 @@ class MainViewModel @Inject constructor(
             is PortalSessionManager.ReenterResult.Accepted -> {
                 _session.value = result.session
                 sessionWasConfined = true
-                sessionIncidentId = incidents.currentId
+                _sessionIncidentId.value = incidents.currentId
                 _activeNetwork.value = network
                 openPortal()
             }
@@ -498,7 +515,7 @@ class MainViewModel @Inject constructor(
                 _session.value = next
                 writeAuditLog(next)
                 sessionWasConfined = false
-                sessionIncidentId = 0L
+                _sessionIncidentId.value = 0L
             }
         }
     }
@@ -511,7 +528,7 @@ class MainViewModel @Inject constructor(
         _session.value = next
         writeAuditLog(next)
         sessionWasConfined = false
-        sessionIncidentId = 0L
+        _sessionIncidentId.value = 0L
         // The confinement card deliberately stays on screen: the user can press
         // "Sign in here" again, which is what PortalSessionManager.reenter is for.
     }
@@ -533,7 +550,7 @@ class MainViewModel @Inject constructor(
         _session.value = next
         writeAuditLog(next)
         sessionWasConfined = false
-        sessionIncidentId = 0L
+        _sessionIncidentId.value = 0L
     }
 
     fun onBlockedNavigation() {
@@ -561,7 +578,7 @@ class MainViewModel @Inject constructor(
         // This path never classifies, so the session is not confined — and the
         // latch could still be set from an earlier real session.
         sessionWasConfined = false
-        sessionIncidentId = 0L
+        _sessionIncidentId.value = 0L
         _activeNetwork.value = network
         _session.value = PortalSession.Active(
             portalUrl = portalUrl,
@@ -586,7 +603,7 @@ class MainViewModel @Inject constructor(
         _session.value = next
         writeAuditLog(next)
         sessionWasConfined = false
-        sessionIncidentId = 0L
+        _sessionIncidentId.value = 0L
     }
 
     /**

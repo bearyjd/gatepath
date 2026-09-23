@@ -31,11 +31,19 @@ detailed status lives in [`docs/ROADMAP.md`](docs/ROADMAP.md).
 
 - **Android:** incident evidence in the diagnostics bundle (probe path,
   resolver comparison, certificate summary, confinement).
+- **Android:** WebView console capture is now tagged with the incident id it
+  was recorded during; the diagnostics bundle says so when the capture's
+  incident differs from the one the evidence above it describes, or when the
+  capture is untagged, instead of letting a reader assume they match.
 - **e2e-android:** `covering` and `excluding` VPN modes with a separate
   test-VPN app, so the harness exercises a VPN Gatepath does not own.
 
 ### Fixed
 
+- **Android:** a WebView console capture file whose every line was corrupt
+  rendered in the diagnostics bundle exactly like no capture at all; the
+  unreadable-line count is now reported regardless, and such a file reads
+  "(no readable console messages)" — never shipped; found in review.
 - **Android:** the audit log could record `unconfined` for a confined
   session — never shipped; found in review while adding the confinement
   field, not observed in the wild.

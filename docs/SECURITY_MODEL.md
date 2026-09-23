@@ -116,6 +116,14 @@ exposure surface, readable by any app holding `READ_LOGS`), the console
 capture file is app-private and only reaches anyone else if the user
 explicitly shares it.
 
+A capture recorded during a classified incident is tagged with that
+incident's id; a capture from a session with no incident (the system-handoff
+activity, the debug force-active path) or from a file written before tagging
+existed is labelled "incident unknown". The shared bundle never pairs one
+incident's evidence with a console capture from another session by
+assumption: when the two ids differ it says so, and when the capture is
+untagged while an incident is current it says the pairing cannot be decided.
+
 The known-identifier set that backs this substitution is harvested from two
 places, not the audit log alone: the audit entries for the network, and the
 current incident's `IncidentEvidence` (its Wi-Fi and DoH resolver answers).

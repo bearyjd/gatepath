@@ -15,7 +15,6 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.lifecycleScope
-import com.ventouxlabs.gatepath.diag.IncidentEvidence
 import com.ventouxlabs.gatepath.network.AndroidProcessBinding
 import com.ventouxlabs.gatepath.network.ConfinementState
 import com.ventouxlabs.gatepath.network.VpnKind
@@ -70,8 +69,8 @@ class MainActivity : ComponentActivity() {
                 val activeNetwork by viewModel.activeNetwork.collectAsState()
                 val networkStatus by viewModel.networkStatus.collectAsState()
                 val diagnosis by viewModel.diagnosis.collectAsState()
-                val evidence by viewModel.evidence.collectAsState()
                 val confinement by viewModel.confinement.collectAsState()
+                val sessionIncidentId by viewModel.sessionIncidentId.collectAsState()
 
                 // Only Tunnelled and Blocked name a VPN; every other state
                 // sends the user somewhere that isn't a VPN app, and NONE
@@ -99,6 +98,9 @@ class MainActivity : ComponentActivity() {
                                 onBlockedResource = viewModel::onBlockedResource,
                                 onTlsCertErrorBypassed = viewModel::onTlsCertErrorBypassed,
                                 onCertSummary = viewModel::onCertSummary,
+                                // 0L is IncidentTracker's own "nothing is current"
+                                // sentinel — not a real incident id.
+                                incidentId = sessionIncidentId.takeIf { it != 0L },
                             )
                         } else {
                             MainScreen(
@@ -110,7 +112,7 @@ class MainActivity : ComponentActivity() {
                                 onDismiss = viewModel::onDismiss,
                                 onAction = { action -> onConfinementAction(action, vpnKind) },
                                 onRunDiagnostics = viewModel::rerunDiagnostics,
-                                onShareDiagnostics = { redact -> shareDiagnostics(redact, evidence) },
+                                onShareDiagnostics = { redact -> shareDiagnostics(redact) },
                             )
                         }
                     }
@@ -123,7 +125,7 @@ class MainActivity : ComponentActivity() {
                         onDismiss = viewModel::onDismiss,
                         onAction = { action -> onConfinementAction(action, vpnKind) },
                         onRunDiagnostics = viewModel::rerunDiagnostics,
-                        onShareDiagnostics = { redact -> shareDiagnostics(redact, evidence) },
+                        onShareDiagnostics = { redact -> shareDiagnostics(redact) },
                     )
                 }
             }
@@ -156,14 +158,22 @@ class MainActivity : ComponentActivity() {
      *
      * File I/O runs off the main thread inside [DiagnosticsSharer.writeBundle];
      * the chooser is launched on the resulting URI.
+     *
+     * Diagnosis, evidence and the current incident id are all read here, on
+     * the main thread, in the same block — never one of them from the last
+     * recomposition and the others live. They must share one vintage: the
+     * bundle labels the evidence with the incident id, and if a new incident
+     * landed between a recomposition and this coroutine running, evidence
+     * captured at recomposition would be rendered under the newer id.
      */
-    private fun shareDiagnostics(redact: Boolean, evidence: IncidentEvidence?) {
+    private fun shareDiagnostics(redact: Boolean) {
         lifecycleScope.launch {
             try {
                 val uri = DiagnosticsSharer.writeBundle(
                     context = this@MainActivity,
                     diagnosis = viewModel.diagnosis.value,
-                    evidence = evidence,
+                    evidence = viewModel.evidence.value,
+                    currentIncidentId = viewModel.currentIncidentId.takeIf { it != 0L },
                     redact = redact,
                 )
                 val sendIntent =
@@ -278,6 +288,7 @@ class MainActivity : ComponentActivity() {
                     context = this@MainActivity,
                     diagnosis = viewModel.diagnosis.value,
                     evidence = viewModel.evidence.value,
+                    currentIncidentId = viewModel.currentIncidentId.takeIf { it != 0L },
                     redact = redact,
                 )
                 // Signal completion through a FILE, not logcat. The harness
