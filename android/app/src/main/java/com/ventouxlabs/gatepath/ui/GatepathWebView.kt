@@ -94,6 +94,10 @@ fun GatepathWebView(
     onLoadStarted: () -> Unit,
     onLoadError: (PortalLoadError) -> Unit,
     reloadToken: Int,
+    // The incident this session's console capture should be tagged with, or
+    // null when there is none (no classified incident opened this session —
+    // e.g. the debug force-active-session path). See ConsoleCaptureEntry.incidentId.
+    incidentId: Long? = null,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
@@ -101,6 +105,18 @@ fun GatepathWebView(
 
     val consoleCapture = remember { ConsoleCaptureBuffer() }
     var sessionStartElapsedMs by remember { mutableStateOf(SystemClock.elapsedRealtime()) }
+    // `incidentId` is captured by value inside the keyless `remember` below,
+    // DELIBERATELY — do not wrap it in rememberUpdatedState the way
+    // sessionStartElapsedMs reads live. One WebView lifetime therefore tags
+    // every entry in its buffer with one id, and ConsoleCaptureReadResult
+    // relies on that: it takes the first non-null id as the whole file's. A
+    // live read would let two incidents' entries share one buffer (the
+    // network-change dispose flushes without clearing) and the older id would
+    // silently label both. The value is also correct as captured: the
+    // ViewModel sets the id before the portal opens and this composable
+    // leaves composition on every session end, so no live composition ever
+    // sees it change. Making it live means also clearing the buffer on the
+    // network-change path and rendering mixed ids explicitly.
 
     val webView = remember {
         // Debug-only: lets `chrome://inspect` attach to this WebView so the
@@ -203,6 +219,7 @@ fun GatepathWebView(
                             lineNumber = msg.lineNumber(),
                             message = msg.message(),
                             offsetMs = SystemClock.elapsedRealtime() - sessionStartElapsedMs,
+                            incidentId = incidentId,
                         ),
                     )
                     return true

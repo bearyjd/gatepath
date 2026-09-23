@@ -17,4 +17,12 @@ data class ConsoleCaptureEntry(
     @SerialName("line_number") val lineNumber: Int,
     @SerialName("message") val message: String,
     @SerialName("offset_ms") val offsetMs: Long,
+    // Which incident this capture belongs to. Defaulted so a line written
+    // before this field existed still decodes (ignoreUnknownKeys on the
+    // reader handles the reverse: a newer writer, older reader); placed last
+    // only so positional call sites keep their shape. Null
+    // means "unknown" — either the capture predates this field, or the
+    // WebView session that produced it had no incident (e.g. the debug
+    // force-active-session path bypasses classification entirely).
+    @SerialName("incident_id") val incidentId: Long? = null,
 )

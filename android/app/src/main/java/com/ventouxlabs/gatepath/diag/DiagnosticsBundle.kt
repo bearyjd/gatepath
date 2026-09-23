@@ -72,6 +72,20 @@ data class BundleMeta(
  * The **probe capture** needs no pass of its own: [PortalProbeCapture] only
  * admits values that are safe to share, enforced at construction rather than
  * scrubbed here.
+ *
+ * ### WebView console capture (see docs/SECURITY_MODEL.md "Off-device
+ * diagnostics: WebView console capture")
+ * The console section is tagged with the incident id the capture was
+ * recorded under ([consoleIncidentId]), so a reader never mistakes a stale
+ * capture from an earlier session for the incident evidence rendered above
+ * it. A capture with no id (the system-handoff activity, a debug session that
+ * bypassed classification, or a file predating this field) is rendered as
+ * "incident unknown", and when an incident is current a
+ * `console_capture_incident_unknown` line says the pairing cannot be decided.
+ * When both [consoleIncidentId] and [currentIncidentId] are known and differ,
+ * a `console_capture_incident_mismatch` line makes the discrepancy explicit
+ * instead of leaving a reader to assume they match. The id itself is a
+ * process-local counter, not an identifier, so neither line is redacted.
  */
 object DiagnosticsBundle {
 
@@ -105,6 +119,8 @@ object DiagnosticsBundle {
         unreadableEntries: Int = 0,
         consoleEntries: List<ConsoleCaptureEntry> = emptyList(),
         consoleUnreadable: Int = 0,
+        consoleIncidentId: Long? = null,
+        currentIncidentId: Long? = null,
         redact: Boolean,
     ): String = buildString {
         appendLine("=== Gatepath diagnostics ===")
@@ -145,13 +161,22 @@ object DiagnosticsBundle {
         }
         appendLine()
 
-        appendLine("--- WebView console (most recent capture) ---")
+        appendLine(renderConsoleHeader(consoleIncidentId))
+        // Reported before the empty/non-empty split: a file whose every line
+        // is corrupt has no entries, and must not read as "no capture" —
+        // ConsoleCaptureReadResult promises a corrupt line is counted, not
+        // silently dropped, and this is where that count surfaces.
+        if (consoleUnreadable > 0) {
+            appendLine("console_messages_unreadable: $consoleUnreadable")
+        }
         if (consoleEntries.isEmpty()) {
-            appendLine("(no console messages captured)")
+            appendLine(
+                if (consoleUnreadable > 0) "(no readable console messages)" else "(no console messages captured)",
+            )
         } else {
-            if (consoleUnreadable > 0) {
-                appendLine("console_messages_unreadable: $consoleUnreadable")
-            }
+            // A reader must never pair this section with the wrong incident's
+            // evidence by assumption — see the class doc's console paragraph.
+            renderConsoleIncidentNote(consoleIncidentId, currentIncidentId)?.let(::appendLine)
             for (c in consoleEntries) {
                 val line = "[${c.level}] ${c.sourceHost}:${c.lineNumber} ${c.message}"
                 appendLine(if (redact) redactConsoleText(line, entries, evidence) else line)
@@ -225,6 +250,44 @@ object DiagnosticsBundle {
         }
         return out.replace(IPV4, REDACTED).replace(IPV6, REDACTED)
     }
+
+    /**
+     * `(incident N)` when the capture is tagged, or `(most recent capture;
+     * incident unknown)` for a capture written before this field existed (or
+     * a debug session with no incident at all) — never silently rendered as
+     * if it belonged to whichever incident is current.
+     */
+    private fun renderConsoleHeader(consoleIncidentId: Long?): String =
+        if (consoleIncidentId != null) {
+            "--- WebView console (incident $consoleIncidentId) ---"
+        } else {
+            "--- WebView console (most recent capture; incident unknown) ---"
+        }
+
+    /**
+     * The line that keeps a reader from pairing the console capture with the
+     * evidence above it by assumption, or null when there is nothing to say.
+     *
+     * Two cases speak, one stays silent. Both ids known and different is a
+     * `mismatch`. Capture untagged while an incident is current is
+     * `unknown`: the capture came from a session that had no incident id (the
+     * system-handoff activity, the debug force-active path, or a file written
+     * before tagging existed), so whether it belongs to the incident above
+     * cannot be decided either way — saying nothing here would let "incident
+     * unknown" in the header read as "presumably this one". When no incident
+     * is current there is no evidence above to be paired with, so no line.
+     */
+    private fun renderConsoleIncidentNote(consoleIncidentId: Long?, currentIncidentId: Long?): String? =
+        when {
+            currentIncidentId == null -> null
+            consoleIncidentId == null ->
+                "console_capture_incident_unknown: capture is untagged, evidence above is incident " +
+                    "$currentIncidentId; do not assume they describe the same incident"
+            consoleIncidentId != currentIncidentId ->
+                "console_capture_incident_mismatch: captured during incident $consoleIncidentId, " +
+                    "evidence above is incident $currentIncidentId"
+            else -> null
+        }
 
     private fun renderDiagnosis(diagnosis: DiagnosisResult?): String {
         if (diagnosis == null) return "(no diagnosis captured)"

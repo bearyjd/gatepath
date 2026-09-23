@@ -236,6 +236,10 @@ class CaptivePortalActivity : ComponentActivity() {
                         onTlsCertErrorBypassed = {},
                         // No evidence record on this entry point — see render's KDoc.
                         onCertSummary = {},
+                        // No IncidentTracker on this entry point either — see
+                        // render's KDoc. The console capture from a session
+                        // opened here is simply untagged.
+                        incidentId = null,
                     )
                 } else {
                     val kind = when (state) {

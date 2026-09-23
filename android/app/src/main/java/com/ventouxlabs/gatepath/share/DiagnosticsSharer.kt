@@ -48,6 +48,11 @@ object DiagnosticsSharer {
         context: Context,
         diagnosis: DiagnosisResult?,
         evidence: IncidentEvidence?,
+        // Whatever incident is current right now (null when none), so
+        // DiagnosticsBundle can flag a mismatch against the console
+        // capture's own incident id rather than assuming they agree. See
+        // DiagnosticsBundle.build's KDoc.
+        currentIncidentId: Long? = null,
         redact: Boolean,
     ): Uri = withContext(Dispatchers.IO) {
         val audit = AuditLog.readRecent()
@@ -64,6 +69,8 @@ object DiagnosticsSharer {
             unreadableEntries = audit.unreadable,
             consoleEntries = console.entries,
             consoleUnreadable = console.unreadable,
+            consoleIncidentId = console.incidentId,
+            currentIncidentId = currentIncidentId,
             redact = redact,
         )
 
