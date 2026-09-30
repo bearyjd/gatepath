@@ -40,6 +40,14 @@ detailed status lives in [`docs/ROADMAP.md`](docs/ROADMAP.md).
 
 ### Fixed
 
+- **Android:** leaving the system sign-in screen any way other than the
+  Dismiss button (back gesture, swiping the task away, or a fold/rotation
+  rebuild) answered Android with `ignoreNetwork()` — "the user rejects this
+  network". Android then dropped the Wi-Fi, disabled auto-join for it and
+  stopped offering sign-in, even right after a successful login; the phone
+  stayed on mobile data (or offline). Every exit now asks Android to re-check
+  the network instead, and a rebuild answers nothing. Shipped in 1.0.0 and
+  1.0.1; reproduced on a hotel captive portal (Pixel 10 Pro Fold, GrapheneOS).
 - **Android:** a WebView console capture file whose every line was corrupt
   rendered in the diagnostics bundle exactly like no capture at all; the
   unreadable-line count is now reported regardless, and such a file reads

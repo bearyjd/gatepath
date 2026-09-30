@@ -28,6 +28,7 @@ import androidx.lifecycle.lifecycleScope
 import com.ventouxlabs.gatepath.network.AndroidProcessBinding
 import com.ventouxlabs.gatepath.network.CONNECTIVITY_CHECK_URL
 import com.ventouxlabs.gatepath.network.CaptivePortalMonitor
+import com.ventouxlabs.gatepath.network.CaptivePortalReply
 import com.ventouxlabs.gatepath.network.ClassificationInputs
 import com.ventouxlabs.gatepath.network.ConfinementState
 import com.ventouxlabs.gatepath.network.Lease
@@ -72,8 +73,13 @@ import javax.inject.Inject
  * and shows a WebView only from [ConfinementState.Confined]; every other
  * state gets the confinement card instead of a page that cannot load.
  *
- * On dismiss with success → [CaptivePortal.reportCaptivePortalDismissed].
- * On dismiss without success (back button, system kill) → [CaptivePortal.ignoreNetwork].
+ * Every way out of this screen answers [CaptivePortal.reportCaptivePortalDismissed]
+ * (the Dismiss button, the back gesture, swiping the task away), which makes
+ * Android re-check the network: signed in, it validates; still captive, the
+ * sign-in notification comes back. A fold/rotation rebuild answers nothing and
+ * leaves it to the rebuilt screen. This activity never sends
+ * [CaptivePortal.ignoreNetwork] ("the user rejects this network" — Android drops
+ * the Wi-Fi and disables auto-join); see [CaptivePortalReply].
  */
 @AndroidEntryPoint
 class CaptivePortalActivity : ComponentActivity() {
@@ -135,8 +141,10 @@ class CaptivePortalActivity : ComponentActivity() {
             ?: connectivityManager.activeNetwork
 
         if (network == null) {
+            // Not "the user rejects this network": onDestroy answers
+            // DISMISSED, so Android re-checks and re-posts its sign-in
+            // notification instead of dropping the Wi-Fi.
             Log.w(TAG, "No Network found for captive portal; finishing")
-            portal.ignoreNetwork()
             finish()
             return
         }
@@ -337,11 +345,17 @@ class CaptivePortalActivity : ComponentActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
-        // Activity destroyed without reporting (back button, low-memory kill).
-        // Tell the system we ignored the network so it falls back to its own
-        // handler instead of waiting indefinitely for our reply.
-        if (!reported) {
-            captivePortal?.ignoreNetwork()
+        // Leaving without the Dismiss button (back gesture, swipe-away) still
+        // asks Android to re-check the network; a fold/rotation rebuild says
+        // nothing because the rebuilt screen gets the same token. See
+        // CaptivePortalReply for why this is never ignoreNetwork.
+        val reply = CaptivePortalReply.onDestroy(
+            alreadyReported = reported,
+            changingConfigurations = isChangingConfigurations,
+        )
+        when (reply) {
+            CaptivePortalReply.DISMISSED -> captivePortal?.reportCaptivePortalDismissed()
+            CaptivePortalReply.NONE -> Unit
         }
         // Release this activity's own lease, if it holds one. This is safe
         // under MainActivity's live WebView (which holds its own lease on the
