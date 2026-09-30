@@ -52,31 +52,47 @@ class CaptivePortalReplyTest {
     /**
      * Guard, not a comment: `ignoreNetwork()` tells Android the user rejected
      * the network, which tears the Wi-Fi down and disables auto-join. Nothing
-     * in the system handoff is that decision, so no code path may send it.
-     * Comment lines are skipped so the KDoc can still name the API.
+     * in the app is that decision, so no code may send it — called directly
+     * or passed as a method reference (`CaptivePortal::ignoreNetwork`).
+     * Comment lines are skipped so KDoc can still name the API.
      */
     @Test
-    fun `the system handoff never calls ignoreNetwork`() {
-        val source = findMainSource("com/ventouxlabs/gatepath/CaptivePortalActivity.kt")
-        val calls = source.readLines()
-            .map { it.substringBefore("//").trim() }
-            .filterNot { it.startsWith("*") || it.startsWith("/*") }
-            .filter { Regex("""\bignoreNetwork\s*\(""").containsMatchIn(it) }
-        assertTrue("CaptivePortalActivity calls ignoreNetwork(): $calls", calls.isEmpty())
+    fun `no app code sends ignoreNetwork`() {
+        val mainRoot = mainSourceRoot()
+        val offenders = mainRoot.walkTopDown()
+            .filter { it.isFile && it.extension == "kt" }
+            .flatMap { file ->
+                file.readLines()
+                    .map { it.substringBefore("//").trim() }
+                    .filterNot { it.startsWith("*") || it.startsWith("/*") }
+                    .filter { Regex("""\bignoreNetwork\b""").containsMatchIn(it) }
+                    .map { "${file.relativeTo(mainRoot)}: $it" }
+            }
+            .toList()
+        assertTrue("app code sends ignoreNetwork: $offenders", offenders.isEmpty())
     }
 
-    /** Finds a main source file from Gradle's (android/app) or the JVM runner's working directory. */
-    private fun findMainSource(relative: String): File {
-        val candidates = listOf(
-            "src/main/java/$relative",
-            "app/src/main/java/$relative",
-            "android/app/src/main/java/$relative",
-        )
+    /** The guard must actually be reading the handoff, or it proves nothing. */
+    @Test
+    fun `the guard scans the system handoff`() {
+        assertTrue(File(mainSourceRoot(), "com/ventouxlabs/gatepath/CaptivePortalActivity.kt").isFile)
+    }
+
+    /**
+     * `android/app/src/main/java`, from `-Dgatepath.repo.root` (set by
+     * run-jvm-tests.sh, like the other parity tests) or by walking up from the
+     * working directory (Gradle runs in android/app).
+     */
+    private fun mainSourceRoot(): File {
+        val relative = "android/app/src/main/java"
+        System.getProperty("gatepath.repo.root")?.let { root ->
+            File(root, relative).takeIf { it.isDirectory }?.let { return it }
+        }
         var dir: File? = File(System.getProperty("user.dir") ?: ".").absoluteFile
         while (dir != null) {
-            candidates.map { File(dir, it) }.firstOrNull { it.isFile }?.let { return it }
+            File(dir, relative).takeIf { it.isDirectory }?.let { return it }
             dir = dir.parentFile
         }
-        throw AssertionError("could not find $relative from ${System.getProperty("user.dir")}")
+        throw AssertionError("$relative not found (set -Dgatepath.repo.root=<repo>)")
     }
 }

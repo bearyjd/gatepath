@@ -14,7 +14,12 @@ package com.ventouxlabs.gatepath.network
  *
  * `reportCaptivePortalDismissed()` is the neutral answer: Android re-checks the
  * network at once. Signed in, it validates; still captive, the portal is
- * detected again and the sign-in notification comes back.
+ * detected again and the sign-in notification comes back. Both were verified
+ * on the same hotel portal after this change.
+ *
+ * This only covers exits that destroy the screen. If the process dies before
+ * `onDestroy` runs, nothing is answered and Android re-checks on its own
+ * schedule, as it does for its own sign-in app.
  */
 enum class CaptivePortalReply {
     /** Ask Android to re-check the network now (`reportCaptivePortalDismissed()`). */

@@ -73,11 +73,13 @@ import javax.inject.Inject
  * and shows a WebView only from [ConfinementState.Confined]; every other
  * state gets the confinement card instead of a page that cannot load.
  *
- * Every way out of this screen answers [CaptivePortal.reportCaptivePortalDismissed]
- * (the Dismiss button, the back gesture, swiping the task away), which makes
- * Android re-check the network: signed in, it validates; still captive, the
- * sign-in notification comes back. A fold/rotation rebuild answers nothing and
- * leaves it to the rebuilt screen. This activity never sends
+ * Every exit that destroys this screen answers
+ * [CaptivePortal.reportCaptivePortalDismissed] (the Dismiss button, the back
+ * gesture, swiping the task away), which makes Android re-check the network:
+ * signed in, it validates; still captive, the sign-in notification comes back.
+ * A fold/rotation rebuild answers nothing and leaves it to the rebuilt screen.
+ * If the process dies before `onDestroy` runs, nothing is answered and Android
+ * re-checks on its own schedule. This activity never sends
  * [CaptivePortal.ignoreNetwork] ("the user rejects this network" — Android drops
  * the Wi-Fi and disables auto-join); see [CaptivePortalReply].
  */
@@ -126,8 +128,7 @@ class CaptivePortalActivity : ComponentActivity() {
         // consulted. Resolution happens after classification, below.
         val intentPortalUrl = intent.getStringExtra(ConnectivityManager.EXTRA_CAPTIVE_PORTAL_URL)
 
-        val portal = captivePortal
-        if (portal == null) {
+        if (captivePortal == null) {
             Log.w(TAG, "CAPTIVE_PORTAL intent missing CaptivePortal extra; finishing")
             finish()
             return
