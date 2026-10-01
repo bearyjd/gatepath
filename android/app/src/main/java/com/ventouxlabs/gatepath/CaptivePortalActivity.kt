@@ -37,6 +37,7 @@ import com.ventouxlabs.gatepath.network.PortalProbe
 import com.ventouxlabs.gatepath.network.ProbeResult
 import com.ventouxlabs.gatepath.network.VpnDetector
 import com.ventouxlabs.gatepath.network.VpnKind
+import com.ventouxlabs.gatepath.network.androidPortalVerdict
 import com.ventouxlabs.gatepath.network.classify
 import com.ventouxlabs.gatepath.ui.ConfinementAction
 import com.ventouxlabs.gatepath.ui.ConfinementCard
@@ -162,7 +163,7 @@ class CaptivePortalActivity : ComponentActivity() {
 
         Log.i(
             TAG,
-            "Handling captive portal for network $network at ${intentPortalUrl ?: "(no url in intent)"}",
+            "Handling captive portal for network $network at ${intentPortalUrl?.let { urlForLog(it) } ?: "(no url in intent)"}",
         )
 
         // Classification below can take tens of seconds against a gateway that
@@ -179,14 +180,14 @@ class CaptivePortalActivity : ComponentActivity() {
             // Android's own verdict: the sign-in URL it handed us, trusted only
             // while it still flags this network captive. Another app can launch
             // this activity with any URL, but cannot fake that system state.
-            val systemPortalUrl = intentPortalUrl?.takeIf {
-                connectivityManager.getNetworkCapabilities(network)
-                    ?.hasCapability(NetworkCapabilities.NET_CAPABILITY_CAPTIVE_PORTAL) == true
-            }
+            val systemFlagsCaptive = connectivityManager.getNetworkCapabilities(network)
+                ?.hasCapability(NetworkCapabilities.NET_CAPABILITY_CAPTIVE_PORTAL) == true
+            val androidPortalUrl = androidPortalVerdict(intentPortalUrl, systemFlagsCaptive)
             // The host the WebView will load: the probe's redirect, or Android's
             // URL when our probe got a 204 (a venue walled garden; see classify).
+            // Skip the lookup when classify could not take that branch anyway.
             val urlToResolve = (bound as? ProbeResult.Portal)?.locationUrl
-                ?: systemPortalUrl?.takeIf { bound is ProbeResult.Validated }
+                ?: androidPortalUrl?.takeIf { bound is ProbeResult.Validated && lease != null }
             val resolved = urlToResolve?.let { url ->
                 val host = runCatching { URI(url).host }.getOrNull()
                 if (host == null || host.all { it.isDigit() || it == '.' } || host.contains(':')) null
@@ -195,21 +196,24 @@ class CaptivePortalActivity : ComponentActivity() {
             val state = classify(
                 ClassificationInputs(
                     bound, null, vpn.interfaces, strict, resolved,
-                    systemPortalUrl = systemPortalUrl,
+                    systemPortalUrl = intentPortalUrl,
+                    systemFlagsCaptive = systemFlagsCaptive,
                     processBindHeld = lease != null,
                 ),
             )
             Log.i(
                 TAG,
                 "System handoff confinement: ${state.schemaName} " +
-                    "(probe=${bound::class.simpleName}, androidSaysPortal=${systemPortalUrl != null}, " +
+                    "(probe=${probeLabel(bound)}, androidSaysPortal=${androidPortalUrl != null}, " +
                     "bindHeld=${lease != null}, vpn=${vpn.interfaces})",
             )
             // Best available sign-in URL, in descending order of authority:
-            // the system's extra, then the location the probe actually found,
+            // Android's verdict (the intent's URL, only while Android flags the
+            // network captive, so a spoofed intent cannot pick the page on a
+            // normal network), then the location the probe actually found,
             // then the check URL itself — which the gateway is intercepting
             // anyway, so loading it yields the same login page.
-            val handoffUrl = intentPortalUrl
+            val handoffUrl = androidPortalUrl
                 ?: (state as? ConfinementState.Confined)?.portalUrl
                 ?: CONNECTIVITY_CHECK_URL
             val vpnKind = VpnKind.fromInterfaces(vpn.interfaces)
@@ -390,6 +394,20 @@ class CaptivePortalActivity : ComponentActivity() {
         lease?.let(processBinding::release)
         lease = null
     }
+
+    /** Explicit labels: release builds are minified, so class names would read as `c`. */
+    private fun probeLabel(result: ProbeResult): String = when (result) {
+        ProbeResult.Validated -> "validated"
+        is ProbeResult.Portal -> "portal"
+        is ProbeResult.Error -> "error"
+    }
+
+    /**
+     * Portal URLs carry MAC addresses and session tokens in their query
+     * strings, so release builds log only the host (as GatepathWebView does).
+     */
+    private fun urlForLog(url: String): String =
+        if (BuildConfig.DEBUG) url else runCatching { URI(url).host }.getOrNull() ?: "(no host)"
 
     @Suppress("DEPRECATION")
     private fun readCaptivePortalExtra(intent: Intent): CaptivePortal? {

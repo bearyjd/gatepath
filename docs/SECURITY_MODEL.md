@@ -266,9 +266,14 @@ proves confinement only of the portal *session* inside the namespace, not of thi
   over the Wi-Fi, and the process-wide bind was granted, the state is
   **Confined** on Android's URL. The capability check matters because the
   handoff activity is exported: another app can launch it with any URL, but
-  cannot make Android flag a network captive. Without all four conditions a
-  bound 204 stays **Unknown** (`BOUND_VALIDATED`); the in-app monitor path,
-  which never has Android's URL, is unchanged.
+  cannot make Android flag a network captive. The handoff therefore only ever
+  loads an intent URL (an http(s) URL with a host) while Android flags the
+  network captive (`androidPortalVerdict`), so a forged intent cannot pick the
+  page on a normal network; on a genuinely captive one it can still supply its
+  own URL, as it could before. Protecting the exported activity is a separate
+  follow-up. Without all four conditions a bound 204 stays **Unknown**
+  (`BOUND_VALIDATED`); the in-app monitor path, which never has Android's URL,
+  is unchanged.
 
   Costs, stated plainly: an excluded Gatepath is outside the VPN permanently,
   so its connectivity probe and the diagnostic DoH query leave in the clear

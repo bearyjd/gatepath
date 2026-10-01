@@ -5,7 +5,8 @@ import java.net.URI
 /**
  * Is Gatepath's traffic confined to the captive Wi-Fi right now?
  *
- * Classified once per captive incident from the monitor's probe results.
+ * Classified once per captive incident from the monitor's probe results, and
+ * by the system handoff from its own bound probe plus Android's verdict.
  * In-app sign-in is offered only from [Confined]. Pure Kotlin: the decision
  * is the security-relevant part of the app, so it runs under the no-SDK
  * JVM suite.
@@ -57,15 +58,40 @@ data class ClassificationInputs(
     /** null when the portal URL has no hostname or no lookup was attempted. */
     val portalHostResolvedOnWifi: Boolean?,
     /**
-     * The sign-in URL Android handed the system handoff, set only while
-     * Android still flags the network `NET_CAPABILITY_CAPTIVE_PORTAL`. That
-     * is Android's own verdict that this network is a portal, from a probe
-     * of its own endpoint. Always null on the monitor path.
+     * The sign-in URL from the system handoff's intent
+     * (`EXTRA_CAPTIVE_PORTAL_URL`). Untrusted on its own: the handoff activity
+     * is exported, so any app can launch it with any URL. Only
+     * [androidPortalVerdict] turns it into Android's verdict. Always null on
+     * the monitor path.
      */
     val systemPortalUrl: String? = null,
-    /** The process-wide bind to this network was granted (the WebView is confined). */
+    /**
+     * Android currently flags the network `NET_CAPABILITY_CAPTIVE_PORTAL`:
+     * system state, from Android's own probe of its own endpoint, which no
+     * other app can fake.
+     */
+    val systemFlagsCaptive: Boolean = false,
+    /**
+     * The handoff's `acquire` returned a lease on this network. Not a guarantee
+     * by itself (see ProcessBinding's borrow caveat); `GatepathWebView`
+     * re-acquires its own lease and fails closed without one.
+     */
     val processBindHeld: Boolean = false,
 )
+
+/**
+ * Android's portal verdict for the system handoff: the intent's sign-in URL,
+ * but only while Android still flags the network captive and only if it is a
+ * plain http(s) URL with a host. Null otherwise. The activity loads this URL,
+ * so a spoofed intent can at most supply a URL while a network really is
+ * captive.
+ */
+fun androidPortalVerdict(intentUrl: String?, systemFlagsCaptive: Boolean): String? {
+    if (intentUrl == null || !systemFlagsCaptive) return null
+    val uri = runCatching { URI(intentUrl) }.getOrNull() ?: return null
+    val scheme = uri.scheme?.lowercase()
+    return intentUrl.takeIf { (scheme == "http" || scheme == "https") && !uri.host.isNullOrEmpty() }
+}
 
 fun classify(inputs: ClassificationInputs): ConfinementState {
     val vpnKind = VpnKind.fromInterfaces(inputs.vpnInterfaces)
@@ -92,9 +118,9 @@ fun classify(inputs: ClassificationInputs): ConfinementState {
         // reaches the network over the Wi-Fi, and the held process bind proves
         // the WebView will be confined too, so sign in on Android's URL.
         is ProbeResult.Validated -> {
-            val systemUrl = inputs.systemPortalUrl
-            if (systemUrl != null && inputs.processBindHeld) {
-                confinedUnlessDnsStrict(systemUrl, capture = null, inputs)
+            val androidUrl = androidPortalVerdict(inputs.systemPortalUrl, inputs.systemFlagsCaptive)
+            if (androidUrl != null && inputs.processBindHeld) {
+                confinedUnlessDnsStrict(androidUrl, capture = null, inputs)
             } else {
                 ConfinementState.Unknown("bound probe returned 204", fallbackMessage(inputs.fallback), UnknownReason.BOUND_VALIDATED)
             }
