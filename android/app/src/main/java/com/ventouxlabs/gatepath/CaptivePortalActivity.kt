@@ -4,6 +4,7 @@ import android.content.Intent
 import android.net.CaptivePortal
 import android.net.ConnectivityManager
 import android.net.Network
+import android.net.NetworkCapabilities
 import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
@@ -175,13 +176,35 @@ class CaptivePortalActivity : ComponentActivity() {
             val bound = withContext(Dispatchers.IO) { probe.probe(network, testUrl = monitor.probeUrl) }
             val vpn = withContext(Dispatchers.IO) { VpnDetector.detect() }
             val strict = connectivityManager.getLinkProperties(network)?.privateDnsServerName != null
-            val resolved = (bound as? ProbeResult.Portal)?.let { p ->
-                val host = runCatching { URI(p.locationUrl).host }.getOrNull()
+            // Android's own verdict: the sign-in URL it handed us, trusted only
+            // while it still flags this network captive. Another app can launch
+            // this activity with any URL, but cannot fake that system state.
+            val systemPortalUrl = intentPortalUrl?.takeIf {
+                connectivityManager.getNetworkCapabilities(network)
+                    ?.hasCapability(NetworkCapabilities.NET_CAPABILITY_CAPTIVE_PORTAL) == true
+            }
+            // The host the WebView will load: the probe's redirect, or Android's
+            // URL when our probe got a 204 (a venue walled garden; see classify).
+            val urlToResolve = (bound as? ProbeResult.Portal)?.locationUrl
+                ?: systemPortalUrl?.takeIf { bound is ProbeResult.Validated }
+            val resolved = urlToResolve?.let { url ->
+                val host = runCatching { URI(url).host }.getOrNull()
                 if (host == null || host.all { it.isDigit() || it == '.' } || host.contains(':')) null
                 else withContext(Dispatchers.IO) { runCatching { network.getAllByName(host).isNotEmpty() }.getOrDefault(false) }
             }
-            val state = classify(ClassificationInputs(bound, null, vpn.interfaces, strict, resolved))
-            Log.i(TAG, "System handoff confinement: ${state.schemaName}")
+            val state = classify(
+                ClassificationInputs(
+                    bound, null, vpn.interfaces, strict, resolved,
+                    systemPortalUrl = systemPortalUrl,
+                    processBindHeld = lease != null,
+                ),
+            )
+            Log.i(
+                TAG,
+                "System handoff confinement: ${state.schemaName} " +
+                    "(probe=${bound::class.simpleName}, androidSaysPortal=${systemPortalUrl != null}, " +
+                    "bindHeld=${lease != null}, vpn=${vpn.interfaces})",
+            )
             // Best available sign-in URL, in descending order of authority:
             // the system's extra, then the location the probe actually found,
             // then the check URL itself — which the gateway is intercepting

@@ -56,20 +56,21 @@ data class ClassificationInputs(
     val privateDnsStrict: Boolean,
     /** null when the portal URL has no hostname or no lookup was attempted. */
     val portalHostResolvedOnWifi: Boolean?,
+    /**
+     * The sign-in URL Android handed the system handoff, set only while
+     * Android still flags the network `NET_CAPABILITY_CAPTIVE_PORTAL`. That
+     * is Android's own verdict that this network is a portal, from a probe
+     * of its own endpoint. Always null on the monitor path.
+     */
+    val systemPortalUrl: String? = null,
+    /** The process-wide bind to this network was granted (the WebView is confined). */
+    val processBindHeld: Boolean = false,
 )
 
 fun classify(inputs: ClassificationInputs): ConfinementState {
     val vpnKind = VpnKind.fromInterfaces(inputs.vpnInterfaces)
     return when (val bound = inputs.bound) {
-        is ProbeResult.Portal -> {
-            val host = runCatching { URI(bound.locationUrl).host }.getOrNull()
-            val isHostname = host != null && !isIpLiteral(host)
-            if (isHostname && inputs.privateDnsStrict && inputs.portalHostResolvedOnWifi == false) {
-                ConfinementState.DnsStrict(requireNotNull(host))
-            } else {
-                ConfinementState.Confined(bound.locationUrl, bound.capture)
-            }
-        }
+        is ProbeResult.Portal -> confinedUnlessDnsStrict(bound.locationUrl, bound.capture, inputs)
         is ProbeResult.Error -> when (bound.reason) {
             // The fallback substring match lives entirely inside
             // probeErrorReason() (see ProbeErrorReason.kt) — an Error whose
@@ -84,8 +85,31 @@ fun classify(inputs: ClassificationInputs): ConfinementState {
             ProbeErrorReason.OTHER,
             -> ConfinementState.Unknown(bound.message, fallbackMessage(inputs.fallback), UnknownReason.PROBE_ERROR)
         }
-        is ProbeResult.Validated ->
-            ConfinementState.Unknown("bound probe returned 204", fallbackMessage(inputs.fallback), UnknownReason.BOUND_VALIDATED)
+        // A 204 on our one probe endpoint is not proof there is no portal:
+        // venue walled gardens let connectivitycheck.gstatic.com through
+        // before sign-in. When Android's own probe (another endpoint) says
+        // portal and handed us its URL, the 204 still proves our bound socket
+        // reaches the network over the Wi-Fi, and the held process bind proves
+        // the WebView will be confined too, so sign in on Android's URL.
+        is ProbeResult.Validated -> {
+            val systemUrl = inputs.systemPortalUrl
+            if (systemUrl != null && inputs.processBindHeld) {
+                confinedUnlessDnsStrict(systemUrl, capture = null, inputs)
+            } else {
+                ConfinementState.Unknown("bound probe returned 204", fallbackMessage(inputs.fallback), UnknownReason.BOUND_VALIDATED)
+            }
+        }
+    }
+}
+
+/** [ConfinementState.Confined] on [url], or [ConfinementState.DnsStrict] if strict Private DNS cannot resolve its host. */
+private fun confinedUnlessDnsStrict(url: String, capture: PortalProbeCapture?, inputs: ClassificationInputs): ConfinementState {
+    val host = runCatching { URI(url).host }.getOrNull()
+    val isHostname = host != null && !isIpLiteral(host)
+    return if (isHostname && inputs.privateDnsStrict && inputs.portalHostResolvedOnWifi == false) {
+        ConfinementState.DnsStrict(requireNotNull(host))
+    } else {
+        ConfinementState.Confined(url, capture)
     }
 }
 

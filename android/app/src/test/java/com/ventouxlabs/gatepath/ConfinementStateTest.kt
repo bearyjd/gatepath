@@ -30,7 +30,9 @@ class ConfinementStateTest {
         vpn: List<String> = emptyList(),
         strict: Boolean = false,
         resolved: Boolean? = null,
-    ) = ClassificationInputs(bound, fallback, vpn, strict, resolved)
+        systemPortalUrl: String? = null,
+        bindHeld: Boolean = false,
+    ) = ClassificationInputs(bound, fallback, vpn, strict, resolved, systemPortalUrl, bindHeld)
 
     @Test
     fun `bound portal with ip literal is Confined and carries the url`() {
@@ -105,6 +107,55 @@ class ConfinementStateTest {
         val s = classify(inputs(ProbeResult.Validated))
         assertTrue(s is ConfinementState.Unknown)
         assertEquals(UnknownReason.BOUND_VALIDATED, (s as ConfinementState.Unknown).reason)
+    }
+
+    // ── System handoff: Android saw a portal, our probe got 204 ─────────────
+    // Field case (2026-10-01, hotel portal): the gateway's walled garden lets
+    // connectivitycheck.gstatic.com through before sign-in, so the bound probe
+    // answered 204 while Android's own probe (another endpoint) saw the portal
+    // and launched the handoff with its sign-in URL.
+
+    private val androidPortalUrl = "https://portal.example-hotel.net/login"
+
+    @Test
+    fun `bound 204 with Android's portal url and the bind held is Confined on Android's url`() {
+        val s = classify(inputs(ProbeResult.Validated, systemPortalUrl = androidPortalUrl, bindHeld = true))
+        assertEquals(ConfinementState.Confined(androidPortalUrl, null), s)
+    }
+
+    @Test
+    fun `bound 204 with Android's portal url but no process bind stays Unknown`() {
+        // Without the process-wide bind the WebView would not be confined to the Wi-Fi.
+        val s = classify(inputs(ProbeResult.Validated, systemPortalUrl = androidPortalUrl, bindHeld = false))
+        assertEquals(UnknownReason.BOUND_VALIDATED, (s as ConfinementState.Unknown).reason)
+    }
+
+    @Test
+    fun `bound 204 with the bind held but no Android portal url stays Unknown`() {
+        // The monitor path never has Android's verdict; it is unchanged.
+        val s = classify(inputs(ProbeResult.Validated, bindHeld = true))
+        assertEquals(UnknownReason.BOUND_VALIDATED, (s as ConfinementState.Unknown).reason)
+    }
+
+    @Test
+    fun `Android's portal host that fails to resolve under strict private dns is DnsStrict`() {
+        val s = classify(
+            inputs(ProbeResult.Validated, strict = true, resolved = false, systemPortalUrl = androidPortalUrl, bindHeld = true),
+        )
+        assertEquals(ConfinementState.DnsStrict("portal.example-hotel.net"), s)
+    }
+
+    @Test
+    fun `a bound probe error is not rescued by Android's portal url`() {
+        // Only a 204 proves the probe's socket reached the network over the Wi-Fi.
+        val s = classify(inputs(timeout, systemPortalUrl = androidPortalUrl, bindHeld = true))
+        assertEquals(UnknownReason.PROBE_ERROR, (s as ConfinementState.Unknown).reason)
+    }
+
+    @Test
+    fun `EPERM under a VPN stays Tunnelled even with Android's portal url`() {
+        val s = classify(inputs(eperm, vpn = listOf("tun0"), systemPortalUrl = androidPortalUrl, bindHeld = true))
+        assertTrue(s is ConfinementState.Tunnelled)
     }
 
     @Test

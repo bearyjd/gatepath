@@ -257,6 +257,19 @@ proves confinement only of the portal *session* inside the namespace, not of thi
   `ConfinementState.classify` and recorded in the evidence bundle; every
   audit entry carries `confinement`.
 
+  A 204 on Gatepath's probe endpoint is not proof that there is no portal:
+  venue walled gardens let `connectivitycheck.gstatic.com` through before
+  sign-in (observed on a hotel portal, 2026-10-01, 10/10 pre-auth probes).
+  In the **system handoff** only, Gatepath then defers to Android's own
+  verdict: if Android launched the handoff with a sign-in URL, still flags
+  the network `NET_CAPABILITY_CAPTIVE_PORTAL`, the bound probe got its 204
+  over the Wi-Fi, and the process-wide bind was granted, the state is
+  **Confined** on Android's URL. The capability check matters because the
+  handoff activity is exported: another app can launch it with any URL, but
+  cannot make Android flag a network captive. Without all four conditions a
+  bound 204 stays **Unknown** (`BOUND_VALIDATED`); the in-app monitor path,
+  which never has Android's URL, is unchanged.
+
   Costs, stated plainly: an excluded Gatepath is outside the VPN permanently,
   so its connectivity probe and the diagnostic DoH query leave in the clear
   over the default network at all times. Gatepath cannot bypass strict
