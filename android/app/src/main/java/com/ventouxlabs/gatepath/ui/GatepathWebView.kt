@@ -32,6 +32,7 @@ import com.ventouxlabs.gatepath.BuildConfig
 import com.ventouxlabs.gatepath.diag.CONSOLE_CAPTURE_FILE_NAME
 import com.ventouxlabs.gatepath.diag.CertSummary
 import com.ventouxlabs.gatepath.diag.ConsoleCaptureBuffer
+import com.ventouxlabs.gatepath.diag.SignInTimeline
 import com.ventouxlabs.gatepath.diag.ConsoleCaptureEntry
 import com.ventouxlabs.gatepath.diag.ConsoleCaptureFile
 import com.ventouxlabs.gatepath.network.AndroidProcessBinding
@@ -98,6 +99,9 @@ fun GatepathWebView(
     // null when there is none (no classified incident opened this session —
     // e.g. the debug force-active-session path). See ConsoleCaptureEntry.incidentId.
     incidentId: Long? = null,
+    // The sign-in log (system handoff only); null elsewhere. Lines are
+    // redacted inside SignInTimeline, so full URLs may be passed in.
+    timeline: SignInTimeline? = null,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
@@ -182,6 +186,7 @@ fun GatepathWebView(
                 onCertSummary,
                 onLoadStarted,
                 onLoadError,
+                timeline,
             )
             // Diagnostic-only WebChromeClient: forward console.log / console.error
             // from the captive portal page into logcat. Captive portal sign-in
@@ -252,6 +257,7 @@ fun GatepathWebView(
         lease = acquiredLease
         if (acquiredLease == null) {
             Log.w(TAG, "processBinding.acquire($network) refused; not loading — WebView traffic must not follow an unconfirmed route")
+            timeline?.record("WebView: Wi-Fi pin refused, page not loaded (fails closed)")
             onLoadError(
                 PortalLoadError(
                     kind = PortalLoadErrorKind.BIND_REFUSED,
@@ -399,10 +405,12 @@ private fun buildWebViewClient(
     onCertSummary: (CertSummary) -> Unit,
     onLoadStarted: () -> Unit,
     onLoadError: (PortalLoadError) -> Unit,
+    timeline: SignInTimeline?,
 ): WebViewClient = object : WebViewClient() {
 
     override fun onPageStarted(view: WebView, url: String, favicon: Bitmap?) {
         Log.d(TAG, "Page started: ${url.urlForLog()}")
+        timeline?.record("Page started: $url")
         // A new main-frame load is underway: clear any error overlay so a
         // successful retry (or a gateway redirect that finally works) shows
         // the page instead of a stale failure.
@@ -411,6 +419,7 @@ private fun buildWebViewClient(
 
     override fun onPageFinished(view: WebView, url: String) {
         Log.d(TAG, "Page finished: ${url.urlForLog()}")
+        timeline?.record("Page finished: $url")
     }
 
     override fun onReceivedError(
@@ -430,6 +439,7 @@ private fun buildWebViewClient(
         // trackers, absent CDNs) and the page still renders — only a
         // main-frame failure means the user is looking at a blank screen.
         if (!request.isForMainFrame) return
+        timeline?.record("Page failed to load: ${request.url} (code=${error.errorCode} ${error.description})")
         onLoadError(
             PortalLoadError(
                 kind = PortalLoadErrorKind.fromWebViewErrorCode(error.errorCode),
@@ -484,6 +494,7 @@ private fun buildWebViewClient(
             handler.proceed()
         } else {
             handler.cancel()
+            timeline?.record("Certificate refused for $errorHost (primaryError=${error.primaryError})")
             // cancel() fires no onReceivedError, so without this the refusal
             // is exactly the silent white screen this whole flow exists to
             // stop — just with a different cause.
@@ -523,6 +534,7 @@ private fun buildWebViewClient(
                 "Off-domain main-frame navigation to ${request.url.forLog()} (portal host=$portalHost) — allowing for captive flow",
             )
             onBlockedNavigation()
+            timeline?.record("Followed off-domain navigation to ${request.url}")
         }
         return false // always let the WebView load it
     }

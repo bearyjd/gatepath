@@ -13,6 +13,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -21,10 +22,13 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.ventouxlabs.gatepath.BuildConfig
+import com.ventouxlabs.gatepath.R
 import com.ventouxlabs.gatepath.diag.CertSummary
+import com.ventouxlabs.gatepath.diag.SignInTimeline
 import com.ventouxlabs.gatepath.network.AndroidProcessBinding
 
 /**
@@ -49,6 +53,11 @@ fun PortalScreen(
     // Forwarded to GatepathWebView so its console capture is tagged with the
     // incident that opened this session. Null when there is none.
     incidentId: Long? = null,
+    // The sign-in log and its export action (system handoff only). With
+    // onExportLog null there is no Log button, as in MainActivity, which has
+    // its own "Share evidence".
+    timeline: SignInTimeline? = null,
+    onExportLog: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     var loadError by remember { mutableStateOf<PortalLoadError?>(null) }
@@ -60,6 +69,13 @@ fun PortalScreen(
             TopAppBar(
                 title = { Text("Network Sign-In", style = MaterialTheme.typography.titleMedium) },
                 actions = {
+                    // Between the title and Dismiss: the first action sits
+                    // just right of the title.
+                    if (onExportLog != null) {
+                        TextButton(onClick = onExportLog) {
+                            Text(stringResource(R.string.signin_log_button))
+                        }
+                    }
                     Button(
                         onClick = onDismiss,
                         colors = ButtonDefaults.textButtonColors(),
@@ -88,6 +104,7 @@ fun PortalScreen(
                 onLoadError = { loadError = it },
                 reloadToken = reloadToken,
                 incidentId = incidentId,
+                timeline = timeline,
                 modifier = Modifier.fillMaxSize(),
             )
 

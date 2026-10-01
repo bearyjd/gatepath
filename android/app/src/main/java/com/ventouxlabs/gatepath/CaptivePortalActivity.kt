@@ -9,6 +9,7 @@ import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
 import android.util.Log
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -26,6 +27,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.lifecycleScope
+import com.ventouxlabs.gatepath.diag.SignInTimeline
+import com.ventouxlabs.gatepath.diag.SignInTimelineStore
 import com.ventouxlabs.gatepath.network.AndroidProcessBinding
 import com.ventouxlabs.gatepath.network.CONNECTIVITY_CHECK_URL
 import com.ventouxlabs.gatepath.network.CaptivePortalMonitor
@@ -39,6 +42,7 @@ import com.ventouxlabs.gatepath.network.VpnDetector
 import com.ventouxlabs.gatepath.network.VpnKind
 import com.ventouxlabs.gatepath.network.androidPortalVerdict
 import com.ventouxlabs.gatepath.network.classify
+import com.ventouxlabs.gatepath.share.DiagnosticsSharer
 import com.ventouxlabs.gatepath.ui.ConfinementAction
 import com.ventouxlabs.gatepath.ui.ConfinementCard
 import com.ventouxlabs.gatepath.ui.ConfinementStateText
@@ -46,6 +50,7 @@ import com.ventouxlabs.gatepath.ui.PortalScreen
 import com.ventouxlabs.gatepath.ui.VpnAppLauncher
 import com.ventouxlabs.gatepath.ui.theme.GatepathTheme
 import dagger.hilt.android.AndroidEntryPoint
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -119,6 +124,14 @@ class CaptivePortalActivity : ComponentActivity() {
      */
     private var lease: Lease<Network>? = null
 
+    /**
+     * This sign-in's log, exported by the "Log" button. Shared through
+     * [SignInTimelineStore] so a fold/rotation rebuild or a reopen from the
+     * notification keeps appending to one record. Null before the network is
+     * known (the early-exit paths have nothing to record).
+     */
+    private var timeline: SignInTimeline? = null
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
@@ -152,6 +165,16 @@ class CaptivePortalActivity : ComponentActivity() {
             return
         }
 
+        val signInLog = SignInTimelineStore.shared.forNetwork(network.toString())
+        timeline = signInLog
+        signInLog.record(
+            if (savedInstanceState == null) {
+                "Sign-in screen opened by Android for network $network (Android's URL: ${intentPortalUrl ?: "(none)"})"
+            } else {
+                "Sign-in screen rebuilt after a fold or rotation (network $network)"
+            },
+        )
+
         // Acquire a lease on the captive network so the WebView's traffic
         // routes via that interface. A refused acquire (e.g. EPERM under a
         // secure VPN — the Tunnelled/Blocked path) returns null and claims
@@ -159,6 +182,9 @@ class CaptivePortalActivity : ComponentActivity() {
         lease = processBinding.acquire(network)
         if (lease == null) {
             Log.w(TAG, "processBinding.acquire($network) refused; not claiming the binding")
+            signInLog.record("Wi-Fi pin refused (a VPN covering Gatepath refuses it)")
+        } else {
+            signInLog.record("Wi-Fi pin granted: Gatepath's traffic is bound to this network")
         }
 
         Log.i(
@@ -207,6 +233,16 @@ class CaptivePortalActivity : ComponentActivity() {
                     "(probe=${probeLabel(bound)}, androidSaysPortal=${androidPortalUrl != null}, " +
                     "bindHeld=${lease != null}, vpn=${vpn.interfaces})",
             )
+            signInLog.record("Probe of ${monitor.probeUrl} over the Wi-Fi: ${probeDetail(bound)}")
+            signInLog.record(
+                "Android flags the network captive: ${if (systemFlagsCaptive) "yes" else "no"}; " +
+                    "VPN interfaces: ${vpn.interfaces.ifEmpty { listOf("none") }.joinToString()}; " +
+                    "strict Private DNS: ${if (strict) "yes" else "no"}",
+            )
+            signInLog.record(
+                "Classified: ${state.schemaName}" +
+                    ((state as? ConfinementState.Unknown)?.let { " (${it.reason})" } ?: ""),
+            )
             // Best available sign-in URL, in descending order of authority:
             // Android's verdict (the intent's URL, only while Android flags the
             // network captive, so a spoofed intent cannot pick the page on a
@@ -223,9 +259,10 @@ class CaptivePortalActivity : ComponentActivity() {
 
     /**
      * Show the sign-in page when [url] is non-null, otherwise the one action
-     * this confinement state allows. Sharing is absent on purpose: the
-     * evidence bundle belongs to the ViewModel in `MainActivity`, and this
-     * entry point has no session of its own to attach it to.
+     * this confinement state allows. "Share evidence" is absent on purpose:
+     * the evidence bundle belongs to the ViewModel in `MainActivity`. What this
+     * entry point offers instead is its own sign-in log ([exportLog]), on both
+     * the page view and every card.
      *
      * **Unknown is rendered with this entry point's own copy**
      * ([ConfinementStateText.handoffUnknown]), because the default Unknown
@@ -259,6 +296,7 @@ class CaptivePortalActivity : ComponentActivity() {
      * it would reproduce the blank screen this flow exists to prevent.
      */
     private fun render(state: ConfinementState, url: String?, network: Network, handoffUrl: String, vpnKind: VpnKind) {
+        timeline?.record(if (url != null) "Showing the login page: $url" else "Showing the '${state.schemaName}' card")
         setContent {
             GatepathTheme {
                 if (url != null) {
@@ -276,6 +314,8 @@ class CaptivePortalActivity : ComponentActivity() {
                         // render's KDoc. The console capture from a session
                         // opened here is simply untagged.
                         incidentId = null,
+                        timeline = timeline,
+                        onExportLog = ::exportLog,
                     )
                 } else {
                     val kind = when (state) {
@@ -302,6 +342,7 @@ class CaptivePortalActivity : ComponentActivity() {
                                 // this entry point that means the handoff
                                 // copy's action instead.
                                 val effective = handoffUnknown?.action ?: action
+                                timeline?.record("Tapped card action: $effective")
                                 when (effective) {
                                     ConfinementAction.OPEN_VPN_APP -> startActivity(launch)
                                     ConfinementAction.OPEN_NETWORK_SETTINGS ->
@@ -322,6 +363,7 @@ class CaptivePortalActivity : ComponentActivity() {
                             // sharing. Rendering the button here would show a
                             // control that silently does nothing.
                             showShareEvidence = false,
+                            onExportLog = ::exportLog,
                         )
                     }
                 }
@@ -368,7 +410,30 @@ class CaptivePortalActivity : ComponentActivity() {
         }
         reported = true
         captivePortal?.reportCaptivePortalDismissed()
+        timeline?.record("Dismiss tapped: told Android to re-check the network")
         finish()
+    }
+
+    /**
+     * Writes this sign-in's log (hostnames only, see SignInTimeline) to the
+     * FileProvider cache and opens the share sheet, like MainActivity's
+     * "Share diagnostics".
+     */
+    private fun exportLog() {
+        val log = timeline ?: return
+        log.record("Log exported")
+        lifecycleScope.launch {
+            try {
+                val uri = DiagnosticsSharer.writeSignInLog(this@CaptivePortalActivity, log)
+                val sendIntent = DiagnosticsSharer.sendIntent(uri, getString(R.string.share_signin_log_subject))
+                startActivity(Intent.createChooser(sendIntent, getString(R.string.share_signin_log_chooser)))
+            } catch (e: CancellationException) {
+                throw e // cooperative cancellation is not a failure — never swallow it
+            } catch (e: Exception) {
+                Log.e(TAG, "Sign-in log export failed", e)
+                Toast.makeText(this@CaptivePortalActivity, R.string.share_signin_log_error, Toast.LENGTH_LONG).show()
+            }
+        }
     }
 
     override fun onDestroy() {
@@ -385,6 +450,13 @@ class CaptivePortalActivity : ComponentActivity() {
             CaptivePortalReply.DISMISSED -> captivePortal?.reportCaptivePortalDismissed()
             CaptivePortalReply.NONE -> Unit
         }
+        timeline?.record(
+            when {
+                isChangingConfigurations -> "Screen rebuilding for a fold or rotation: nothing told to Android"
+                reply == CaptivePortalReply.DISMISSED -> "Screen closed: told Android to re-check the network"
+                else -> "Screen closed (Android already answered)"
+            },
+        )
         // Release this activity's own lease, if it holds one. This is safe
         // under MainActivity's live WebView (which holds its own lease on the
         // owner stack) precisely because ProcessBinding tracks owners by
@@ -393,6 +465,13 @@ class CaptivePortalActivity : ComponentActivity() {
         // replaced the old per-caller compare-and-null with.
         lease?.let(processBinding::release)
         lease = null
+    }
+
+    /** One line for the sign-in log; the URL in it is reduced to its host there. */
+    private fun probeDetail(result: ProbeResult): String = when (result) {
+        ProbeResult.Validated -> "204, so this probe saw no portal"
+        is ProbeResult.Portal -> "portal at ${result.locationUrl} (HTTP ${result.capture?.httpStatus ?: "?"})"
+        is ProbeResult.Error -> "error ${result.reason}: ${result.message}"
     }
 
     /** Explicit labels: release builds are minified, so class names would read as `c`. */
