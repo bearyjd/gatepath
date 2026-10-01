@@ -97,14 +97,15 @@ object DiagnosticsBundle {
     private val json = Json { encodeDefaults = true }
 
     // Bare IPv4 literal — probe errors / DNS answers echo these verbatim.
-    private val IPV4 = Regex("""\b(?:\d{1,3}\.){3}\d{1,3}\b""")
+    // Also used by LogRedaction for the sign-in log.
+    internal val IPV4 = Regex("""\b(?:\d{1,3}\.){3}\d{1,3}\b""")
 
     // Bare IPv6 literal — resolver answers can be v6 too. Grammar-accurate: a
     // full form of exactly eight 1-to-4-hex groups, or a compressed form that
     // contains `::`. Lookarounds (rather than \b) reject a match glued to a
     // surrounding hex/colon/dot/hyphen run. A timestamp like `12:34:56` or
     // `T00:00:00Z` has neither eight groups nor `::`, so it can't match.
-    private val IPV6 = Regex(
+    internal val IPV6 = Regex(
         """(?<![0-9A-Za-z:.-])(?:(?:[0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}""" +
             """|(?:[0-9a-fA-F]{1,4}:){1,7}:(?:[0-9a-fA-F]{1,4}(?::[0-9a-fA-F]{1,4}){0,6})?""" +
             """|::(?:[0-9a-fA-F]{1,4}(?::[0-9a-fA-F]{1,4}){0,6})?)(?![0-9A-Za-z:.-])""",

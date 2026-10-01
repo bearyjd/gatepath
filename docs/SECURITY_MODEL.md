@@ -158,6 +158,37 @@ than strictly the last session — a quiet page can't erase a previous page's
 trail. Each entry carries its own `sourceHost`, so provenance stays visible
 even when the capture predates the session that's currently active.
 
+### Off-device diagnostics: the sign-in log (Android)
+
+The system sign-in screen (`CaptivePortalActivity`) keeps a per-sign-in
+timeline (`SignInTimeline`) that the user can export from its **Log** button
+or a status card's **Export log** button, through the share sheet. Nothing
+is written to disk or sent until the user exports.
+
+- **Recorded:** the screen opening or rebuilding, Android's portal URL
+  (origin only), whether the Wi-Fi bind was granted, the probe endpoint and
+  outcome (HTTP status, or the error reason and message), Android's captive
+  flag, VPN interface names, whether Private DNS is strict, the
+  classification, what was shown, card taps, page loads and failures,
+  refused certificates, off-domain hops, and what Gatepath told Android when
+  the screen closed.
+- **Stripped:** every known URL is reduced structurally to scheme + host
+  (+ port) (`LogRedaction.origin`). Relative or unparseable URLs become a
+  placeholder. Every line also passes a backstop (`LogRedaction.redact`) that
+  drops query and fragment runs and masks MAC addresses (colon, hyphen,
+  dotted, percent-encoded, and bare 12-hex after a mac-like key) and IPv4/IPv6
+  addresses outside URL hosts.
+- **Kept:** hostnames, including an IP that *is* a URL's host. A
+  per-venue or per-session gateway hostname can itself identify where the
+  device was. This is looser than the diagnostics bundle, which omits portal
+  URLs entirely and can redact the portal domain; it is the maintainer's
+  choice for field reports, and the export's header states it. There is no
+  redaction toggle.
+
+Like the console capture, this is best-effort: the redaction is pattern-
+and parser-based, and the timeline lives in memory only (one per network,
+continued while active within 30 minutes, lost if the process dies).
+
 ## What Gatepath itself sends
 
 Everything above describes traffic Gatepath *prevents*. This section is the converse:

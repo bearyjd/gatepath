@@ -27,6 +27,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.lifecycleScope
+import com.ventouxlabs.gatepath.diag.LogRedaction
 import com.ventouxlabs.gatepath.diag.SignInTimeline
 import com.ventouxlabs.gatepath.diag.SignInTimelineStore
 import com.ventouxlabs.gatepath.network.AndroidProcessBinding
@@ -131,6 +132,7 @@ class CaptivePortalActivity : ComponentActivity() {
      * known (the early-exit paths have nothing to record).
      */
     private var timeline: SignInTimeline? = null
+    private var exportInFlight = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -169,9 +171,9 @@ class CaptivePortalActivity : ComponentActivity() {
         timeline = signInLog
         signInLog.record(
             if (savedInstanceState == null) {
-                "Sign-in screen opened by Android for network $network (Android's URL: ${intentPortalUrl ?: "(none)"})"
+                "Sign-in screen opened by Android for network $network (Android's URL: ${LogRedaction.origin(intentPortalUrl)})"
             } else {
-                "Sign-in screen rebuilt after a fold or rotation (network $network)"
+                "Sign-in screen rebuilt (fold, rotation, other configuration change, or app restart; network $network)"
             },
         )
 
@@ -296,7 +298,7 @@ class CaptivePortalActivity : ComponentActivity() {
      * it would reproduce the blank screen this flow exists to prevent.
      */
     private fun render(state: ConfinementState, url: String?, network: Network, handoffUrl: String, vpnKind: VpnKind) {
-        timeline?.record(if (url != null) "Showing the login page: $url" else "Showing the '${state.schemaName}' card")
+        timeline?.record(if (url != null) "Showing the login page: ${LogRedaction.origin(url)}" else "Showing the '${state.schemaName}' card")
         setContent {
             GatepathTheme {
                 if (url != null) {
@@ -421,17 +423,23 @@ class CaptivePortalActivity : ComponentActivity() {
      */
     private fun exportLog() {
         val log = timeline ?: return
-        log.record("Log exported")
+        // A double tap would write the same file twice and open two share sheets.
+        if (exportInFlight) return
+        exportInFlight = true
         lifecycleScope.launch {
             try {
                 val uri = DiagnosticsSharer.writeSignInLog(this@CaptivePortalActivity, log)
                 val sendIntent = DiagnosticsSharer.sendIntent(uri, getString(R.string.share_signin_log_subject))
                 startActivity(Intent.createChooser(sendIntent, getString(R.string.share_signin_log_chooser)))
+                log.record("Log exported")
             } catch (e: CancellationException) {
                 throw e // cooperative cancellation is not a failure — never swallow it
             } catch (e: Exception) {
                 Log.e(TAG, "Sign-in log export failed", e)
+                log.record("Log export failed: ${e.javaClass.simpleName}")
                 Toast.makeText(this@CaptivePortalActivity, R.string.share_signin_log_error, Toast.LENGTH_LONG).show()
+            } finally {
+                exportInFlight = false
             }
         }
     }
@@ -467,10 +475,10 @@ class CaptivePortalActivity : ComponentActivity() {
         lease = null
     }
 
-    /** One line for the sign-in log; the URL in it is reduced to its host there. */
+    /** One line for the sign-in log. Error text is masked by LogRedaction.redact on the way in. */
     private fun probeDetail(result: ProbeResult): String = when (result) {
         ProbeResult.Validated -> "204, so this probe saw no portal"
-        is ProbeResult.Portal -> "portal at ${result.locationUrl} (HTTP ${result.capture?.httpStatus ?: "?"})"
+        is ProbeResult.Portal -> "portal at ${LogRedaction.origin(result.locationUrl)} (HTTP ${result.capture?.httpStatus ?: "?"})"
         is ProbeResult.Error -> "error ${result.reason}: ${result.message}"
     }
 

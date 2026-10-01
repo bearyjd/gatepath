@@ -32,9 +32,10 @@ import com.ventouxlabs.gatepath.BuildConfig
 import com.ventouxlabs.gatepath.diag.CONSOLE_CAPTURE_FILE_NAME
 import com.ventouxlabs.gatepath.diag.CertSummary
 import com.ventouxlabs.gatepath.diag.ConsoleCaptureBuffer
-import com.ventouxlabs.gatepath.diag.SignInTimeline
 import com.ventouxlabs.gatepath.diag.ConsoleCaptureEntry
 import com.ventouxlabs.gatepath.diag.ConsoleCaptureFile
+import com.ventouxlabs.gatepath.diag.LogRedaction
+import com.ventouxlabs.gatepath.diag.SignInTimeline
 import com.ventouxlabs.gatepath.network.AndroidProcessBinding
 import com.ventouxlabs.gatepath.network.BlockedDomains
 import com.ventouxlabs.gatepath.network.Lease
@@ -99,8 +100,9 @@ fun GatepathWebView(
     // null when there is none (no classified incident opened this session —
     // e.g. the debug force-active-session path). See ConsoleCaptureEntry.incidentId.
     incidentId: Long? = null,
-    // The sign-in log (system handoff only); null elsewhere. Lines are
-    // redacted inside SignInTimeline, so full URLs may be passed in.
+    // The sign-in log (system handoff only); null elsewhere. URLs are reduced
+    // with LogRedaction.origin here, and every line is redacted again inside
+    // SignInTimeline.record.
     timeline: SignInTimeline? = null,
     modifier: Modifier = Modifier,
 ) {
@@ -410,7 +412,7 @@ private fun buildWebViewClient(
 
     override fun onPageStarted(view: WebView, url: String, favicon: Bitmap?) {
         Log.d(TAG, "Page started: ${url.urlForLog()}")
-        timeline?.record("Page started: $url")
+        timeline?.record("Page started: ${LogRedaction.origin(url)}")
         // A new main-frame load is underway: clear any error overlay so a
         // successful retry (or a gateway redirect that finally works) shows
         // the page instead of a stale failure.
@@ -419,7 +421,7 @@ private fun buildWebViewClient(
 
     override fun onPageFinished(view: WebView, url: String) {
         Log.d(TAG, "Page finished: ${url.urlForLog()}")
-        timeline?.record("Page finished: $url")
+        timeline?.record("Page finished: ${LogRedaction.origin(url)}")
     }
 
     override fun onReceivedError(
@@ -439,7 +441,7 @@ private fun buildWebViewClient(
         // trackers, absent CDNs) and the page still renders — only a
         // main-frame failure means the user is looking at a blank screen.
         if (!request.isForMainFrame) return
-        timeline?.record("Page failed to load: ${request.url} (code=${error.errorCode} ${error.description})")
+        timeline?.record("Page failed to load: ${LogRedaction.origin(request.url.toString())} (code=${error.errorCode} ${error.description})")
         onLoadError(
             PortalLoadError(
                 kind = PortalLoadErrorKind.fromWebViewErrorCode(error.errorCode),
@@ -534,7 +536,7 @@ private fun buildWebViewClient(
                 "Off-domain main-frame navigation to ${request.url.forLog()} (portal host=$portalHost) — allowing for captive flow",
             )
             onBlockedNavigation()
-            timeline?.record("Followed off-domain navigation to ${request.url}")
+            timeline?.record("Followed off-domain navigation to ${LogRedaction.origin(request.url.toString())}")
         }
         return false // always let the WebView load it
     }

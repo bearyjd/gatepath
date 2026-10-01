@@ -24,6 +24,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.ventouxlabs.gatepath.BuildConfig
 import com.ventouxlabs.gatepath.R
@@ -67,10 +68,17 @@ fun PortalScreen(
         modifier = modifier,
         topBar = {
             TopAppBar(
-                title = { Text("Network Sign-In", style = MaterialTheme.typography.titleMedium) },
+                title = {
+                    Text(
+                        "Network Sign-In",
+                        style = MaterialTheme.typography.titleMedium,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                },
                 actions = {
-                    // Between the title and Dismiss: the first action sits
-                    // just right of the title.
+                    // Actions are end-aligned: Log sits just before Dismiss,
+                    // so it is the control between the title and Dismiss.
                     if (onExportLog != null) {
                         TextButton(onClick = onExportLog) {
                             Text(stringResource(R.string.signin_log_button))
