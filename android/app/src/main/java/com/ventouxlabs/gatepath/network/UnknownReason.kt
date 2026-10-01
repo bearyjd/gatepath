@@ -9,9 +9,13 @@ package com.ventouxlabs.gatepath.network
  */
 enum class UnknownReason {
     /**
-     * The bound probe reached the gateway and got a 204 — the network is
-     * genuinely validated, not inconclusive. [classify] takes this branch
-     * from [com.ventouxlabs.gatepath.network.ProbeResult.Validated].
+     * The bound probe got a 204 from our probe endpoint. That proves the
+     * probe's socket reached the network over the Wi-Fi, but not that there
+     * is no portal: venue walled gardens let connectivitycheck.gstatic.com
+     * through before sign-in (seen on a real hotel portal, 2026-10-01). In the
+     * system handoff, Android's own portal verdict plus a held process bind
+     * turn this into Confined instead; see [classify]. [classify] takes this
+     * branch from [com.ventouxlabs.gatepath.network.ProbeResult.Validated].
      */
     BOUND_VALIDATED,
 

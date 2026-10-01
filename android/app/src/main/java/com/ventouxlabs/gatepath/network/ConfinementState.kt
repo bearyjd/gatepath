@@ -5,7 +5,8 @@ import java.net.URI
 /**
  * Is Gatepath's traffic confined to the captive Wi-Fi right now?
  *
- * Classified once per captive incident from the monitor's probe results.
+ * Classified once per captive incident from the monitor's probe results, and
+ * by the system handoff from its own bound probe plus Android's verdict.
  * In-app sign-in is offered only from [Confined]. Pure Kotlin: the decision
  * is the security-relevant part of the app, so it runs under the no-SDK
  * JVM suite.
@@ -56,20 +57,46 @@ data class ClassificationInputs(
     val privateDnsStrict: Boolean,
     /** null when the portal URL has no hostname or no lookup was attempted. */
     val portalHostResolvedOnWifi: Boolean?,
+    /**
+     * The sign-in URL from the system handoff's intent
+     * (`EXTRA_CAPTIVE_PORTAL_URL`). Untrusted on its own: the handoff activity
+     * is exported, so any app can launch it with any URL. Only
+     * [androidPortalVerdict] turns it into Android's verdict. Always null on
+     * the monitor path.
+     */
+    val systemPortalUrl: String? = null,
+    /**
+     * Android currently flags the network `NET_CAPABILITY_CAPTIVE_PORTAL`:
+     * system state, from Android's own probe of its own endpoint, which no
+     * other app can fake.
+     */
+    val systemFlagsCaptive: Boolean = false,
+    /**
+     * The handoff's `acquire` returned a lease on this network. Not a guarantee
+     * by itself (see ProcessBinding's borrow caveat); `GatepathWebView`
+     * re-acquires its own lease and fails closed without one.
+     */
+    val processBindHeld: Boolean = false,
 )
+
+/**
+ * Android's portal verdict for the system handoff: the intent's sign-in URL,
+ * but only while Android still flags the network captive and only if it is a
+ * plain http(s) URL with a host. Null otherwise. The activity loads this URL,
+ * so a spoofed intent can at most supply a URL while a network really is
+ * captive.
+ */
+fun androidPortalVerdict(intentUrl: String?, systemFlagsCaptive: Boolean): String? {
+    if (intentUrl == null || !systemFlagsCaptive) return null
+    val uri = runCatching { URI(intentUrl) }.getOrNull() ?: return null
+    val scheme = uri.scheme?.lowercase()
+    return intentUrl.takeIf { (scheme == "http" || scheme == "https") && !uri.host.isNullOrEmpty() }
+}
 
 fun classify(inputs: ClassificationInputs): ConfinementState {
     val vpnKind = VpnKind.fromInterfaces(inputs.vpnInterfaces)
     return when (val bound = inputs.bound) {
-        is ProbeResult.Portal -> {
-            val host = runCatching { URI(bound.locationUrl).host }.getOrNull()
-            val isHostname = host != null && !isIpLiteral(host)
-            if (isHostname && inputs.privateDnsStrict && inputs.portalHostResolvedOnWifi == false) {
-                ConfinementState.DnsStrict(requireNotNull(host))
-            } else {
-                ConfinementState.Confined(bound.locationUrl, bound.capture)
-            }
-        }
+        is ProbeResult.Portal -> confinedUnlessDnsStrict(bound.locationUrl, bound.capture, inputs)
         is ProbeResult.Error -> when (bound.reason) {
             // The fallback substring match lives entirely inside
             // probeErrorReason() (see ProbeErrorReason.kt) — an Error whose
@@ -84,8 +111,31 @@ fun classify(inputs: ClassificationInputs): ConfinementState {
             ProbeErrorReason.OTHER,
             -> ConfinementState.Unknown(bound.message, fallbackMessage(inputs.fallback), UnknownReason.PROBE_ERROR)
         }
-        is ProbeResult.Validated ->
-            ConfinementState.Unknown("bound probe returned 204", fallbackMessage(inputs.fallback), UnknownReason.BOUND_VALIDATED)
+        // A 204 on our one probe endpoint is not proof there is no portal:
+        // venue walled gardens let connectivitycheck.gstatic.com through
+        // before sign-in. When Android's own probe (another endpoint) says
+        // portal and handed us its URL, the 204 still proves our bound socket
+        // reaches the network over the Wi-Fi, and the held process bind proves
+        // the WebView will be confined too, so sign in on Android's URL.
+        is ProbeResult.Validated -> {
+            val androidUrl = androidPortalVerdict(inputs.systemPortalUrl, inputs.systemFlagsCaptive)
+            if (androidUrl != null && inputs.processBindHeld) {
+                confinedUnlessDnsStrict(androidUrl, capture = null, inputs)
+            } else {
+                ConfinementState.Unknown("bound probe returned 204", fallbackMessage(inputs.fallback), UnknownReason.BOUND_VALIDATED)
+            }
+        }
+    }
+}
+
+/** [ConfinementState.Confined] on [url], or [ConfinementState.DnsStrict] if strict Private DNS cannot resolve its host. */
+private fun confinedUnlessDnsStrict(url: String, capture: PortalProbeCapture?, inputs: ClassificationInputs): ConfinementState {
+    val host = runCatching { URI(url).host }.getOrNull()
+    val isHostname = host != null && !isIpLiteral(host)
+    return if (isHostname && inputs.privateDnsStrict && inputs.portalHostResolvedOnWifi == false) {
+        ConfinementState.DnsStrict(requireNotNull(host))
+    } else {
+        ConfinementState.Confined(url, capture)
     }
 }
 

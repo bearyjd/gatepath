@@ -40,6 +40,14 @@ detailed status lives in [`docs/ROADMAP.md`](docs/ROADMAP.md).
 
 ### Fixed
 
+- **Android:** on venues whose walled garden lets Google's
+  connectivity-check address through before sign-in (a Westin hotel portal,
+  2026-10-01), the system sign-in screen said "Gatepath could not work out
+  what this network is doing" instead of opening the portal: Gatepath's
+  probe got 204 while Android had correctly detected the portal. The screen
+  now trusts Android's verdict and opens Android's sign-in URL when the
+  network is still flagged captive and Gatepath's Wi-Fi bind is held —
+  never shipped; found on a real hotel portal.
 - **Android:** leaving the system sign-in screen any way other than the
   Dismiss button (back gesture, swiping the task away, or a fold/rotation
   rebuild) answered Android with `ignoreNetwork()` — "the user rejects this
