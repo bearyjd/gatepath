@@ -1,0 +1,3 @@
+Gatepath now checks whether its sign-in traffic is really pinned to the hotel Wi-Fi before opening a portal page, and tells you exactly what to do when a VPN or Private DNS is in the way.
+Fixed: leaving the sign-in screen with Back or a fold no longer makes Android drop the Wi-Fi.
+Fixed: portals that let Google's connectivity check through now open the login page instead of an error.

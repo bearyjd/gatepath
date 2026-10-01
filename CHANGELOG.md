@@ -12,6 +12,22 @@ detailed status lives in [`docs/ROADMAP.md`](docs/ROADMAP.md).
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-10-01
+
+### Known limitations
+
+- **Android:** opening Gatepath from the launcher (not from Android's
+  "Sign in to Wi-Fi" notification) at a venue whose walled garden lets
+  Google's connectivity check through still shows "Gatepath could not work
+  out what this network is doing". Sign in from Android's notification
+  instead; that path is fixed (see Fixed).
+- **Android:** with Tailscale covering Gatepath, the sign-in screen can show
+  the generic "could not work out" card (with an "Open VPN app" button)
+  rather than the Tailscale-specific one when the Tailscale check times out.
+- **Android:** verified on a real hotel captive portal (Pixel 10 Pro Fold,
+  GrapheneOS) through the system sign-in screen. Not yet verified on a
+  device: Gatepath excluded from Tailscale's split tunnelling, and TorGuard.
+
 ### Changed
 
 - **Android:** captive incidents are classified into a confinement state
@@ -244,6 +260,7 @@ detailed status lives in [`docs/ROADMAP.md`](docs/ROADMAP.md).
 - Desktop DoH-forwarder detection is intentionally not implemented (no D-Bus/portal
   signal exists). See `docs/BLOCKERS.md`.
 
-[Unreleased]: https://github.com/bearyjd/gatepath/compare/v1.0.1...main
+[Unreleased]: https://github.com/bearyjd/gatepath/compare/v1.1.0...main
+[1.1.0]: https://github.com/bearyjd/gatepath/releases/tag/v1.1.0
 [1.0.1]: https://github.com/bearyjd/gatepath/releases/tag/v1.0.1
 [1.0.0]: https://github.com/bearyjd/gatepath/releases/tag/v1.0.0
