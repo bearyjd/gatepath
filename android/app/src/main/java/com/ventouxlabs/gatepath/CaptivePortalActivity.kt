@@ -235,7 +235,7 @@ class CaptivePortalActivity : ComponentActivity() {
                     "(probe=${probeLabel(bound)}, androidSaysPortal=${androidPortalUrl != null}, " +
                     "bindHeld=${lease != null}, vpn=${vpn.interfaces})",
             )
-            signInLog.record("Probe of ${monitor.probeUrl} over the Wi-Fi: ${probeDetail(bound)}")
+            signInLog.record("Probe of ${LogRedaction.origin(monitor.probeUrl)} over the Wi-Fi: ${probeDetail(bound)}")
             signInLog.record(
                 "Android flags the network captive: ${if (systemFlagsCaptive) "yes" else "no"}; " +
                     "VPN interfaces: ${vpn.interfaces.ifEmpty { listOf("none") }.joinToString()}; " +

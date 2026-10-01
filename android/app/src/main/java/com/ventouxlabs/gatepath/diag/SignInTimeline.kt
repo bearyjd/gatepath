@@ -45,7 +45,7 @@ class SignInTimeline(
     fun record(text: String) {
         val now = clock()
         lastActivityMillis = now
-        val event = Event(now, LogRedaction.redact(text))
+        val event = Event(now, capped(LogRedaction.redact(text)))
         if (head.size < headLimit) {
             head.add(event)
             return
@@ -63,7 +63,7 @@ class SignInTimeline(
         appendLine("Gatepath sign-in log")
         appendLine("Generated ${meta.generatedUtc} for network $network")
         appendLine("Gatepath ${meta.appVersionName} (${meta.appVersionCode}), Android ${meta.androidRelease} (SDK ${meta.androidSdkInt})")
-        appendLine("Only scheme and hostname are kept from URLs; queries, MAC addresses and IP addresses are removed or masked.")
+        appendLine("Only scheme, host and port are kept from URLs. Queries, MAC addresses and IP addresses other than a URL's host are removed or masked, on a best-effort basis.")
         appendLine("The hostnames that remain can identify the venue.")
         appendLine()
         val origin = head.firstOrNull()?.atMillis
@@ -76,6 +76,14 @@ class SignInTimeline(
         tail.forEach { appendLine(line(it, origin)) }
     }
 
+    /**
+     * A gateway controls the probe's error text, so one line is bounded.
+     * Cut only after redaction: cutting before could split an IP or MAC and
+     * leave a fragment no matcher recognises.
+     */
+    private fun capped(redacted: String): String =
+        if (redacted.length <= MAX_LINE_CHARS) redacted else redacted.take(MAX_LINE_CHARS) + " …(truncated)"
+
     private fun line(e: Event, origin: Long): String {
         val millis = (e.atMillis - origin).coerceAtLeast(0)
         return String.format(Locale.ROOT, "+%d.%03ds  %s", millis / 1000, millis % 1000, e.text)
@@ -84,6 +92,7 @@ class SignInTimeline(
     companion object {
         const val MAX_EVENTS = 500
         const val HEAD_EVENTS = 32
+        const val MAX_LINE_CHARS = 2_048
         val MONOTONIC_MILLIS: () -> Long = { System.nanoTime() / 1_000_000 }
     }
 }

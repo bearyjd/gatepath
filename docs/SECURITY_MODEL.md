@@ -174,10 +174,21 @@ is written to disk or sent until the user exports.
   the screen closed.
 - **Stripped:** every known URL is reduced structurally to scheme + host
   (+ port) (`LogRedaction.origin`). Relative or unparseable URLs become a
-  placeholder. Every line also passes a backstop (`LogRedaction.redact`) that
-  drops query and fragment runs and masks MAC addresses (colon, hyphen,
-  dotted, percent-encoded, and bare 12-hex after a mac-like key) and IPv4/IPv6
-  addresses outside URL hosts.
+  placeholder. Every line also passes a backstop (`LogRedaction.redact`). It
+  turns Unicode whitespace (line breaks, tabs, every space) into plain
+  spaces and every other control character into U+FFFD, so one recorded
+  line cannot forge another and a control cannot end a query early. It
+  decodes percent-escapes of
+  delimiters, nested ones included (`%253A`), but never of letters, digits,
+  `-._~`, quotes, parentheses or angle brackets, so a decoded character
+  cannot split a URL or join an identifier. It then drops query and fragment
+  runs (a URL nested in one goes with it), masks MAC addresses (colon,
+  hyphen, dotted, and bare 12-hex after a mac-like key) anywhere in the line,
+  reduces the URLs left through `LogRedaction.origin` (a URL whose scheme was
+  a MAC prints as `[mac]://` and its host), and masks IPv4/IPv6 addresses
+  outside URL hosts. Every pattern runs in linear time, because a gateway
+  controls the probe's error text and it is recorded on the main thread.
+  Each line is capped at 2,048 characters, cut only after redaction.
 - **Kept:** hostnames, including an IP that *is* a URL's host. A
   per-venue or per-session gateway hostname can itself identify where the
   device was. This is looser than the diagnostics bundle, which omits portal
@@ -187,7 +198,20 @@ is written to disk or sent until the user exports.
 
 Like the console capture, this is best-effort: the redaction is pattern-
 and parser-based, and the timeline lives in memory only (one per network,
-continued while active within 30 minutes, lost if the process dies).
+continued while active within 30 minutes, lost if the process dies). Known
+gaps in the backstop, which today only the probe's error text reaches
+unreduced (every URL at a call site goes through `origin` first): a MAC or
+IP whose own characters are percent-encoded, or that directly follows an
+escape left encoded (`%20`); a bare 12-hex MAC after other key names
+(`client_mac=`); lookalike separators (fullwidth colons, `%u003A`); an
+IPv4 address glued to a letter, digit or underscore (`SIP_172.20.9.99`,
+and on Android, whose regex engine counts every letter as part of a word,
+`接続172.20.9.99` too); a bare 12-hex MAC used as a URL's scheme
+(`a1b2c3d4e5f6://`), printed like any other scheme; a path outside a
+recognised URL (a relative one, or one after something that is not a
+scheme, such as an IP address) or in a URL with no host (`file:///…`),
+kept as it is; and a query value holding a space of any kind, which ends
+the run that is dropped.
 
 ## What Gatepath itself sends
 

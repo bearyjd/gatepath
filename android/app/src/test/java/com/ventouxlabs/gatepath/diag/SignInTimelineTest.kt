@@ -43,6 +43,25 @@ class SignInTimelineTest {
     }
 
     @Test
+    fun `a recorded line cannot forge another`() {
+        val t = SignInTimeline(network = "183", clock = clock)
+        t.record("error: Unexpected status line: x\n+9.999s  Classified: confined\r \u0085+8.888s  forged")
+        val event = events(t).single()
+        assertTrue(event.contains("forged"))
+        assertTrue(event.none { it.isISOControl() || it == ' ' || it == ' ' })
+    }
+
+    @Test
+    fun `an overlong line is cut after redaction, never through an identifier`() {
+        val t = SignInTimeline(network = "183", clock = clock)
+        // Cut before redaction, the line would end in "172.2", which no matcher recognises.
+        t.record("a".repeat(SignInTimeline.MAX_LINE_CHARS - 6) + " 172.20.9.99 then more")
+        val event = events(t).single()
+        assertFalse(event.contains("172"))
+        assertTrue(event.endsWith(" …(truncated)"))
+    }
+
+    @Test
     fun `a clock that steps backwards never renders a negative offset`() {
         val t = SignInTimeline(network = "183", clock = clock)
         t.record("first")
@@ -156,11 +175,12 @@ class SignInTimelineTest {
         val relativeLocation = "/login.php?MA=12%3A34%3A56%3A78%3A9A%3ABC&SIP=172.20.9.99&tok=s3cr3t"
         val fullUrl = "https://guest:pw@zqqwqihz.gatewayauth.com/login?MA=$mac&SIP=172.20.9.99&tok=s3cr3t"
         val intentUrl = "intent://scan/#Intent;S.browser_fallback_url=https%3A%2F%2Fx%2F%3Ftok%3Ds3cr3t;end"
+        val probeUrl = "http://connectivitycheck.gstatic.com/generate_204"
         val t = SignInTimeline(network = "183", clock = clock)
         listOf(
             "Sign-in screen opened by Android for network 183 (Android's URL: ${LogRedaction.origin(fullUrl)})",
-            "Probe of http://connectivitycheck.gstatic.com/generate_204 over the Wi-Fi: portal at ${LogRedaction.origin(relativeLocation)} (HTTP 302)",
-            "Probe of http://connectivitycheck.gstatic.com/generate_204 over the Wi-Fi: error TIMEOUT: " +
+            "Probe of ${LogRedaction.origin(probeUrl)} over the Wi-Fi: portal at ${LogRedaction.origin(relativeLocation)} (HTTP 302)",
+            "Probe of ${LogRedaction.origin(probeUrl)} over the Wi-Fi: error TIMEOUT: " +
                 "failed to connect to connectivitycheck.gstatic.com/142.251.13.94 (port 80) from /172.20.9.99 (port 41234)",
             "Showing the login page: ${LogRedaction.origin(fullUrl)}",
             "Page started: ${LogRedaction.origin(fullUrl)}",

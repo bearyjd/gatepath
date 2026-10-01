@@ -4,6 +4,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.io.File
 
 /**
  * The sign-in log leaves the device (share sheet), and real portal URLs carry
@@ -101,6 +102,129 @@ class LogRedactionTest {
         assertEquals("at 09:02:32 on 1.1.0", LogRedaction.redact("at 09:02:32 on 1.1.0"))
     }
 
+    // ── percent-encoding: decoded before anything is matched ────────────────
+
+    @Test
+    fun `a fully percent-encoded url is reduced to its origin`() {
+        assertEquals(
+            "redirect target was https://h",
+            LogRedaction.redact("redirect target was https%3A%2F%2Fh%2F%3FMA%3D12%3A34%3A56%3A78%3A9A%3ABC"),
+        )
+    }
+
+    @Test
+    fun `an encoded delimiter does not shield what follows it`() {
+        // Every %XY ends in a hex digit, which reads as a word character to each matcher.
+        assertEquals("x SIP=[ip]", LogRedaction.redact("x SIP%3D172.20.9.99"))
+        assertEquals("x &MA=[mac]", LogRedaction.redact("x %26MA%3D123456789abc"))
+        assertEquals("x =[mac]", LogRedaction.redact("x %3DAA-BB-CC-DD-EE-FF"))
+        assertEquals("portal at /login.php", LogRedaction.redact("portal at /login.php%3Ftok%3Ds3cr3t"))
+    }
+
+    @Test
+    fun `nested percent-encoding is decoded all the way`() {
+        assertEquals("nested MA=[mac]", LogRedaction.redact("nested MA%253D12%253A34%253A56%253A78%253A9A%253ABC"))
+    }
+
+    @Test
+    fun `decoding never splits a url and lets its tail escape`() {
+        assertEquals("https://h.example", LogRedaction.redact("https://h.example/a%20session-9f3k2"))
+        assertEquals("https://h.example", LogRedaction.redact("https://h.example/a%28x%29s3cret%22%3Cb%3E%27"))
+        assertEquals("/x", LogRedaction.redact("/x?tok=a%0As3cret%09more"))
+    }
+
+    @Test
+    fun `stray percent signs and non-ascii escapes are left alone`() {
+        assertEquals("battery at 100% for caf%C3%A9", LogRedaction.redact("battery at 100% for caf%C3%A9"))
+    }
+
+    @Test(timeout = 2_000)
+    fun `decoding stays linear on deeply nested escapes`() {
+        // A gateway controls the probe's error text, recorded on the main thread.
+        assertEquals("deep %41", LogRedaction.redact("deep %" + "25".repeat(50_000) + "41"))
+    }
+
+    @Test
+    fun `an escaped letter or digit after an identifier does not hide it`() {
+        assertEquals("SIP=[ip]%31%32", LogRedaction.redact("SIP=172.20.9.99%31%32"))
+        assertEquals("MA=[mac]%41", LogRedaction.redact("MA=aa:bb:cc:dd:ee:ff%41"))
+        assertEquals("from [ip]%2E", LogRedaction.redact("from 2001:db8::1%2E"))
+        assertEquals("[mac]%2E", LogRedaction.redact("aabb.ccdd.eeff%2E"))
+    }
+
+    @Test
+    fun `a url nested in a query goes with the query`() {
+        assertEquals(
+            "Unexpected status line: /login",
+            LogRedaction.redact("Unexpected status line: /login?next=http%3A%2F%2F172.20.9.99%2Fx%3Fmac%3D123456789abc"),
+        )
+        assertEquals("x /login", LogRedaction.redact("x /login?r=ws%3A%2F%2Faa-bb-cc-dd-ee-ff%2F"))
+        assertEquals("intent:", LogRedaction.redact("intent:#Intent;S.url=http%3A%2F%2Fh%2F%3Fmac%3D123456789abc;end"))
+    }
+
+    @Test
+    fun `a mac or a token is never printed as a url's scheme or host`() {
+        assertEquals("id [mac]://x", LogRedaction.redact("id aa-bb-cc-dd-ee-ff%3A%2F%2Fx"))
+        val out = LogRedaction.redact("x%3A%2F%2FMA=12:34:56:78:9A:BC then https://h.example;jsessionid=ABC123/login")
+        for (secret in listOf("12:34", "MA=", "jsessionid", "ABC123")) assertFalse("leaked '$secret' in: $out", out.contains(secret))
+    }
+
+    @Test
+    fun `line breaks, controls and unicode spaces become plain spaces`() {
+        assertEquals("a b c d e f g", LogRedaction.redact("a\nb\rc d\u0085e f\tg"))
+    }
+
+    @Test
+    fun `other controls become a replacement character and end nothing early`() {
+        // A space would end the query or URL run, and the tail would print as plain text.
+        assertEquals("a�b�c�d", LogRedaction.redact("a\u0001b\u001Cc\u007Fd"))
+        assertEquals("x /login", LogRedaction.redact("x /login?a=1\u0001tok=SECRET123"))
+        assertEquals("x http://h", LogRedaction.redact("x http://h/p\u0001/session/8f3a9c2e1b"))
+    }
+
+    @Test
+    fun `a url whose scheme is a mac keeps only its host`() {
+        assertEquals("x [mac]://portal", LogRedaction.redact("x aa-bb-cc-dd-ee-ff://portal/session/8f3a9c2e1b"))
+        assertEquals("x [mac]://h", LogRedaction.redact("x aabb.ccdd.eeff://h/tok/ABC123"))
+        assertEquals("x [mac]://h", LogRedaction.redact("x 12:34:56:78:9a:bc://h/session/8f3a9c2e1b"))
+        assertEquals("x[mac]://h", LogRedaction.redact("xaa-bb-cc-dd-ee-ff://h/session/8f3a9c2e1b"))
+        assertEquals("id [mac]://x", LogRedaction.redact("id aa-bb-cc-dd-ee-ff%3A%2F%2Fx%2Fsession%2F8f3a9c2e1b"))
+    }
+
+    @Test
+    fun `a url glued to a digit, underscore or non-ascii letter is still reduced`() {
+        assertEquals("x http://h", LogRedaction.redact("x 1http://h/session/8f3a9c2e1b"))
+        assertEquals("x a_http://h", LogRedaction.redact("x a_http://h/session/8f3a9c2e1b"))
+        assertEquals("éhttp://h", LogRedaction.redact("éhttp://h/session/8f3a9c2e1b"))
+        assertEquals("接続http://h", LogRedaction.redact("接続http://h/session/8f3a9c2e1b"))
+    }
+
+    @Test(timeout = 2_000)
+    fun `url matching stays linear on long runs of scheme characters`() {
+        // A gateway controls the probe's error text, recorded on the main thread.
+        val dotted = "Unexpected status line: " + "a.".repeat(64_000)
+        assertEquals(dotted, LogRedaction.redact(dotted))
+        val hyphenated = "-a".repeat(32_000)
+        assertEquals(hyphenated, LogRedaction.redact(hyphenated))
+    }
+
+    /**
+     * Guard, not a comment: Android's regex engine is ICU, where `\b`, `\w`
+     * and `\d` are Unicode-aware, so a pattern using them matches differently
+     * on a device than in these JVM tests (`接続mac=…` is no word boundary on
+     * ICU). The patterns use explicit ASCII classes and lookarounds instead.
+     * `\s` is allowed: [LogRedaction.redact] turns all Unicode whitespace into
+     * a plain space before anything else, so `\s` sees only that on both.
+     */
+    @Test
+    fun `no pattern relies on a unicode-dependent class`() {
+        val source = File(mainSourceRoot(), "com/ventouxlabs/gatepath/diag/LogRedaction.kt").readText()
+        val patterns = Regex("\"\"\"(.*?)\"\"\"", RegexOption.DOT_MATCHES_ALL).findAll(source).map { it.groupValues[1] }.toList()
+        assertTrue("no patterns found in LogRedaction.kt", patterns.size >= 5)
+        val offenders = patterns.filter { Regex("""\\[bBwWdD]""").containsMatchIn(it) }
+        assertTrue("ICU reads these differently: $offenders", offenders.isEmpty())
+    }
+
     @Test
     fun `nothing identifying survives the real portal shapes`() {
         val out = LogRedaction.redact("$portalRedirect then $loyaltyHop")
@@ -108,5 +232,23 @@ class LogRedactionTest {
             assertFalse("leaked '$secret' in: $out", out.contains(secret))
         }
         assertTrue(out.contains("secure.11os.com") && out.contains("www.marriott.com"))
+    }
+
+    /**
+     * `android/app/src/main/java`, from `-Dgatepath.repo.root` (set by
+     * run-jvm-tests.sh) or by walking up from the working directory (Gradle
+     * runs in android/app).
+     */
+    private fun mainSourceRoot(): File {
+        val relative = "android/app/src/main/java"
+        System.getProperty("gatepath.repo.root")?.let { root ->
+            File(root, relative).takeIf { it.isDirectory }?.let { return it }
+        }
+        var dir: File? = File(System.getProperty("user.dir") ?: ".").absoluteFile
+        while (dir != null) {
+            File(dir, relative).takeIf { it.isDirectory }?.let { return it }
+            dir = dir.parentFile
+        }
+        throw AssertionError("$relative not found (set -Dgatepath.repo.root=<repo>)")
     }
 }
