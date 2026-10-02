@@ -170,6 +170,9 @@ MAIN_SOURCES=(
     "$SRC_MAIN/com/ventouxlabs/gatepath/diag/DiagnosticsBundle.kt"
     "$SRC_MAIN/com/ventouxlabs/gatepath/diag/CertSummary.kt"
     "$SRC_MAIN/com/ventouxlabs/gatepath/diag/IncidentEvidence.kt"
+    "$SRC_MAIN/com/ventouxlabs/gatepath/diag/LogRedaction.kt"
+    "$SRC_MAIN/com/ventouxlabs/gatepath/diag/SignInTimeline.kt"
+    "$SRC_MAIN/com/ventouxlabs/gatepath/diag/SignInTimelineStore.kt"
     "$SRC_MAIN/com/ventouxlabs/gatepath/session/IncidentTracker.kt"
     "$SRC_MAIN/com/ventouxlabs/gatepath/BindWatchdog.kt"
 )
@@ -268,6 +271,8 @@ TEST_SOURCES=(
     "$SRC_TEST/com/ventouxlabs/gatepath/ProcessBindingTest.kt"
     "$SRC_TEST/com/ventouxlabs/gatepath/ConfinementStateTest.kt"
     "$SRC_TEST/com/ventouxlabs/gatepath/CaptivePortalReplyTest.kt"
+    "$SRC_TEST/com/ventouxlabs/gatepath/diag/LogRedactionTest.kt"
+    "$SRC_TEST/com/ventouxlabs/gatepath/diag/SignInTimelineTest.kt"
     "$SRC_TEST/com/ventouxlabs/gatepath/VpnPrefixParityTest.kt"
     "$SRC_TEST/com/ventouxlabs/gatepath/BoundedReaderTest.kt"
     "$SRC_TEST/com/ventouxlabs/gatepath/diag/DiagnosticEngineTest.kt"

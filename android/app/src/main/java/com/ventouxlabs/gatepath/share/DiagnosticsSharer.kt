@@ -12,6 +12,7 @@ import com.ventouxlabs.gatepath.diag.ConsoleCaptureFile
 import com.ventouxlabs.gatepath.diag.DiagnosisResult
 import com.ventouxlabs.gatepath.diag.DiagnosticsBundle
 import com.ventouxlabs.gatepath.diag.IncidentEvidence
+import com.ventouxlabs.gatepath.diag.SignInTimeline
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -33,6 +34,7 @@ object DiagnosticsSharer {
     /** Cache subdir declared in res/xml/file_paths.xml. */
     private const val CACHE_SUBDIR = "diagnostics"
     private const val FILE_NAME = "gatepath-diagnostics.txt"
+    private const val SIGNIN_LOG_FILE_NAME = "gatepath-signin-log.txt"
     const val MIME_TYPE = "text/plain"
 
     /** Authority must match the `<provider>` in AndroidManifest.xml. */
@@ -81,6 +83,19 @@ object DiagnosticsSharer {
         val file = File(dir, FILE_NAME)
         file.writeText(text, Charsets.UTF_8)
 
+        FileProvider.getUriForFile(context, authority(context), file)
+    }
+
+    /**
+     * Writes [timeline] (already redacted to hostnames, see SignInTimeline)
+     * to the same FileProvider-shared cache directory and returns its
+     * content:// [Uri]. Runs its file I/O off the main thread.
+     */
+    suspend fun writeSignInLog(context: Context, timeline: SignInTimeline): Uri = withContext(Dispatchers.IO) {
+        val dir = File(context.cacheDir, CACHE_SUBDIR)
+        dir.mkdirs()
+        val file = File(dir, SIGNIN_LOG_FILE_NAME)
+        file.writeText(timeline.render(collectMeta(context)), Charsets.UTF_8)
         FileProvider.getUriForFile(context, authority(context), file)
     }
 

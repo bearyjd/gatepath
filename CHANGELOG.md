@@ -12,6 +12,16 @@ detailed status lives in [`docs/ROADMAP.md`](docs/ROADMAP.md).
 
 ## [Unreleased]
 
+### Added
+
+- **Android:** a sign-in log on the system sign-in screen. A "Log" button
+  (between the title and Dismiss) and an "Export log" button on every status
+  card export Gatepath's own step-by-step record of the sign-in: what Android
+  handed over, the probe result, whether the Wi-Fi pin was granted, the
+  classification, each page loaded, folds/rebuilds, and what Gatepath told
+  Android when the screen closed. URLs are reduced to hostnames and MAC
+  addresses are masked before anything is recorded.
+
 ## [1.1.0] - 2026-10-01
 
 ### Known limitations

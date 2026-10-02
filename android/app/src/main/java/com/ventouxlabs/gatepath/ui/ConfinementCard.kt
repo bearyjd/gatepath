@@ -11,7 +11,9 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
+import com.ventouxlabs.gatepath.R
 import com.ventouxlabs.gatepath.network.ConfinementState
 
 /**
@@ -50,6 +52,12 @@ fun ConfinementCard(
      * Leave it true wherever [onShareEvidence] actually shares something.
      */
     showShareEvidence: Boolean = true,
+    /**
+     * Exports the sign-in log. Non-null only on the system-handoff entry point
+     * (`CaptivePortalActivity`), where these cards are exactly when a log is
+     * wanted; null elsewhere hides the button.
+     */
+    onExportLog: (() -> Unit)? = null,
 ) {
     val action = ConfinementStateText.action(state)
     Surface(
@@ -68,6 +76,11 @@ fun ConfinementCard(
             if (showShareEvidence && action != ConfinementAction.SHARE_EVIDENCE) {
                 TextButton(onClick = onShareEvidence) {
                     Text(ConfinementStateText.actionLabel(ConfinementAction.SHARE_EVIDENCE))
+                }
+            }
+            if (onExportLog != null) {
+                TextButton(onClick = onExportLog) {
+                    Text(stringResource(R.string.signin_log_export))
                 }
             }
         }
