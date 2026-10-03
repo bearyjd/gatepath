@@ -190,9 +190,18 @@ object DiagnosticsBundle {
     // this is a best-effort heuristic, not a guarantee (see SECURITY_MODEL.md
     // "Off-device diagnostics: WebView console capture"). JWT is applied
     // first so its three segments collapse to one REDACTED token instead of
-    // three separate ones joined by dots.
-    private val JWT = Regex("""\b[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b""")
-    private val LONG_TOKEN = Regex("""\b[A-Za-z0-9_-]{20,}\b""")
+    // three separate ones joined by dots; any further dotted parts (a
+    // five-part JWE) go with it, matched as one character class rather than a
+    // repeated group, which Java's engine recurses into once per repetition.
+    // Both match whole runs of token characters, bounded by
+    // lookarounds rather than \b: a word boundary sits inside `a-a-a…` before
+    // every letter, and retrying JWT from each one was quadratic; ICU's \b
+    // also differs from the JVM's next to non-ASCII text.
+    private val JWT = Regex(
+        """(?<![A-Za-z0-9_-])[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}""" +
+            """(?:[.A-Za-z0-9_-]*[A-Za-z0-9_-])?(?![A-Za-z0-9_-])""",
+    )
+    private val LONG_TOKEN = Regex("""(?<![A-Za-z0-9_-])[A-Za-z0-9_-]{20,}(?![A-Za-z0-9_-])""")
 
     /**
      * Console text gets the known-identifier/IPv4 scrub first, then the

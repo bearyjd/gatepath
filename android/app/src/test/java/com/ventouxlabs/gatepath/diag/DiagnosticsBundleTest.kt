@@ -382,6 +382,21 @@ class DiagnosticsBundleTest {
     }
 
     @Test
+    fun `redact masks a dotted token run longer than three segments whole`() {
+        // Like a five-part JWE. Segments under LONG_TOKEN's 20 characters, so only
+        // the JWT pattern can mask the fourth and fifth.
+        val jwe = "k7Qx2mVb9LpZ.Hn4Rt8Wc1YsA.u6Jd3Fe0Gq5T.Zy2Bn7Mk4Xw1.Pc9Lr6Sd2Vh8"
+        val out = DiagnosticsBundle.build(
+            meta,
+            entries = emptyList(),
+            diagnosis = null,
+            consoleEntries = listOf(consoleEntry("auth token: $jwe")),
+            redact = true,
+        )
+        for (segment in jwe.split('.')) assertFalse("segment '$segment' survived", out.contains(segment))
+    }
+
+    @Test
     fun `redact does not mangle ordinary short portal copy`() {
         val out = DiagnosticsBundle.build(
             meta,
@@ -444,6 +459,33 @@ class DiagnosticsBundleTest {
         )
         assertTrue("a 19-char token is below the threshold and must survive", out.contains(nineteen))
         assertFalse("a 20-char token must be masked", out.contains(twenty))
+    }
+
+    @Test(timeout = 2_000)
+    fun `redaction stays linear on a long run of token characters`() {
+        // The capture buffer caps a message at 500 characters; build() must not depend on that.
+        val run = "a-".repeat(32_000)
+        val out = DiagnosticsBundle.build(
+            meta,
+            entries = emptyList(),
+            diagnosis = null,
+            consoleEntries = listOf(consoleEntry(run)),
+            redact = true,
+        )
+        assertFalse(out.contains("a-a-a-a-a-a-a-a-a-a-a-"))
+    }
+
+    @Test(timeout = 2_000)
+    fun `a long dotted token run is masked whole without overflowing`() {
+        val run = "k7Qx2mVb9L.".repeat(6_000) + "k7Qx2mVb9L"
+        val out = DiagnosticsBundle.build(
+            meta,
+            entries = emptyList(),
+            diagnosis = null,
+            consoleEntries = listOf(consoleEntry(run)),
+            redact = true,
+        )
+        assertFalse(out.contains("k7Qx2mVb9L"))
     }
 
     @Test
