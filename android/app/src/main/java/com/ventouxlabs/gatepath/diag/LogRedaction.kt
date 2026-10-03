@@ -80,10 +80,13 @@ object LogRedaction {
      * A bare 12-hex MAC, only right after a mac-like key, so ordinary hex ids
      * are left alone. The key must not follow an ASCII word character (a
      * lookbehind, so a non-ASCII letter before it counts as a boundary on ICU
-     * too).
+     * too). `[\s]*`, not `\s*`: ICU pushes a backtrack frame per character of
+     * a bare `\s*` and overflows its stack on a few hundred thousand spaces in
+     * a gateway's text, but runs a bracketed class of two or more characters
+     * in constant stack.
      */
     private val MAC_KEYED =
-        Regex("""(?i)(?<![A-Za-z0-9_])((?:user_)?mac(?:_address)?|ma)(\s*[=:]\s*)[0-9a-f]{12}(?![0-9a-f])""")
+        Regex("""(?i)(?<![A-Za-z0-9_])((?:user_)?mac(?:_address)?|ma)([\s]*[=:][\s]*)[0-9a-f]{12}(?![0-9a-f])""")
 
     /**
      * Scheme + host (+ port) of [url]. `(none)` for null, `(relative URL)`

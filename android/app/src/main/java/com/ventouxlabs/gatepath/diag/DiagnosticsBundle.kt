@@ -97,8 +97,18 @@ object DiagnosticsBundle {
     private val json = Json { encodeDefaults = true }
 
     // Bare IPv4 literal — probe errors / DNS answers echo these verbatim.
-    // Also used by LogRedaction for the sign-in log.
-    internal val IPV4 = Regex("""\b(?:\d{1,3}\.){3}\d{1,3}\b""")
+    // Also used by LogRedaction for the sign-in log. Digit lookarounds rather
+    // than \b, so an address glued to a letter or underscore (`SIP_172.…`) is
+    // still masked. \p{Nd} (any decimal digit) rather than \d, which is ASCII
+    // on the JVM but Unicode on Android's ICU: the two engines then agree
+    // (except for a digit outside the BMP right before the address, where
+    // Java's lookbehind sees one surrogate), and ICU masks everything the old
+    // \d did. The rest of a longer dotted run is
+    // masked with it, so no octet survives next to the mask; it is matched as
+    // one character class, not a repeated group, which Java's engine recurses
+    // into once per repetition (a run of a few thousand octets overflowed the
+    // stack).
+    internal val IPV4 = Regex("""(?<!\p{Nd})(?:\p{Nd}{1,3}\.){3}\p{Nd}{1,3}(?:[.\p{Nd}]*\p{Nd})?(?!\p{Nd})""")
 
     // Bare IPv6 literal — resolver answers can be v6 too. Grammar-accurate: a
     // full form of exactly eight 1-to-4-hex groups, or a compressed form that
@@ -190,9 +200,22 @@ object DiagnosticsBundle {
     // this is a best-effort heuristic, not a guarantee (see SECURITY_MODEL.md
     // "Off-device diagnostics: WebView console capture"). JWT is applied
     // first so its three segments collapse to one REDACTED token instead of
-    // three separate ones joined by dots.
-    private val JWT = Regex("""\b[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b""")
-    private val LONG_TOKEN = Regex("""\b[A-Za-z0-9_-]{20,}\b""")
+    // three separate ones joined by dots; any further dotted parts (a
+    // five-part JWE) go with it, matched as one character class rather than a
+    // repeated group, which Java's engine recurses into once per repetition.
+    // Both match whole runs of token characters, bounded by
+    // lookarounds rather than \b: a word boundary sits inside `a-a-a…` before
+    // every letter, and retrying JWT from each one was quadratic; ICU's \b
+    // also differs from the JVM's next to non-ASCII text. `{8}[…]*` rather
+    // than `{8,}`: ICU pushes a backtrack frame per character of an open count
+    // and overflows its stack on a few hundred thousand, and a page controls
+    // the console line's source host, which has no length cap.
+    private val JWT = Regex(
+        """(?<![A-Za-z0-9_-])[A-Za-z0-9_-]{8}[A-Za-z0-9_-]*\.[A-Za-z0-9_-]{8}[A-Za-z0-9_-]*""" +
+            """\.[A-Za-z0-9_-]{8}[A-Za-z0-9_-]*""" +
+            """(?:[.A-Za-z0-9_-]*[A-Za-z0-9_-])?(?![A-Za-z0-9_-])""",
+    )
+    private val LONG_TOKEN = Regex("""(?<![A-Za-z0-9_-])[A-Za-z0-9_-]{20}[A-Za-z0-9_-]*(?![A-Za-z0-9_-])""")
 
     /**
      * Console text gets the known-identifier/IPv4 scrub first, then the
