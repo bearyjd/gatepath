@@ -97,8 +97,16 @@ object DiagnosticsBundle {
     private val json = Json { encodeDefaults = true }
 
     // Bare IPv4 literal — probe errors / DNS answers echo these verbatim.
-    // Also used by LogRedaction for the sign-in log.
-    internal val IPV4 = Regex("""\b(?:\d{1,3}\.){3}\d{1,3}\b""")
+    // Also used by LogRedaction for the sign-in log. Digit lookarounds rather
+    // than \b, so an address glued to a letter or underscore (`SIP_172.…`) is
+    // still masked. \p{Nd} (any decimal digit) rather than \d, which is ASCII
+    // on the JVM but Unicode on Android's ICU: the two engines then agree, and
+    // ICU masks everything the old \d did. The rest of a longer dotted run is
+    // masked with it, so no octet survives next to the mask; it is matched as
+    // one character class, not a repeated group, which Java's engine recurses
+    // into once per repetition (a run of a few thousand octets overflowed the
+    // stack).
+    internal val IPV4 = Regex("""(?<!\p{Nd})(?:\p{Nd}{1,3}\.){3}\p{Nd}{1,3}(?:[.\p{Nd}]*\p{Nd})?(?!\p{Nd})""")
 
     // Bare IPv6 literal — resolver answers can be v6 too. Grammar-accurate: a
     // full form of exactly eight 1-to-4-hex groups, or a compressed form that

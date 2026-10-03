@@ -461,6 +461,30 @@ class DiagnosticsBundleTest {
         assertFalse("a 20-char token must be masked", out.contains(twenty))
     }
 
+    @Test
+    fun `redact masks an ip glued to a letter, digit or underscore`() {
+        val out = DiagnosticsBundle.build(
+            meta,
+            entries = emptyList(),
+            diagnosis = null,
+            consoleEntries = listOf(consoleEntry("SIP_172.20.9.99 ip172.20.9.98 gw172.20.9.97x")),
+            redact = true,
+        )
+        assertFalse("an IP glued to its neighbours must not leak", out.contains("172.20.9."))
+    }
+
+    @Test
+    fun `redact masks a dotted run longer than an ip whole, so no octet survives`() {
+        val out = DiagnosticsBundle.build(
+            meta,
+            entries = emptyList(),
+            diagnosis = null,
+            consoleEntries = listOf(consoleEntry("from 172.20.9.99.250 and _172.20.9.99.9")),
+            redact = true,
+        )
+        assertTrue(out, out.contains("from REDACTED and _REDACTED"))
+    }
+
     @Test(timeout = 2_000)
     fun `redaction stays linear on a long run of token characters`() {
         // The capture buffer caps a message at 500 characters; build() must not depend on that.

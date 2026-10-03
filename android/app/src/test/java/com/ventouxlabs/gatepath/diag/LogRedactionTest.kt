@@ -4,7 +4,6 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
-import java.io.File
 
 /**
  * The sign-in log leaves the device (share sheet), and real portal URLs carry
@@ -95,6 +94,17 @@ class LogRedactionTest {
         assertEquals("cisco [mac]", LogRedaction.redact("cisco 1234.5678.9abc"))
         assertEquals("enc [mac]", LogRedaction.redact("enc 12%3A34%3A56%3A78%3A9A%3ABC"))
         assertEquals("mac=[mac]", LogRedaction.redact("mac=167ada6cf76a"))
+    }
+
+    @Test
+    fun `an ip glued to a letter, digit or underscore is still masked`() {
+        assertEquals("SIP_[ip] ip[ip] gw[ip]x", LogRedaction.redact("SIP_172.20.9.99 ip172.20.9.98 gw172.20.9.97x"))
+    }
+
+    @Test(timeout = 2_000)
+    fun `a long dotted run of digits is masked whole without overflowing`() {
+        // A repeated group in the IPv4 pattern overflowed Java's stack at a few thousand octets.
+        assertEquals("x [ip]", LogRedaction.redact("x " + "1.".repeat(64_000) + "1"))
     }
 
     @Test
@@ -208,23 +218,6 @@ class LogRedactionTest {
         assertEquals(hyphenated, LogRedaction.redact(hyphenated))
     }
 
-    /**
-     * Guard, not a comment: Android's regex engine is ICU, where `\b`, `\w`
-     * and `\d` are Unicode-aware, so a pattern using them matches differently
-     * on a device than in these JVM tests (`接続mac=…` is no word boundary on
-     * ICU). The patterns use explicit ASCII classes and lookarounds instead.
-     * `\s` is allowed: [LogRedaction.redact] turns all Unicode whitespace into
-     * a plain space before anything else, so `\s` sees only that on both.
-     */
-    @Test
-    fun `no pattern relies on a unicode-dependent class`() {
-        val source = File(mainSourceRoot(), "com/ventouxlabs/gatepath/diag/LogRedaction.kt").readText()
-        val patterns = Regex("\"\"\"(.*?)\"\"\"", RegexOption.DOT_MATCHES_ALL).findAll(source).map { it.groupValues[1] }.toList()
-        assertTrue("no patterns found in LogRedaction.kt", patterns.size >= 5)
-        val offenders = patterns.filter { Regex("""\\[bBwWdD]""").containsMatchIn(it) }
-        assertTrue("ICU reads these differently: $offenders", offenders.isEmpty())
-    }
-
     @Test
     fun `nothing identifying survives the real portal shapes`() {
         val out = LogRedaction.redact("$portalRedirect then $loyaltyHop")
@@ -232,23 +225,5 @@ class LogRedactionTest {
             assertFalse("leaked '$secret' in: $out", out.contains(secret))
         }
         assertTrue(out.contains("secure.11os.com") && out.contains("www.marriott.com"))
-    }
-
-    /**
-     * `android/app/src/main/java`, from `-Dgatepath.repo.root` (set by
-     * run-jvm-tests.sh) or by walking up from the working directory (Gradle
-     * runs in android/app).
-     */
-    private fun mainSourceRoot(): File {
-        val relative = "android/app/src/main/java"
-        System.getProperty("gatepath.repo.root")?.let { root ->
-            File(root, relative).takeIf { it.isDirectory }?.let { return it }
-        }
-        var dir: File? = File(System.getProperty("user.dir") ?: ".").absoluteFile
-        while (dir != null) {
-            File(dir, relative).takeIf { it.isDirectory }?.let { return it }
-            dir = dir.parentFile
-        }
-        throw AssertionError("$relative not found (set -Dgatepath.repo.root=<repo>)")
     }
 }

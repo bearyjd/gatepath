@@ -272,6 +272,7 @@ TEST_SOURCES=(
     "$SRC_TEST/com/ventouxlabs/gatepath/ConfinementStateTest.kt"
     "$SRC_TEST/com/ventouxlabs/gatepath/CaptivePortalReplyTest.kt"
     "$SRC_TEST/com/ventouxlabs/gatepath/diag/LogRedactionTest.kt"
+    "$SRC_TEST/com/ventouxlabs/gatepath/diag/RedactionPatternsTest.kt"
     "$SRC_TEST/com/ventouxlabs/gatepath/diag/SignInTimelineTest.kt"
     "$SRC_TEST/com/ventouxlabs/gatepath/VpnPrefixParityTest.kt"
     "$SRC_TEST/com/ventouxlabs/gatepath/BoundedReaderTest.kt"
