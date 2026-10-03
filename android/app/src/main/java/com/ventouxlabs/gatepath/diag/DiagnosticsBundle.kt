@@ -100,8 +100,9 @@ object DiagnosticsBundle {
     // Also used by LogRedaction for the sign-in log. Digit lookarounds rather
     // than \b, so an address glued to a letter or underscore (`SIP_172.…`) is
     // still masked. \p{Nd} (any decimal digit) rather than \d, which is ASCII
-    // on the JVM but Unicode on Android's ICU: the two engines then agree, and
-    // ICU masks everything the old \d did. The rest of a longer dotted run is
+    // on the JVM but Unicode on Android's ICU: the two engines then agree
+    // (except next to a digit outside the BMP, where Java's lookbehind sees
+    // one surrogate), and ICU masks everything the old \d did. The rest of a longer dotted run is
     // masked with it, so no octet survives next to the mask; it is matched as
     // one character class, not a repeated group, which Java's engine recurses
     // into once per repetition (a run of a few thousand octets overflowed the
@@ -204,12 +205,16 @@ object DiagnosticsBundle {
     // Both match whole runs of token characters, bounded by
     // lookarounds rather than \b: a word boundary sits inside `a-a-a…` before
     // every letter, and retrying JWT from each one was quadratic; ICU's \b
-    // also differs from the JVM's next to non-ASCII text.
+    // also differs from the JVM's next to non-ASCII text. `{8}[…]*` rather
+    // than `{8,}`: ICU pushes a backtrack frame per character of an open count
+    // and overflows its stack on a few hundred thousand, and a page controls
+    // the console line's source host, which has no length cap.
     private val JWT = Regex(
-        """(?<![A-Za-z0-9_-])[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}""" +
+        """(?<![A-Za-z0-9_-])[A-Za-z0-9_-]{8}[A-Za-z0-9_-]*\.[A-Za-z0-9_-]{8}[A-Za-z0-9_-]*""" +
+            """\.[A-Za-z0-9_-]{8}[A-Za-z0-9_-]*""" +
             """(?:[.A-Za-z0-9_-]*[A-Za-z0-9_-])?(?![A-Za-z0-9_-])""",
     )
-    private val LONG_TOKEN = Regex("""(?<![A-Za-z0-9_-])[A-Za-z0-9_-]{20,}(?![A-Za-z0-9_-])""")
+    private val LONG_TOKEN = Regex("""(?<![A-Za-z0-9_-])[A-Za-z0-9_-]{20}[A-Za-z0-9_-]*(?![A-Za-z0-9_-])""")
 
     /**
      * Console text gets the known-identifier/IPv4 scrub first, then the

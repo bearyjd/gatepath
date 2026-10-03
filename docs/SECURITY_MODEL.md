@@ -108,10 +108,11 @@ Redaction (default on, same toggle as the rest of the bundle) applies two
 passes to console text: the same known-identifier substitution (SSID,
 gateway IP, portal domain) and IPv4 masking already applied to the diagnosis
 text, plus a generic heuristic that masks long alphanumeric/base64/hex runs
-(≥20 characters) and JWT-shaped strings. The patterns use explicit ASCII
-classes rather than `\b`/`\d`, so Android's regex engine (ICU, where those
-are Unicode-aware) masks the same text the JVM tests check, including an
-address or token glued to non-ASCII text. **This is best-effort, not a
+(≥20 characters) and JWT-shaped strings. The patterns use explicit classes
+(ASCII token characters, `\p{Nd}` digits) rather than `\b`/`\d`, so
+Android's regex engine (ICU, where those are Unicode-aware) masks the same
+text the JVM tests check, including an address or token right after a
+non-ASCII letter. **This is best-effort, not a
 guarantee** — an unusual secret shape could still slip through, and the
 heuristic can occasionally over-redact an ordinary long identifier. Unlike
 logcat (which still drops message bodies in release builds — a broader
@@ -206,8 +207,9 @@ gaps in the backstop, which today only the probe's error text reaches
 unreduced (every URL at a call site goes through `origin` first): a MAC or
 IP whose own characters are percent-encoded, or that directly follows an
 escape left encoded (`%20`); a bare 12-hex MAC after other key names
-(`client_mac=`); lookalike separators (fullwidth colons, `%u003A`); a
-bare 12-hex MAC used as a URL's scheme
+(`client_mac=`); lookalike separators (fullwidth colons, `%u003A`); an
+IPv4 address directly after another digit, in any script (`1172.20.9.99`);
+a bare 12-hex MAC used as a URL's scheme
 (`a1b2c3d4e5f6://`), printed like any other scheme; a path outside a
 recognised URL (a relative one, or one after something that is not a
 scheme, such as an IP address) or in a URL with no host (`file:///…`),

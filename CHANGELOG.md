@@ -25,9 +25,9 @@ detailed status lives in [`docs/ROADMAP.md`](docs/ROADMAP.md).
 ### Fixed
 
 - **Android:** a redacted diagnostics bundle now masks an IPv4 address
-  glued to a letter, digit or underscore (`SIP_172.20.9.99`), and an
-  address or token right after non-ASCII text, which Android's regex engine
-  read as part of the same word. A dotted run longer than an address, or a
+  glued to a letter or underscore (`SIP_172.20.9.99`), and an address or
+  token right after a non-ASCII letter, which Android's regex engine read as
+  part of the same word. A dotted run longer than an address, or a
   token with more than three dotted parts, is now masked whole instead of
   leaving its last part behind.
 
