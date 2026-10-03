@@ -101,8 +101,9 @@ object DiagnosticsBundle {
     // than \b, so an address glued to a letter or underscore (`SIP_172.…`) is
     // still masked. \p{Nd} (any decimal digit) rather than \d, which is ASCII
     // on the JVM but Unicode on Android's ICU: the two engines then agree
-    // (except next to a digit outside the BMP, where Java's lookbehind sees
-    // one surrogate), and ICU masks everything the old \d did. The rest of a longer dotted run is
+    // (except for a digit outside the BMP right before the address, where
+    // Java's lookbehind sees one surrogate), and ICU masks everything the old
+    // \d did. The rest of a longer dotted run is
     // masked with it, so no octet survives next to the mask; it is matched as
     // one character class, not a repeated group, which Java's engine recurses
     // into once per repetition (a run of a few thousand octets overflowed the

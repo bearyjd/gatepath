@@ -18,6 +18,11 @@ import java.io.File
  */
 class RedactionPatternsTest {
 
+    private companion object {
+        /** Above this, ICU's frames for a bounded count add up; today's largest is `{20}`. */
+        const val MAX_BOUNDED_COUNT = 64
+    }
+
     @Test
     fun `no sign-in log pattern relies on a unicode-dependent class`() {
         assertAsciiOnly("LogRedaction.kt", minPatterns = 7, banned = Regex("""\\[bBwWdD]"""))
@@ -31,12 +36,14 @@ class RedactionPatternsTest {
     /**
      * Guard, not a comment: these patterns run on text a gateway or a portal
      * page controls, with no length bound. Only a repetition of one bracketed
-     * character class (`[a-z]*`, `[^\s]+`) runs in constant stack on both
-     * engines. ICU pushes a backtrack frame per character for a bare escape
-     * class (`\s*`), a literal (` *`) or an open count (`[a-z]{8,}`) and fails
-     * with U_REGEX_STACK_OVERFLOW after a few hundred thousand; Java recurses
-     * once per repetition of a group (`(?:\.[0-9]{1,3})*`) and overflows after
-     * a few thousand. Bounded counts (`{1,3}`, `{4}`) are fine.
+     * character class of two or more characters (`[a-z]*`, `[^\s]+`, `[\s]*`)
+     * runs in constant stack on both engines. ICU pushes a backtrack frame per
+     * character for a bare escape class (`\s*`), a literal (` *`), a class of
+     * one character (`[ ]*`, which it compiles to a literal), an open count
+     * (`[a-z]{8,}`) or a large bounded one, and fails with
+     * U_REGEX_STACK_OVERFLOW after a few hundred thousand; Java recurses once
+     * per repetition of a group (`(?:\.[0-9]{1,3})*`) and overflows after a
+     * few thousand. Small bounded counts (`{1,3}`, `{20}`) are fine.
      */
     @Test
     fun `every unbounded repetition is a single bracketed character class`() {
@@ -49,10 +56,18 @@ class RedactionPatternsTest {
 
     @Test
     fun `the repetition scan flags what it should`() {
-        for (bad in listOf("""ma\s*=""", """a *b""", """[a-z]{8,}""", """(?:\.[0-9]{1,3})*""", """(ab)+""", """x+""")) {
+        val bad = listOf(
+            """ma\s*=""", """a *b""", """[a-z]{8,}""", """(?:\.[0-9]{1,3})*""", """(ab)+""", """x+""",
+            """ma[ ]*=""", """[\.]*x""", """\x{41}*""", """[a-z]{0,100000}""",
+        )
+        for (bad in bad) {
             assertTrue("missed: $bad", unboundedNonClassRepetition(bad) != null)
         }
-        for (good in listOf("""[\s]*=""", """[a-z]{8}[a-z]*""", """[^\s"'<>()]+""", """(?:[0-9]{1,3}\.){3}""", """[*+]""", """\*\+""", """\p{Nd}{1,3}""", """a?""")) {
+        val good = listOf(
+            """[\s]*=""", """[a-z]{8}[a-z]*""", """[^\s"'<>()]+""", """(?:[0-9]{1,3}\.){3}""", """[*+]""", """\*\+""",
+            """\p{Nd}{1,3}""", """a?""", """[ab]*""", """[^a]*""", """[a-z]{20}""",
+        )
+        for (good in good) {
             assertTrue("false alarm: $good", unboundedNonClassRepetition(good) == null)
         }
     }
@@ -71,9 +86,10 @@ class RedactionPatternsTest {
     }
 
     /**
-     * The index of the first `*`, `+` or `{n,}` in [pattern] that repeats
-     * anything but a bracketed character class, or null. Escapes (`\s`,
-     * `\p{Nd}`) and class contents are atoms, not syntax; a `+` or `?` right
+     * The index of the first `*`, `+`, `{n,}` or count above
+     * [MAX_BOUNDED_COUNT] in [pattern] that repeats anything but a bracketed
+     * class of two or more characters, or null. Escapes (`\s`, `\p{Nd}`,
+     * `\x{41}`) and class contents are atoms, not syntax; a `+` or `?` right
      * after a quantifier is its modifier, and a `?` right after `(` opens a
      * group.
      */
@@ -87,12 +103,15 @@ class RedactionPatternsTest {
             var closedClass = false
             var quantifier = false
             when {
-                c == '\\' -> next = if (pattern.getOrNull(i + 1) in setOf('p', 'P') && pattern.getOrNull(i + 2) == '{') {
+                c == '\\' -> next = if (pattern.getOrNull(i + 1) in setOf('p', 'P', 'x', 'N') && pattern.getOrNull(i + 2) == '{') {
                     pattern.indexOf('}', i) + 1
                 } else {
                     i + 2
                 }
-                c == '[' -> { next = classEnd(pattern, i) + 1; closedClass = true }
+                c == '[' -> {
+                    next = classEnd(pattern, i) + 1
+                    closedClass = !isSingleCharacter(pattern.substring(i + 1, next - 1))
+                }
                 (c == '*' || c == '+' || c == '?') && afterQuantifier -> {} // possessive or lazy modifier
                 c == '*' || c == '+' -> if (afterClass) quantifier = true else return i
                 c == '?' && pattern.getOrNull(i - 1) != '(' -> quantifier = true
@@ -100,6 +119,7 @@ class RedactionPatternsTest {
                     val close = pattern.indexOf('}', i)
                     val body = pattern.substring(i + 1, close)
                     if (Regex("""\d+,""").matches(body)) return i
+                    if ((body.substringAfter(',').toIntOrNull() ?: 0) > MAX_BOUNDED_COUNT) return i
                     next = close + 1
                     quantifier = true
                 }
@@ -110,6 +130,11 @@ class RedactionPatternsTest {
         }
         return null
     }
+
+    /** A class body naming one character (`[ ]`, `[\.]`, `[\x20]`): ICU compiles it to a literal. */
+    private fun isSingleCharacter(body: String): Boolean =
+        !body.startsWith("^") &&
+            Regex("""[^\\]|\\[^pPsSdDwWhHvV]|\\x[0-9A-Fa-f]{2}|\\u[0-9A-Fa-f]{4}|\\x\{[0-9A-Fa-f]+\}""").matches(body)
 
     /** The index of the `]` closing the class that opens at [open]. */
     private fun classEnd(pattern: String, open: Int): Int {

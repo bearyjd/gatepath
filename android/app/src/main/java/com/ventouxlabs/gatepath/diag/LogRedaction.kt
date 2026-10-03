@@ -82,7 +82,8 @@ object LogRedaction {
      * lookbehind, so a non-ASCII letter before it counts as a boundary on ICU
      * too). `[\s]*`, not `\s*`: ICU pushes a backtrack frame per character of
      * a bare `\s*` and overflows its stack on a few hundred thousand spaces in
-     * a gateway's text, but runs a bracketed class in constant stack.
+     * a gateway's text, but runs a bracketed class of two or more characters
+     * in constant stack.
      */
     private val MAC_KEYED =
         Regex("""(?i)(?<![A-Za-z0-9_])((?:user_)?mac(?:_address)?|ma)([\s]*[=:][\s]*)[0-9a-f]{12}(?![0-9a-f])""")
