@@ -55,6 +55,9 @@ Requires:       dhcp-client
 # Both the desktop UI and host portal runner require the GTK4 stack. WebKit2
 # 4.1 uses GTK3 and cannot satisfy this app's GTK4 requirement.
 Requires:       python3-gobject
+# GTK's introspection imports cairo-1.0.typelib, shipped by this runtime package.
+# It must be present even when DNF disables weak dependencies.
+Requires:       gobject-introspection
 Requires:       python3-dasbus >= 1.7
 Requires:       gtk4
 Requires:       libadwaita
