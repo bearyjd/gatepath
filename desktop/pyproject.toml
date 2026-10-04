@@ -8,7 +8,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "gatepath"
-version = "0.1.0"
+version = "1.1.0"
 description = "Captive portal handler for Linux desktop (Flatpak)"
 readme = "README.md"
 requires-python = ">=3.11"

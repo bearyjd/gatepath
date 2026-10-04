@@ -7,10 +7,12 @@ Captive portal handler for Linux desktop, distributed as a Flatpak.
 ## What it does
 
 Gatepath monitors NetworkManager for captive portal detection signals and opens
-an isolated WebKitGTK window for safe portal sign-in. It:
+an ephemeral WebKitGTK window for portal sign-in. When the optional host netns
+helper is available, it runs the portal WebView in a dedicated network namespace.
+Without that helper, the WebView uses the normal host route. It:
 
-- Restricts WebView navigation to the portal's origin domain only.
-- Blocks third-party tracker/analytics resource requests.
+- Observes and counts off-origin navigations and third-party tracker/analytics
+  resource requests, but allows them so captive portals remain compatible.
 - Wipes all session data (cookies, cache, localStorage) on close.
 - Auto-closes after 10 minutes.
 - Detects active VPN interfaces and warns before opening the portal.
@@ -21,11 +23,14 @@ an isolated WebKitGTK window for safe portal sign-in. It:
 See [`docs/SECURITY_MODEL.md`](../docs/SECURITY_MODEL.md) for the full security
 model. Key desktop-specific limitations:
 
-- **Cannot bind WebKit traffic to a specific network interface** — the Flatpak
-  sandbox does not grant `CAP_NET_RAW`. If a full-tunnel VPN is active, the
-  portal page may not load.
-- **Recommendation:** pause your VPN before connecting to a captive portal on
-  desktop. Gatepath will remind you.
+- **Host helper available:** the privileged `gatepath-netns-helper` moves the
+  captive Wi-Fi PHY into a dedicated network namespace and runs the portal
+  WebView there. This path is validated with `mac80211_hwsim` for open captive
+  networks; physical Wi-Fi-card confirmation remains pending.
+- **Helper unavailable (including Flatpak-only installs):** the in-process
+  WebView is not bound to a specific network interface. If a full-tunnel VPN
+  is active, the portal page may not load. Gatepath warns before opening it;
+  pausing the VPN is the documented mitigation.
 
 ## Requirements
 

@@ -6,4 +6,4 @@ and portal_webview.py so that `python -m gatepath --help` works without
 any GUI toolkit installed.
 """
 
-__version__ = "0.1.0"
+__version__ = "1.1.0"

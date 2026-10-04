@@ -9,17 +9,18 @@
 
   <description>
     <p>
-      Gatepath signs you in to captive Wi-Fi networks (hotels, airports, conference venues)
-      without exposing your other running apps to the captive gateway. Traffic from the
-      sign-in page is isolated to the captive interface; your VPN and DNS configuration
-      remain in effect for everything else on your machine.
+      Gatepath signs you in to captive Wi-Fi networks (hotels, airports, conference venues).
+      When the optional host netns helper is installed, traffic from the sign-in page is
+      isolated to the captive interface without exposing other running apps to the captive
+      gateway. Without that helper, including on Flatpak-only installs, the sign-in page
+      uses the normal host route and Gatepath warns about active VPNs.
     </p>
     <p>Features:</p>
     <ul>
       <li>Detects captive portals via NetworkManager</li>
-      <li>Loads the sign-in page in a sandboxed WebKit view</li>
-      <li>Blocks tracker subresources during sign-in</li>
-      <li>Refuses off-domain navigation</li>
+      <li>Uses kernel-enforced network isolation when the host netns helper is available</li>
+      <li>Loads the sign-in page in an ephemeral WebKit view</li>
+      <li>Observes and records off-origin navigation and tracker-resource requests without blocking them</li>
       <li>Writes a structured audit log of every session</li>
     </ul>
   </description>
@@ -50,9 +51,10 @@
   <content_rating type="oars-1.1"/>
 
   <releases>
-    <release version="0.1.0" date="2026-05-08">
+    <release version="1.1.0" date="2026-10-01">
       <description>
-        <p>Initial alpha. Captive-portal detection, sandboxed sign-in WebView, audit log.</p>
+        <p>Adds optional kernel-enforced network-namespace isolation through the host helper, plus refined session diagnostics and audit logging.</p>
+        <p>Off-origin navigation and tracker-resource requests are now explicitly observed and recorded rather than blocked, preserving compatibility with captive portals.</p>
       </description>
     </release>
   </releases>

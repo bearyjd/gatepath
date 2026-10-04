@@ -22,7 +22,7 @@
 # Version is supplied by build-rpm.sh (`--define "version <x>"`, read from the
 # committed Cargo.toml) so it can't drift from the crate. Fallback keeps a direct
 # `rpmbuild` invocation working; bump it if you build the spec by hand.
-%{!?version: %global version 0.1.0}
+%{!?version: %global version 1.1.0}
 
 Name:           gatepath-netns-helper
 Version:        %{version}
@@ -128,6 +128,9 @@ install -Dm0644 data/gatepath-helper-audit.logrotate \
 %systemd_postun_with_restart %{name}.service
 
 %changelog
+* Thu Oct 01 2026 Gatepath Contributors - 1.1.0-1
+- Align helper package metadata with the Gatepath 1.1.0 release.
+
 * Fri Jul 24 2026 Gatepath Contributors - 0.1.0-1
 - Initial RPM packaging (ROADMAP P2.1): conventional/signable alternative to the
   systemd-sysext image for traditional Fedora/RHEL. Installs the helper, D-Bus

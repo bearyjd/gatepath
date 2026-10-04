@@ -27,7 +27,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--version",
         action="version",
-        version="gatepath 0.1.0",
+        version="gatepath 1.1.0",
     )
     parser.add_argument(
         "--log-level",
