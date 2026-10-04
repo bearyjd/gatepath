@@ -1,6 +1,6 @@
 # Gatepath Desktop
 
-Captive portal handler for Linux desktop, distributed as a Flatpak.
+Captive portal handler for Linux desktop, distributed as a native RPM or Flatpak.
 
 **Flatpak ID:** `com.ventouxlabs.Gatepath`
 
@@ -37,6 +37,27 @@ model. Key desktop-specific limitations:
 - GNOME Platform 46 (via Flatpak)
 - GTK 4 + libadwaita
 - WebKit2GTK 6.0 (preferred) or 4.1
+
+## Native Fedora installation
+
+The `gatepath-netns-helper` RPM includes the desktop app, portal runner, and
+privileged helper in one installation. Its package name is retained for upgrades
+from older helper-only releases. GTK4, libadwaita, WebKitGTK 6.0, Python D-Bus
+bindings, and network setup tools are required dependencies installed by DNF.
+
+```bash
+# From the repo root (install the build dependencies listed in the script first):
+desktop/gatepath-netns-helper/packaging/build-rpm.sh
+sudo dnf install ~/rpmbuild/RPMS/*/gatepath-netns-helper-*.rpm
+gatepath
+```
+
+You can also launch Gatepath from the desktop application menu. A separate
+Python installation or Flatpak is unnecessary. Building uses committed source;
+commit local changes before building an RPM. Atomic Fedora systems can layer
+the RPM with `rpm-ostree install` and reboot; see
+[`DESKTOP_NETNS_DEPLOYMENT.md`](../docs/DESKTOP_NETNS_DEPLOYMENT.md) for deployment
+options and the physical Wi-Fi validation limitation.
 
 ## Running without Flatpak (development)
 

@@ -171,11 +171,22 @@ host NIC or own a host system-D-Bus name.
 
 ### Option A — Layered RPM (`rpm-ostree install`)
 
-Build an RPM that installs every file to its canonical `/usr` path and depends
-on `python3-gobject`, `webkit2gtk` (or `webkitgtk6.0`), `iproute2`, `iw`,
-`wpa_supplicant`, and a DHCP client (`dhcp-client`/`dhcpcd`, or `busybox` for
-`udhcpc`). The last three are required by the §3b in-netns connectivity
-bring-up; without them `SetupCaptive` fails at the connectivity step.
+The `gatepath-netns-helper` RPM now installs the complete native desktop app,
+portal runner, and helper at their canonical `/usr` paths. The existing package
+name is retained so older helper-only installations upgrade in place. Build it
+with `desktop/gatepath-netns-helper/packaging/build-rpm.sh`, then install the
+result with DNF on traditional Fedora or `rpm-ostree install` on atomic Fedora.
+No separate pip installation or Flatpak is needed.
+
+The RPM requires `python3-gobject`, `python3-dasbus`, GTK4, libadwaita,
+`webkitgtk6.0`, NetworkManager, systemd, polkit, logrotate, `iproute`, `iw`,
+`wpa_supplicant`, and `dhcp-client` (the helper's default `dhclient` provider).
+WebKitGTK 6.0 is required because the app uses GTK4; the GTK3-based
+WebKit2 4.1 package is not a substitute. The wireless tools and DHCP client are
+required by the §3b connectivity bring-up; without them `SetupCaptive` fails.
+CI builds and installs the RPM with optional dependencies disabled, then imports
+the installed app/UI/runner and GTK/WebKit stack outside the source checkout.
+The sysext remains helper-only and requires the host app/runtime separately.
 
 **Pros**
 - Canonical, conventional packaging; files land exactly where the code expects,

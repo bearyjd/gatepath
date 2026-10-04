@@ -26,8 +26,8 @@
 
 Name:           gatepath-netns-helper
 Version:        %{version}
-Release:        1%{?dist}
-Summary:        Privileged helper for Gatepath's desktop network-namespace isolation
+Release:        2%{?dist}
+Summary:        Gatepath desktop app with native network-namespace isolation
 
 License:        GPL-3.0-or-later
 URL:            https://github.com/bearyjd/gatepath
@@ -38,19 +38,34 @@ ExclusiveArch:  x86_64 aarch64
 BuildRequires:  rust
 BuildRequires:  cargo
 BuildRequires:  systemd-rpm-macros
+BuildRequires:  python3-devel
+BuildRequires:  python3-pip
+BuildRequires:  python3-setuptools
+BuildRequires:  python3-wheel
+BuildRequires:  pyproject-rpm-macros
 
 # Core captive-portal bring-up (SetupCaptive → the DESK-002 in-netns connectivity
 # path) execs these; without them SetupCaptive fails at the connectivity step.
-Requires:       iproute2
+Requires:       iproute
 Requires:       iw
 Requires:       wpa_supplicant
-# A DHCP client is required to reacquire an address inside the netns; accept any
-# of the common providers.
-Requires:       (dhcp-client or dhcpcd or busybox)
-# The portal WebView (portal-webview-runner → the Python GTK app) needs these,
-# but the helper's netns function does not — so they are weak deps.
-Recommends:     python3-gobject
-Recommends:     (webkitgtk6.0 or webkit2gtk4.1)
+# The shipped service uses the helper's default client, dhclient. Alternate
+# providers do not satisfy that default without an explicit administrator override.
+Requires:       dhcp-client
+# Both the desktop UI and host portal runner require the GTK4 stack. WebKit2
+# 4.1 uses GTK3 and cannot satisfy this app's GTK4 requirement.
+Requires:       python3-gobject
+# GTK's introspection imports cairo-1.0.typelib, shipped by this runtime package.
+# It must be present even when DNF disables weak dependencies.
+Requires:       gobject-introspection
+Requires:       python3-dasbus >= 1.7
+Requires:       gtk4
+Requires:       libadwaita
+Requires:       webkitgtk6.0
+Requires:       NetworkManager
+Requires:       systemd
+Requires:       polkit
+Requires:       logrotate
 
 %description
 gatepath-netns-helper is the root-privileged D-Bus daemon behind Gatepath's
@@ -60,6 +75,11 @@ to move the Wi-Fi interface into a dedicated network namespace, bring
 connectivity up inside it, and launch the sign-in WebView confined to that
 namespace — so the captive-portal negotiation cannot see or leak the user's
 normal traffic or VPN.
+
+This package includes the desktop Python app, application launcher, and native
+portal runner, together with their required GTK/WebKit dependencies. No separate
+pip installation or Flatpak is needed. The historical package name is retained
+so existing helper installations upgrade to the complete desktop installation.
 
 This package installs the helper to the same canonical /usr paths as the
 systemd-sysext image and is the conventional choice for traditional (non-atomic)
@@ -73,8 +93,20 @@ Fedora/RHEL. Only open (unsecured) captive networks are supported; see
 # Build the release binary. --locked pins the committed Cargo.lock (the same one
 # cargo-audit scans in CI); --offline is added by callers who pre-vendor.
 cargo build --release --locked --manifest-path Cargo.toml
+pushd desktop-app
+%pyproject_wheel
+popd
 
 %install
+pushd desktop-app
+%pyproject_install
+popd
+install -Dm0644 desktop-app/com.ventouxlabs.Gatepath.desktop \
+  %{buildroot}%{_datadir}/applications/com.ventouxlabs.Gatepath.desktop
+install -Dm0644 desktop-app/com.ventouxlabs.Gatepath.svg \
+  %{buildroot}%{_datadir}/icons/hicolor/scalable/apps/com.ventouxlabs.Gatepath.svg
+install -Dm0644 desktop-app/com.ventouxlabs.Gatepath.metainfo.xml \
+  %{buildroot}%{_datadir}/metainfo/com.ventouxlabs.Gatepath.metainfo.xml
 # Mirror packaging/build-sysext.sh's staging exactly, but into %{buildroot} and
 # with /etc handled natively (a sysext cannot write /etc).
 install -Dm0755 target/release/%{name} \
@@ -104,6 +136,12 @@ install -Dm0644 data/gatepath-helper-audit.logrotate \
 %files
 %license LICENSE
 %doc README.md DESKTOP_NETNS_DEPLOYMENT.md
+%{_bindir}/gatepath
+%{python3_sitelib}/gatepath/
+%{python3_sitelib}/gatepath-*.dist-info/
+%{_datadir}/applications/com.ventouxlabs.Gatepath.desktop
+%{_datadir}/icons/hicolor/scalable/apps/com.ventouxlabs.Gatepath.svg
+%{_datadir}/metainfo/com.ventouxlabs.Gatepath.metainfo.xml
 %{_libexecdir}/%{name}
 %dir %{_prefix}/lib/gatepath
 %{_prefix}/lib/gatepath/portal-webview-runner
@@ -128,6 +166,10 @@ install -Dm0644 data/gatepath-helper-audit.logrotate \
 %systemd_postun_with_restart %{name}.service
 
 %changelog
+* Sun Oct 04 2026 Gatepath Contributors - 1.1.0-2
+- Include the desktop app, nested UI modules, launcher, and native runner.
+- Require the GTK4/WebKit6 runtime and correct the Fedora iproute dependency.
+
 * Thu Oct 01 2026 Gatepath Contributors - 1.1.0-1
 - Align helper package metadata with the Gatepath 1.1.0 release.
 
