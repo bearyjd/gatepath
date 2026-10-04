@@ -18,12 +18,17 @@ detailed status lives in [`docs/ROADMAP.md`](docs/ROADMAP.md).
   (between the title and Dismiss) and an "Export log" button on every status
   card export Gatepath's own step-by-step record of the sign-in: what Android
   handed over, the probe result, whether the Wi-Fi pin was granted, the
-  classification, each page loaded, folds/rebuilds, and what Gatepath told
+  classification, each page loaded, screen rebuilds, and what Gatepath told
   Android when the screen closed. URLs are reduced to hostnames and MAC
   addresses are masked before anything is recorded.
 
 ### Fixed
 
+- **Android:** folding, unfolding or rotating the phone on the system sign-in
+  screen no longer rebuilds it. A rebuild ran the whole check again, so it
+  could swap the sign-in page for the "could not work out what this network
+  is doing" card (typically right after signing in) or reload the portal
+  from its first page, losing what had been typed.
 - **Android:** a redacted diagnostics bundle now masks an IPv4 address
   glued to a letter or underscore (`SIP_172.20.9.99`), and an address or
   token right after a non-ASCII letter, which Android's regex engine read as

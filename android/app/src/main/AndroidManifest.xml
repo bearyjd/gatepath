@@ -53,8 +53,14 @@
           process the temporary "use restricted network" permission needed
           to bypass the EPERM that direct probes hit.
         -->
+        <!-- configChanges: a fold, unfold or rotation resizes the sign-in screen
+             in place instead of rebuilding it. A rebuild re-ran the whole handoff
+             (new probe, new classification, new WebView) and could swap the
+             page for the Unknown card or reload the portal from its first page.
+             CaptivePortalReplyTest guards the list. -->
         <activity
             android:name=".CaptivePortalActivity"
+            android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|density|keyboardHidden"
             android:exported="true"
             android:theme="@style/Theme.Gatepath"
             android:windowSoftInputMode="adjustResize">

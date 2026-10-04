@@ -85,7 +85,11 @@ import javax.inject.Inject
  * [CaptivePortal.reportCaptivePortalDismissed] (the Dismiss button, the back
  * gesture, swiping the task away), which makes Android re-check the network:
  * signed in, it validates; still captive, the sign-in notification comes back.
- * A fold/rotation rebuild answers nothing and leaves it to the rebuilt screen.
+ * A fold, unfold or rotation does not rebuild this screen (the manifest's
+ * `configChanges`), so the lease, the classification and the page all stay.
+ * A configuration change it does not handle in place (a language or font-size
+ * switch) still rebuilds it; that rebuild answers nothing and leaves it to the
+ * rebuilt screen.
  * If the process dies before `onDestroy` runs, nothing is answered and Android
  * re-checks on its own schedule. This activity never sends
  * [CaptivePortal.ignoreNetwork] ("the user rejects this network" — Android drops
@@ -127,7 +131,7 @@ class CaptivePortalActivity : ComponentActivity() {
 
     /**
      * This sign-in's log, exported by the "Log" button. Shared through
-     * [SignInTimelineStore] so a fold/rotation rebuild or a reopen from the
+     * [SignInTimelineStore] so a rebuild or a reopen from the
      * notification keeps appending to one record. Null before the network is
      * known (the early-exit paths have nothing to record).
      */
@@ -173,7 +177,7 @@ class CaptivePortalActivity : ComponentActivity() {
             if (savedInstanceState == null) {
                 "Sign-in screen opened by Android for network $network (Android's URL: ${LogRedaction.origin(intentPortalUrl)})"
             } else {
-                "Sign-in screen rebuilt (fold, rotation, other configuration change, or app restart; network $network)"
+                "Sign-in screen rebuilt (a configuration change it does not handle in place, or an app restart; network $network)"
             },
         )
 
@@ -447,8 +451,8 @@ class CaptivePortalActivity : ComponentActivity() {
     override fun onDestroy() {
         super.onDestroy()
         // Leaving without the Dismiss button (back gesture, swipe-away) still
-        // asks Android to re-check the network; a fold/rotation rebuild says
-        // nothing because the rebuilt screen gets the same token. See
+        // asks Android to re-check the network; a configuration-change rebuild
+        // says nothing because the rebuilt screen gets the same token. See
         // CaptivePortalReply for why this is never ignoreNetwork.
         val reply = CaptivePortalReply.onDestroy(
             alreadyReported = reported,
@@ -460,7 +464,7 @@ class CaptivePortalActivity : ComponentActivity() {
         }
         timeline?.record(
             when {
-                isChangingConfigurations -> "Screen rebuilding for a fold or rotation: nothing told to Android"
+                isChangingConfigurations -> "Screen rebuilding for a configuration change: nothing told to Android"
                 reply == CaptivePortalReply.DISMISSED -> "Screen closed: told Android to re-check the network"
                 else -> "Screen closed (Android already answered)"
             },
