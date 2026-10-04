@@ -244,7 +244,7 @@ jobs:
     container: fedora:latest
     steps:
       - name: Install build deps
-        run: dnf install -y --setopt=install_weak_deps=False rpm-build systemd-rpm-macros cargo rust tar gzip git findutils
+        run: dnf install -y --setopt=install_weak_deps=False rpm-build systemd-rpm-macros cargo rust tar gzip git findutils python3-devel python3-pip python3-setuptools python3-wheel pyproject-rpm-macros
       - uses: actions/checkout@v7
       - name: Mark workspace a safe git dir (container uid mismatch)
         run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
@@ -261,6 +261,10 @@ jobs:
           files=$(rpm -qlp "$rpm")
           echo "$files"
           for want in \
+            /usr/bin/gatepath \
+            /usr/share/applications/com.ventouxlabs.Gatepath.desktop \
+            /usr/share/icons/hicolor/scalable/apps/com.ventouxlabs.Gatepath.svg \
+            /usr/share/metainfo/com.ventouxlabs.Gatepath.metainfo.xml \
             /usr/libexec/gatepath-netns-helper \
             /usr/lib/gatepath/portal-webview-runner \
             /usr/lib/systemd/system/gatepath-netns-helper.service \
@@ -270,6 +274,38 @@ jobs:
             /etc/logrotate.d/gatepath-netns-helper ; do
             echo "$files" | grep -qx "$want" || { echo "::error::RPM missing $want"; exit 1; }
           done
+          for module in gatepath/__main__.py gatepath/portal_webview_runner.py gatepath/ui/diagnosis_panel.py; do
+            echo "$files" | grep -q "/site-packages/$module$" || { echo "::error::RPM missing $module"; exit 1; }
+          done
+      - name: Install RPM and smoke-test host runtime
+        # Resolve strong dependencies only: the installed app and runner must
+        # work without a Flatpak, pip install, or optional dependency pull-in.
+        run: |
+          set -euo pipefail
+          rpm=$(find "$GITHUB_WORKSPACE/rpmbuild/RPMS" -name 'gatepath-netns-helper-*.rpm' | head -1)
+          dnf install -y --setopt=install_weak_deps=False "$rpm"
+          cd /tmp
+          env -u PYTHONPATH gatepath --version
+          env -u PYTHONPATH /usr/bin/python3 -I - <<'PY'
+          import gi
+          gi.require_version("Gtk", "4.0")
+          gi.require_version("Adw", "1")
+          gi.require_version("WebKit", "6.0")
+          from gi.repository import Gtk, Adw, WebKit
+          from dasbus.connection import SystemMessageBus
+          import gatepath.app
+          import gatepath.portal_webview_runner
+          import gatepath.ui.diagnosis_panel
+          import gatepath.ui.portal_error_panel
+          PY
+          # Reject a malformed URL before GTK initialization, proving the
+          # canonical helper launcher can reach the installed runner module.
+          if /usr/lib/gatepath/portal-webview-runner not-a-url; then
+            echo "::error::Runner accepted malformed URL"; exit 1
+          else
+            status=$?
+            test "$status" -eq 1
+          fi
       - name: Upload RPM artifact
         uses: actions/upload-artifact@v7
         with:

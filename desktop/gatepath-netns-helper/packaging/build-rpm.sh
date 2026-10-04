@@ -5,8 +5,9 @@
 # "Option A"). Companion to build-sysext.sh; both are driven by CI (desktop.yml)
 # so the two packaging paths can't drift out of sync with the crate's file layout.
 #
-# Requires: cargo, rpmbuild, and git (Fedora/RHEL: `dnf install rpm-build
-# systemd-rpm-macros cargo rust git`; Debian/Ubuntu: `apt-get install rpm`).
+# Requires: cargo, rpmbuild, git, and Python RPM build macros (Fedora:
+# `dnf install rpm-build systemd-rpm-macros cargo rust git python3-devel
+# python3-pip python3-setuptools python3-wheel pyproject-rpm-macros`).
 #
 # The source tarball is built from **committed content** (`git archive HEAD`), so
 # it is reproducible and can never bundle untracked/gitignored scratch files (e.g.
@@ -55,6 +56,14 @@ git -C "$REPO_ROOT" archive --format=tar "HEAD:$CRATE_REL" | tar -C "$SRC" -xf -
 for f in LICENSE README.md docs/DESKTOP_NETNS_DEPLOYMENT.md; do
   git -C "$REPO_ROOT" show "HEAD:$f" > "$SRC/$(basename "$f")"
 done
+# The runner executes host Python, so the RPM must also own the complete app.
+# Archive only its committed source and launch metadata, excluding tests,
+# generated build artifacts, and the helper crate already staged above.
+mkdir -p "$SRC/desktop-app"
+git -C "$REPO_ROOT" archive --format=tar HEAD:desktop \
+  gatepath pyproject.toml README.md com.ventouxlabs.Gatepath.desktop \
+  com.ventouxlabs.Gatepath.svg com.ventouxlabs.Gatepath.metainfo.xml \
+  | tar -C "$SRC/desktop-app" -xf -
 tar czf "$TOPDIR/SOURCES/${NAME}-${VERSION}.tar.gz" -C "$STAGE" "${NAME}-${VERSION}"
 
 echo "==> rpmbuild -ba (version $VERSION)"
