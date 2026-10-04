@@ -104,6 +104,20 @@ class ConsoleCaptureFileTest {
         assertEquals(null, result.incidentId)
     }
 
+    @Test
+    fun `a future JSON field is ignored without losing an otherwise readable entry`() {
+        file.appendText(
+            "{\"level\":\"LOG\",\"source_host\":\"portal.example.com\",\"line_number\":1," +
+                "\"message\":\"hi\",\"offset_ms\":5,\"future_field\":true}\n",
+            Charsets.UTF_8,
+        )
+
+        val result = ConsoleCaptureFile.read(file)
+        assertEquals(0, result.unreadable)
+        assertEquals(1, result.entries.size)
+        assertEquals(5L, result.entries.single().offsetMs)
+    }
+
     /**
      * Drift guard, like IncidentEvidenceTest's: this type is serialised to an
      * on-disk file and reaches the shared bundle, so adding a field is a
