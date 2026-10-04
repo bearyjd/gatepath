@@ -24,6 +24,7 @@ import com.ventouxlabs.gatepath.session.CloseReason
 import com.ventouxlabs.gatepath.session.IncidentTracker
 import com.ventouxlabs.gatepath.session.PortalSession
 import com.ventouxlabs.gatepath.session.PortalSessionManager
+import com.ventouxlabs.gatepath.session.SessionIncidentState
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -151,13 +152,13 @@ class MainViewModel @Inject constructor(
      * latch does not depend on whether that clear fired. Reset after each
      * write.
      */
-    private var sessionWasConfined: Boolean = false
+    private val sessionIncidentState = SessionIncidentState()
 
     /**
      * The [IncidentTracker] id of the incident that opened the session
      * currently running, or `0L` (the tracker's own "nothing is current"
      * sentinel) when no session is open. Latched alongside
-     * [sessionWasConfined] wherever a reenter is Accepted, and reset
+     * [sessionIncidentState] wherever a reenter is Accepted, and reset
      * alongside it wherever a session ends.
      *
      * [onCertSummary] keys its evidence write to this rather than to
@@ -307,8 +308,7 @@ class MainViewModel @Inject constructor(
             when (result) {
                 is PortalSessionManager.ReenterResult.Accepted -> {
                     _session.value = result.session
-                    sessionWasConfined = true
-                    _sessionIncidentId.value = begun.id
+                    recordAcceptedReenter(result, begun.id)
                     _activeNetwork.value = event.network
                     openPortal()
                 }
@@ -486,8 +486,7 @@ class MainViewModel @Inject constructor(
         when (result) {
             is PortalSessionManager.ReenterResult.Accepted -> {
                 _session.value = result.session
-                sessionWasConfined = true
-                _sessionIncidentId.value = incidents.currentId
+                recordAcceptedReenter(result, incidents.currentId)
                 _activeNetwork.value = network
                 openPortal()
             }
@@ -514,8 +513,7 @@ class MainViewModel @Inject constructor(
                 val next = sessionManager.timeout(current, utcNow())
                 _session.value = next
                 writeAuditLog(next)
-                sessionWasConfined = false
-                _sessionIncidentId.value = 0L
+                resetSessionIncidentState(SessionIncidentState.TerminalTransition.Timeout)
             }
         }
     }
@@ -527,8 +525,7 @@ class MainViewModel @Inject constructor(
         val next = sessionManager.dismiss(current, utcNow())
         _session.value = next
         writeAuditLog(next)
-        sessionWasConfined = false
-        _sessionIncidentId.value = 0L
+        resetSessionIncidentState(SessionIncidentState.TerminalTransition.Dismissed)
         // The confinement card deliberately stays on screen: the user can press
         // "Sign in here" again, which is what PortalSessionManager.reenter is for.
     }
@@ -549,8 +546,7 @@ class MainViewModel @Inject constructor(
         val next = sessionManager.completePortal(current, utcNow())
         _session.value = next
         writeAuditLog(next)
-        sessionWasConfined = false
-        _sessionIncidentId.value = 0L
+        resetSessionIncidentState(SessionIncidentState.TerminalTransition.SignInSucceeded)
     }
 
     fun onBlockedNavigation() {
@@ -577,8 +573,7 @@ class MainViewModel @Inject constructor(
     fun debugForceActiveSession(portalUrl: String, network: Network) {
         // This path never classifies, so the session is not confined — and the
         // latch could still be set from an earlier real session.
-        sessionWasConfined = false
-        _sessionIncidentId.value = 0L
+        resetSessionIncidentState(SessionIncidentState.TerminalTransition.DebugForceActive)
         _activeNetwork.value = network
         _session.value = PortalSession.Active(
             portalUrl = portalUrl,
@@ -602,8 +597,7 @@ class MainViewModel @Inject constructor(
         }
         _session.value = next
         writeAuditLog(next)
-        sessionWasConfined = false
-        _sessionIncidentId.value = 0L
+        resetSessionIncidentState(SessionIncidentState.TerminalTransition.NetworkClosed)
     }
 
     /**
@@ -660,13 +654,27 @@ class MainViewModel @Inject constructor(
             // still being the suspected one, so reading
             // incidents.confinement.value here would not reliably report
             // "unconfined" for precisely the confined sessions.
-            confinement = if (sessionWasConfined) "confined" else "unconfined",
+            confinement = if (sessionIncidentState.value.wasConfined) "confined" else "unconfined",
             tlsCertErrorsBypassed = finalState.tlsCertErrorsBypassed,
         )
 
         viewModelScope.launch {
             AuditLog.append(entry)
         }
+    }
+
+    /** Keeps the Compose-visible id in lockstep with the pure lifecycle state. */
+    private fun recordAcceptedReenter(
+        result: PortalSessionManager.ReenterResult.Accepted,
+        incidentId: Long,
+    ) {
+        check(sessionIncidentState.recordReenter(result, incidentId))
+        _sessionIncidentId.value = sessionIncidentState.value.incidentId
+    }
+
+    private fun resetSessionIncidentState(terminal: SessionIncidentState.TerminalTransition) {
+        sessionIncidentState.transition(terminal)
+        _sessionIncidentId.value = sessionIncidentState.value.incidentId
     }
 
     private fun utcNow(): String =

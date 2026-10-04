@@ -21,9 +21,11 @@ import android.webkit.WebViewClient
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -109,6 +111,30 @@ fun GatepathWebView(
     val context = LocalContext.current
     val portalHost = remember(url) { runCatching { URI(url).host }.getOrNull() ?: "" }
 
+    // The WebView itself survives URL changes on the same Network, but its
+    // client makes TLS and origin decisions from portalHost. Recreate that
+    // client when the URL host changes; retaining the first client would let a
+    // later portal inherit the earlier portal's TLS allow-list.
+    val blockedNavigation by rememberUpdatedState(onBlockedNavigation)
+    val blockedResource by rememberUpdatedState(onBlockedResource)
+    val tlsCertErrorBypassed by rememberUpdatedState(onTlsCertErrorBypassed)
+    val certSummary by rememberUpdatedState(onCertSummary)
+    val loadStarted by rememberUpdatedState(onLoadStarted)
+    val loadError by rememberUpdatedState(onLoadError)
+    val currentTimeline by rememberUpdatedState(timeline)
+    val webViewClient = remember(portalHost) {
+        buildWebViewClient(
+            portalHost,
+            { blockedNavigation() },
+            { blockedResource() },
+            { tlsCertErrorBypassed() },
+            { summary -> certSummary(summary) },
+            { loadStarted() },
+            { error -> loadError(error) },
+            timeline = { currentTimeline },
+        )
+    }
+
     val consoleCapture = remember { ConsoleCaptureBuffer() }
     var sessionStartElapsedMs by remember { mutableStateOf(SystemClock.elapsedRealtime()) }
     // `incidentId` is captured by value inside the keyless `remember` below,
@@ -180,16 +206,6 @@ fun GatepathWebView(
             val cookieManager = CookieManager.getInstance()
             cookieManager.setAcceptCookie(true)
             cookieManager.setAcceptThirdPartyCookies(this, true)
-            webViewClient = buildWebViewClient(
-                portalHost,
-                onBlockedNavigation,
-                onBlockedResource,
-                onTlsCertErrorBypassed,
-                onCertSummary,
-                onLoadStarted,
-                onLoadError,
-                timeline,
-            )
             // Diagnostic-only WebChromeClient: forward console.log / console.error
             // from the captive portal page into logcat. Captive portal sign-in
             // pages frequently break in unexpected ways (CSP, missing JS frameworks,
@@ -234,6 +250,10 @@ fun GatepathWebView(
             }
         }
     }
+
+    // Assign after every composition so a same-network URL change installs
+    // its host-bound client before the effects below drive loadUrl.
+    SideEffect { webView.webViewClient = webViewClient }
 
     var lastLoadedUrl by remember { mutableStateOf<String?>(null) }
     // Non-null only while this composition holds a lease on `network`. Every
@@ -407,12 +427,12 @@ private fun buildWebViewClient(
     onCertSummary: (CertSummary) -> Unit,
     onLoadStarted: () -> Unit,
     onLoadError: (PortalLoadError) -> Unit,
-    timeline: SignInTimeline?,
+    timeline: () -> SignInTimeline?,
 ): WebViewClient = object : WebViewClient() {
 
     override fun onPageStarted(view: WebView, url: String, favicon: Bitmap?) {
         Log.d(TAG, "Page started: ${url.urlForLog()}")
-        timeline?.record("Page started: ${LogRedaction.origin(url)}")
+        timeline()?.record("Page started: ${LogRedaction.origin(url)}")
         // A new main-frame load is underway: clear any error overlay so a
         // successful retry (or a gateway redirect that finally works) shows
         // the page instead of a stale failure.
@@ -421,7 +441,7 @@ private fun buildWebViewClient(
 
     override fun onPageFinished(view: WebView, url: String) {
         Log.d(TAG, "Page finished: ${url.urlForLog()}")
-        timeline?.record("Page finished: ${LogRedaction.origin(url)}")
+        timeline()?.record("Page finished: ${LogRedaction.origin(url)}")
     }
 
     override fun onReceivedError(
@@ -441,7 +461,7 @@ private fun buildWebViewClient(
         // trackers, absent CDNs) and the page still renders — only a
         // main-frame failure means the user is looking at a blank screen.
         if (!request.isForMainFrame) return
-        timeline?.record("Page failed to load: ${LogRedaction.origin(request.url.toString())} (code=${error.errorCode} ${error.description})")
+        timeline()?.record("Page failed to load: ${LogRedaction.origin(request.url.toString())} (code=${error.errorCode} ${error.description})")
         onLoadError(
             PortalLoadError(
                 kind = PortalLoadErrorKind.fromWebViewErrorCode(error.errorCode),
@@ -496,7 +516,7 @@ private fun buildWebViewClient(
             handler.proceed()
         } else {
             handler.cancel()
-            timeline?.record("Certificate refused for $errorHost (primaryError=${error.primaryError})")
+            timeline()?.record("Certificate refused for $errorHost (primaryError=${error.primaryError})")
             // cancel() fires no onReceivedError, so without this the refusal
             // is exactly the silent white screen this whole flow exists to
             // stop — just with a different cause.
@@ -536,7 +556,7 @@ private fun buildWebViewClient(
                 "Off-domain main-frame navigation to ${request.url.forLog()} (portal host=$portalHost) — allowing for captive flow",
             )
             onBlockedNavigation()
-            timeline?.record("Followed off-domain navigation to ${LogRedaction.origin(request.url.toString())}")
+            timeline()?.record("Followed off-domain navigation to ${LogRedaction.origin(request.url.toString())}")
         }
         return false // always let the WebView load it
     }
