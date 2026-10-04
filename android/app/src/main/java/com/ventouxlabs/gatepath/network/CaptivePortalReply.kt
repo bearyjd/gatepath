@@ -34,9 +34,11 @@ enum class CaptivePortalReply {
          * The reply for a sign-in screen that is being destroyed.
          *
          * @param alreadyReported an answer already went out (the Dismiss button).
-         * @param changingConfigurations the screen is only being rebuilt (fold,
-         *   unfold, rotation). The rebuilt screen receives the same intent, and
-         *   so the same token, and answers for itself.
+         * @param changingConfigurations the screen is only being rebuilt, for a
+         *   configuration change it does not handle in place (a language or
+         *   font-size switch; folds and rotations no longer rebuild it). The
+         *   rebuilt screen receives the same intent, and so the same token, and
+         *   answers for itself.
          */
         fun onDestroy(alreadyReported: Boolean, changingConfigurations: Boolean): CaptivePortalReply =
             if (alreadyReported || changingConfigurations) NONE else DISMISSED

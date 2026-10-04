@@ -4,7 +4,9 @@ import com.ventouxlabs.gatepath.network.CaptivePortalReply
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import org.w3c.dom.Element
 import java.io.File
+import javax.xml.parsers.DocumentBuilderFactory
 
 /**
  * What the system handoff ([CaptivePortalActivity]) tells Android when the
@@ -34,7 +36,7 @@ class CaptivePortalReplyTest {
     }
 
     @Test
-    fun `a fold or rotation rebuild says nothing so the rebuilt screen can answer`() {
+    fun `a configuration-change rebuild says nothing so the rebuilt screen can answer`() {
         assertEquals(
             CaptivePortalReply.NONE,
             CaptivePortalReply.onDestroy(alreadyReported = false, changingConfigurations = true),
@@ -70,6 +72,31 @@ class CaptivePortalReplyTest {
             }
             .toList()
         assertTrue("app code sends ignoreNetwork: $offenders", offenders.isEmpty())
+    }
+
+    /**
+     * Guard, not a comment: without these, a fold or rotation destroys the
+     * sign-in screen and `onCreate` runs the whole handoff again: a new lease,
+     * a new probe, a new classification and a new WebView. Mid-sign-in the
+     * classification is not stable (the user's own sign-in changes what the
+     * probe sees), and the card's "try signing in anyway" choice was never
+     * kept, so a fold swapped the page for the Unknown card or reloaded the
+     * portal from its first page (field run, 2026-09-30). `density` covers a
+     * foldable whose inner and outer screens differ.
+     */
+    @Test
+    fun `a fold or rotation does not rebuild the sign-in screen`() {
+        val android = "http://schemas.android.com/apk/res/android"
+        val manifest = File(mainSourceRoot().parentFile, "AndroidManifest.xml")
+        val document = DocumentBuilderFactory.newInstance().apply { isNamespaceAware = true }
+            .newDocumentBuilder().parse(manifest)
+        val activities = document.getElementsByTagName("activity")
+        val handoff = (0 until activities.length).map { activities.item(it) as Element }
+            .single { it.getAttributeNS(android, "name") == ".CaptivePortalActivity" }
+        val handled = handoff.getAttributeNS(android, "configChanges").split('|').toSet()
+        for (change in listOf("orientation", "screenSize", "smallestScreenSize", "screenLayout", "density")) {
+            assertTrue("CaptivePortalActivity must handle $change itself (declares: $handled)", change in handled)
+        }
     }
 
     /** The guard must actually be reading the handoff, or it proves nothing. */
