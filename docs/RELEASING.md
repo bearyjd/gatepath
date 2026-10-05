@@ -1,4 +1,4 @@
-# Releasing Gatepath (Android)
+# Releasing Gatepath (Android and desktop)
 
 The Android release pipeline (ROADMAP P2.2) is **tag-triggered**: pushing a tag
 like `v1.0.0` runs `.github/workflows/release.yml`, which builds the release
@@ -57,6 +57,11 @@ release notes.
 1. Bump the version in `android/app/build.gradle.kts`:
    - `versionCode` — integer, **must increase** every release.
    - `versionName` — human string, e.g. `1.0.1`.
+   Keep desktop metadata aligned: `desktop/pyproject.toml`,
+   `desktop/gatepath-netns-helper/Cargo.toml` (and lockfile), the RPM spec,
+   `desktop/com.ventouxlabs.Gatepath.metainfo.xml`, and the desktop/store
+   manifests. Current app/helper metadata is `1.1.0`; that alone does not mean
+   a new release has been published.
 2. Add a changelog for the new `versionCode` at
    `fastlane/metadata/android/en-US/changelogs/<versionCode>.txt`
    (F-Droid and Play both read these).
@@ -141,3 +146,9 @@ Play: **F-Droid builds from source and signs with its own key**, so it does
   by the `sysext-release` / `flatpak-build` + `flatpak-release` jobs and signed by
   the same workflow identity, so the §4 recipe verifies them unchanged.
 - **Never commit** the keystore, passwords, or the base64 blob.
+- **Native RPM.** `desktop/gatepath-netns-helper/packaging/build-rpm.sh` builds
+  the complete native desktop app/helper/runner package. Fedora desktop CI
+  builds, installs and checks its runtime with optional dependencies disabled.
+  `release.yml` currently publishes sysext and Flatpak desktop artifacts; it
+  does not publish or sign an RPM. The sysext needs the host app/runtime
+  installed separately.

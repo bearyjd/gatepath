@@ -495,9 +495,16 @@ distros (e.g. Bazzite) is analysed in
 
 The Flatpak manifest grants
 `--system-talk-name=com.ventouxlabs.Gatepath.NetNsHelper`. On a host where the
-helper is **also** installed (RPM or sysext), the sandboxed app therefore
+helper and host portal runtime are **also** installed, the sandboxed app therefore
 upgrades to the confined netns path rather than rendering the portal on the
 normal route with only a VPN warning.
+
+The native `gatepath-netns-helper` RPM supplies the desktop Python app, fixed
+portal runner, helper and required GTK/WebKit dependencies together. The sysext
+contains the helper/runner wrapper but requires the host Python app/runtime
+separately. This packaging does not change fallback policy: helper failure still
+permits explicitly unconfined browsing. Desktop diagnostic fetches use the
+caller’s normal route; the helper namespace confines portal browsing.
 
 Before this, `NetnsClient.connect()` always raised `HelperUnavailable` inside
 the sandbox, so a user who had installed both components silently received the

@@ -11,10 +11,12 @@ The two code-level blockers that gated the desktop **netns isolation** path
 are now **implemented** — see RESOLVED entries below. The privileged exec paths
 are now **validated end-to-end on a `mac80211_hwsim` virtual radio** by
 `tests/e2e-hwsim/` — see BLOCKER-DESK-003 (RESOLVED) below. Remaining:
-physical-card confirmation and a buildable package (tracked in
-[`ROADMAP.md`](ROADMAP.md) P2.1), plus the documented open-networks-only
+physical-card confirmation (#45), plus the documented open-networks-only
 limitation. See [`DESKTOP_NETNS_DEPLOYMENT.md`](DESKTOP_NETNS_DEPLOYMENT.md)
-for the full findings and the atomic-distro deployment analysis.
+for the full findings and deployment analysis. The complete native RPM now
+includes the desktop app, helper, runner and required GUI dependencies; Fedora
+CI covers build/install/runtime smoke tests. The sysext still requires the
+host Python app/runtime separately.
 
 ---
 
@@ -203,9 +205,11 @@ All three pass via `./gradlew :app:testDebugUnitTest`.
 
 The Android JVM unit tests are written against pure-Kotlin business logic and require
 `kotlinc` (not the Android SDK) to compile. They are now executed by
-`android/run-jvm-tests.sh`, which downloads kotlinc-2.0.21 if it is not on PATH (CI) and
-wires the bundled `kotlinx-serialization-compiler-plugin.jar` so `@Serializable` data
-classes generate their serializers at compile time.
+`android/run-jvm-tests.sh`. The current driver requires `kotlinc` on `PATH`
+(it does not download the compiler), downloads its pinned dependency JARs and
+wires the bundled `kotlinx-serialization-compiler-plugin.jar` so `@Serializable`
+data classes generate their serializers at compile time. Its standalone pins
+are separate from the Gradle version catalog; use Gradle for the full current suite.
 
 **Result:** 35/35 JVM unit tests pass locally
 (`PortalProbeTest`, `SessionStateTest`, `AuditLogTest`, `BlockedDomainsTest`).

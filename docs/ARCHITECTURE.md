@@ -6,7 +6,7 @@ audit-log schema, but no code:
 ```
 gatepath/
 ├── android/      # Kotlin / Jetpack Compose / Hilt — APK, F-Droid target
-├── desktop/      # Python 3.11+ / GTK4 / libadwaita / WebKit2GTK — Flatpak, Flathub target
+├── desktop/      # Python 3.11+ / GTK4 / libadwaita / WebKitGTK 6.0 — native RPM + Flatpak
 ├── mockportal/   # Shared mock captive portal (Python, stdlib only) — used by tests
 └── docs/         # SECURITY_MODEL.md, AUDIT_LOG_SCHEMA.md, ARCHITECTURE.md
 ```
@@ -14,7 +14,7 @@ gatepath/
 ## High-level flow (both platforms)
 
 ```
-[ NetworkCallback / NM Connectivity property ]
+[ NetworkCallback / NM Ip4Connectivity property ]
               │
               ▼
    ┌─────────────────────┐
@@ -28,8 +28,8 @@ gatepath/
               │
               ▼
    ┌─────────────────────┐
-   │  GatepathWebView    │  isolated WebView with off-domain blocking,
-   │                     │  cookie-less, ephemeral storage
+   │  Portal WebView    │  off-domain/tracker observations, allowed to load;
+   │                     │  cookies/storage enabled, wiped on session close
    └─────────────────────┘
               │
               ▼
@@ -50,19 +50,35 @@ audit-log schema, which is plain JSONL.
 
 ### Android — kernel-enforced
 
-Android's `ConnectivityManager.bindProcessToNetwork(Network)` rebinds **every socket**
-opened by the calling process to the given `Network` until cleared. This is enforced in
-the kernel, not by user-space configuration. Any HTTP we issue via
-`network.openConnection()` and any traffic the WebView emits flows over the WiFi
-interface, regardless of the active VPN.
+Android uses the captive `Network` for probes and holds a process-binding lease
+for portal browsing. Confinement classification gates normal sign-in: failed or
+unknown confinement displays recovery actions instead of opening the WebView.
+The system handoff in `CaptivePortalActivity` handles fold/rotation configuration
+changes in place, preserving its lease, classification and page. A successful
+classification is required; a binding attempt alone is not proof of confinement.
 
-### Desktop — best-effort, user-warned
+`MainViewModel` coordinates sessions. `SessionIncidentState` latches accepted
+incident attribution and resets it on timeout, dismissal, successful sign-in,
+network close and debug-force activation. `GatepathWebView` refreshes its client
+when the portal host changes so host-specific navigation/TLS policy stays current.
 
-`SO_BINDTODEVICE` requires `CAP_NET_RAW`; Flatpak does not grant it. We cannot bind
-WebKitGTK's sockets to a specific interface. Instead:
+### Desktop — native namespace isolation or unconfined fallback
 
-1. We read NM's `ConnectivityCheckUri` and `ConnectivityState` so detection works even
-   when a VPN is up.
+The privileged Rust helper moves the captive Wi-Fi PHY into a network namespace,
+re-associates to an open SSID, obtains DHCP and launches the fixed native WebKit
+runner as the caller's user inside that namespace. The native RPM includes the
+Python app, runner, helper and required GTK/WebKit dependencies. The sysext ships
+the helper and wrapper, requiring the host app/runtime separately. Flatpak can
+call an installed host helper using the development manifest's D-Bus grant.
+
+The namespace no-leak path has virtual-radio (`mac80211_hwsim`) coverage;
+physical Wi-Fi adapter/open captive AP confirmation remains pending (#45).
+Secured SSIDs are unsupported by this path. Desktop diagnostics use the caller's
+normal route; the helper isolates portal browsing.
+
+If the helper is unavailable, fallback browsing uses the host route:
+
+1. We read NM's captive connectivity state and configured probe URL.
 2. We enumerate VPN interfaces (`tailscale0`, `tun*`, `wg*`, `ppp*`) and detect
    exit-node mode for Tailscale.
 3. If a full-tunnel VPN is active we show a non-dismissible banner before opening the
@@ -70,6 +86,8 @@ WebKitGTK's sockets to a specific interface. Instead:
 
 This is documented honestly to the user in the UI, in [SECURITY_MODEL.md](SECURITY_MODEL.md),
 and at portal-window time.
+Fallback sessions are audited as `unconfined`; installing the complete RPM does
+not turn helper failure into a fail-closed policy.
 
 ## Data lifetime
 

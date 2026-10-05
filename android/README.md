@@ -11,10 +11,10 @@ DOM storage + cache on session close, and writes an append-only audit log.
 | Dependency | Version | Notes |
 |---|---|---|
 | JDK | 21+ | Set `JAVA_HOME` |
-| Android SDK | API 35 (compileSdk) | Set `ANDROID_HOME` |
-| Android Build Tools | 35.x | Installed via SDK Manager |
-| Gradle | 8.10.2 | Managed by the wrapper (`./gradlew`) |
-| Kotlin | 2.0.21 | Downloaded by Gradle |
+| Android SDK | API 37 (compileSdk), target API 35 | Set `ANDROID_HOME` |
+| Android Build Tools | Selected by AGP | Installed via SDK Manager |
+| Gradle | 9.8.0 | Managed by the wrapper (`./gradlew`) |
+| Kotlin compiler plugins | 2.4.20 | AGP 9.4.1 provides built-in Kotlin |
 
 You do **not** need to install Gradle or Kotlin separately — the Gradle wrapper
 downloads them on first run.
@@ -59,11 +59,11 @@ android/
 ├── gradle.properties         JVM args, AndroidX flags
 ├── gradle/
 │   ├── libs.versions.toml    Version catalog (Kotlin, AGP, Compose, Hilt)
-│   └── wrapper/              Gradle 8.10.2 wrapper
+│   └── wrapper/              Gradle 9.8.0 wrapper
 ├── gradlew / gradlew.bat     Wrapper scripts
 ├── run-jvm-tests.sh          JVM-only test driver
 └── app/
-    ├── build.gradle.kts      App module: minSdk 29, targetSdk 35, R8 on release
+    ├── build.gradle.kts      App 1.1.0: minSdk 29, targetSdk 35, compileSdk 37, R8 on release
     ├── proguard-rules.pro
     └── src/
         ├── main/
@@ -72,6 +72,7 @@ android/
         │       ├── GatepathApplication.kt      @HiltAndroidApp, AuditLog.init()
         │       ├── MainActivity.kt             @AndroidEntryPoint, Compose root
         │       ├── MainViewModel.kt            Session orchestration, audit writes
+        │       ├── CaptivePortalActivity.kt    System sign-in handoff; preserves fold/rotation page
         │       ├── di/AppModule.kt             Hilt bindings
         │       ├── network/
         │       │   ├── CaptivePortalMonitor.kt NetworkCallback → Flow<NetworkEvent>
@@ -80,6 +81,7 @@ android/
         │       │   └── BlockedDomains.kt       Tracker domain list (pure Kotlin)
         │       ├── session/
         │       │   ├── PortalSession.kt        Sealed state hierarchy
+        │       │   ├── SessionIncidentState.kt Accepted attribution + terminal reset paths
         │       │   └── PortalSessionManager.kt Immutable state transitions
         │       ├── ui/
         │       │   ├── MainScreen.kt           Status / idle Composable
@@ -87,7 +89,7 @@ android/
         │       │   ├── GatepathWebView.kt      Hardened WebView Composable
         │       │   └── theme/Theme.kt          Material3 colour scheme
         │       ├── audit/
-        │       │   ├── AuditEntry.kt           Serializable data class (schema v1)
+        │       │   ├── AuditEntry.kt           Serializable data class (schema v2)
         │       │   └── AuditLog.kt             Mutex-safe JSONL writer + singleton
         │       └── service/
         │           └── PortalMonitorService.kt Foreground service (connectedDevice)
@@ -96,7 +98,7 @@ android/
                 ├── PortalProbeTest.kt      Integration test vs. real mockportal server
                 ├── SessionStateTest.kt     State machine transition tests
                 ├── AuditLogTest.kt         Schema round-trip + concurrent writes
-                └── BlockedDomainsTest.kt   Domain blocking logic tests
+                └── BlockedDomainsTest.kt   Tracker-domain matching tests
 ```
 
 ## Permissions
@@ -116,9 +118,13 @@ Exactly these permissions are declared, per the security model:
 See [`docs/SECURITY_MODEL.md`](../docs/SECURITY_MODEL.md) for the full threat
 model. Key Android guarantees:
 
-- Portal and probe traffic bound to the captive-portal `Network` object via
-  `ConnectivityManager.bindProcessToNetwork()` — kernel-enforced, cannot leak
-  into VPN tunnel.
+- Captive `Network` probes and shared process-binding leases support portal
+  isolation. Normal sign-in requires a classified `Confined` state; failed or
+  unknown confinement presents recovery actions. A successful binding call
+  alone is not treated as proof that portal traffic bypasses a VPN.
+- System sign-in preserves its binding, classification and WebView during
+  fold/rotation changes. The WebView client refreshes with the current portal
+  host, including its host-specific TLS error policy.
 - WebView: JS enabled (required for most portals), file/content access disabled,
   `databaseEnabled` off, form-data save off, cache mode `LOAD_NO_CACHE`. Cookies
   and DOM storage (`sessionStorage` / `localStorage`) are **enabled during

@@ -18,11 +18,11 @@ other connections (VPN, encrypted DNS, normal browsing):
 - **Desktop** — a privileged helper moves the Wi-Fi PHY into a throwaway network
   namespace, runs the portal WebView there, and tears it down.
 
-The central observation: the guarantee currently rests on **structural** and
-**unit-level** confidence, not on an **eval that proves confinement**. Both e2e
-harnesses assert "the portal loads and off-domain requests are blocked" — not
-"traffic cannot escape the boundary" — and the desktop privileged path is
-exercised only through fakes. Closing that is the highest-value work.
+Confinement now has automated traffic-boundary evidence: Android emulator tests
+exercise covering/excluding VPN modes, and desktop `mac80211_hwsim` tests execute
+the real privileged namespace path and trusted-network no-leak check. Physical
+Wi-Fi adapter/open captive AP validation remains pending (#45). Off-domain and
+tracker traffic is observed and counted, allowed to load for portal compatibility.
 
 ---
 
@@ -168,8 +168,8 @@ Run + replay recipes in `fuzz/README.md`. Smoke-run clean on all five targets.
 
 ## P2 — Rollout safety (the intent isn't met if users can't run it)
 
-### P2.1 — A buildable helper package
-**Status:** **sysext done (2026-06-30); RPM `.spec` done (2026-07-24)** — both
+### P2.1 — Native desktop and helper packages
+**Status:** **sysext done (2026-06-30); complete native RPM done (2026-10-04)** — both
 packaging paths now ship. `DESKTOP_NETNS_DEPLOYMENT.md` analysed sysext vs RPM but shipped no
 artifact; now `desktop/gatepath-netns-helper/packaging/build-sysext.sh` produces a
 `systemd-sysext` squashfs image (binary + runner + unit + D-Bus policy/activation +
@@ -178,15 +178,18 @@ structurally checks it, and a `build-sysext` CI job (`desktop.yml`) builds,
 validates, and uploads it. Every file installs under `/usr`, so it overlays a
 read-only `/usr` with **no source edits**; build + install steps are in
 `DESKTOP_NETNS_DEPLOYMENT.md` §6. **The RPM alternative (Option A) now ships too:**
-`packaging/gatepath-netns-helper.spec` installs the helper to the same canonical
+`packaging/build-rpm.sh` builds `gatepath-netns-helper.spec`, which installs the
+Python desktop app, launcher/assets, portal runner and helper to canonical
 `/usr` paths (so `PORTAL_RUNNER_PATH` etc. work with no source edits) plus the
-logrotate config natively into `/etc` (`%config(noreplace)`), with the deployment
-doc's runtime `Requires` (`iproute2`/`iw`/`wpa_supplicant`/a DHCP client) + weak
-deps for the WebView stack, systemd/tmpfiles scriptlets for the D-Bus-activated
-unit. Built + verified end-to-end (`rpmbuild -ba` → binary + noarch data,
-canonical layout, config/license flags, scriptlets). **Follow-ups:** a real
+logrotate config natively into `/etc` (`%config(noreplace)`), with
+runtime `Requires` (`iproute`/`iw`/`wpa_supplicant`/a DHCP client) plus required
+Python GObject/Cairo, D-Bus, GTK4, libadwaita and WebKitGTK dependencies, and
+systemd/tmpfiles scriptlets for the D-Bus-activated unit. Fedora CI builds and
+installs with optional dependencies disabled, then imports the installed app,
+UI/runner outside the source checkout and checks malformed-URL rejection. The sysext
+still needs the host Python app/runtime installed separately. **Follow-ups:** a real
 `systemd-sysext merge` + helper-start smoke test on a privileged host (the
-self-hosted runner is the natural place); sysext signing (→ P2.3); a full Fedora
+self-hosted runner is the natural place); a full Fedora
 dist-git submission (regenerate crate BuildRequires with `rust2rpm`, switch to the
 `%cargo_*` macros — the shipped spec builds straight from the vendored `Cargo.lock`).
 
@@ -306,8 +309,9 @@ not a fuzzy probe.
 ## What's already solid (so this roadmap is calibrated, not alarmist)
 
 - Strong unit coverage (Rust + pytest + Android JVM) with pinned privileged argv.
-- **Two** real e2e harnesses (Android emulator, desktop Docker) that prove the
-  portal flow + off-domain blocking.
+- Android emulator and desktop Docker portal-flow tests, plus privileged
+  `mac80211_hwsim` coverage of the desktop namespace/no-leak path. Off-domain
+  requests are observed and counted rather than blocked.
 - Three cross-language drift guards: `schema-parity.yml` (audit-log schema,
   desktop/Android), `test_netns_client.py` (Rust helper refusal/wire-error names),
   and `test_cause_parity.py` (diagnostic cause vocabulary, Android/desktop).

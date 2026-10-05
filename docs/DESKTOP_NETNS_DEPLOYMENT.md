@@ -8,7 +8,9 @@ privileged network-namespace ("netns") helper should be deployed there.
 It is a findings/design doc, not an implementation. The privileged path is now
 validated end-to-end on a `mac80211_hwsim` virtual radio — see
 [`BLOCKERS.md`](BLOCKERS.md) (BLOCKER-DESK-003 resolved). Remaining
-confirmation items (physical-card, buildable package) are tracked there.
+physical-card confirmation is tracked there (#45). A complete native RPM is
+implemented and build/install-tested in Fedora CI; the sysext supplies the helper
+and runner wrapper with a separate host app/runtime requirement.
 
 ---
 
@@ -48,9 +50,10 @@ The architecture for this already exists in the tree:
 - `desktop/gatepath/window.py`, `app.py` — GTK wiring; falls back to the
   in-process WebView when the helper is absent (the Flatpak-only path).
 
-The unit/JVM-style tests pass (109 Rust, 233 Python), but they exercise the
-privileged kernel operations through **fakes** (`FakeNetnsOps`, `FakeSpawner`).
-That is why the bugs in §3 below have not surfaced.
+Unit tests exercise privileged kernel operations through **fakes**
+(`FakeNetnsOps`, `FakeSpawner`). The virtual-radio harness additionally executes
+the real kernel/helper path; physical-card tests remain necessary for firmware
+and real AP behavior.
 
 ---
 
@@ -91,7 +94,7 @@ The evaluation surfaced two code-level blockers. Both are now **implemented**
 (tracked as RESOLVED in [`BLOCKERS.md`](BLOCKERS.md)). The privileged exec
 paths are now also **validated end-to-end on a `mac80211_hwsim` virtual radio**
 (BLOCKER-DESK-003 resolved, `tests/e2e-hwsim/`). Physical-card confirmation
-and a buildable package remain.
+remains; package builds and Fedora RPM install smoke tests are implemented.
 
 ### 3a. Moving the Wi-Fi interface — fixed to move the whole PHY
 
@@ -249,13 +252,13 @@ For a security daemon that holds `CAP_NET_ADMIN` and moves your NIC, **prefer
 Option B (systemd-sysext) as the primary path on Bazzite**, with **Option A
 (layered RPM) as the close, more-conventional alternative**:
 
-- Choose **sysext** if your priority is *avoiding rpm-ostree layering and
+- Choose **sysext** if the host app/runtime is already installed and your priority is *avoiding rpm-ostree layering and
   rebase friction* — a very Bazzite-aligned priority. It keeps the hardcoded
   `/usr` paths working with no source changes, is reversible at runtime, and
   with `ID=_any` needs little maintenance across OS updates. This is the best
   day-to-day fit for an atomic host.
-- Choose the **RPM** if your priority is *conventionality and a signed,
-  cleanly-upgradable package* and you accept layering friction + a reboot. It
+- Choose the **RPM** for one installation supplying the desktop app, runner,
+  helper and required dependencies, and if you accept layering friction + a reboot. It
   is the right artifact to publish if Gatepath is ever packaged for plain
   Fedora, so the work is reusable.
 
@@ -263,9 +266,9 @@ Option B (systemd-sysext) as the primary path on Bazzite**, with **Option A
 > `desktop/gatepath-netns-helper/packaging/gatepath-netns-helper.spec` (Option A).
 > It installs to the same canonical `/usr` paths as the sysext (no source edits)
 > and adds the logrotate config natively into `/etc` (`%config(noreplace)`), with
-> the runtime `Requires` above, weak deps for the WebView stack, and
+> required networking/Python/GTK/WebKit runtime dependencies, and
 > systemd/tmpfiles scriptlets for the D-Bus-activated unit. Build it with
-> `rpmbuild -ba` per the header comment in the spec; for a real Fedora dist-git
+> `packaging/build-rpm.sh`; for a real Fedora dist-git
 > submission, regenerate crate `BuildRequires` with `rust2rpm` and switch to the
 > `%cargo_*` macros (the shipped spec builds straight from the vendored
 > `Cargo.lock` so it works from the repo without that tooling).
@@ -275,8 +278,10 @@ not as the shipping mechanism.
 
 The wiphy move + in-netns supplicant/DHCP are now built (§3) and
 **hwsim-validated** (BLOCKER-DESK-003 resolved). The remaining gates before
-shipping a polished installer are: physical-card confirmation on a real open
-captive network, and producing the sysext (or RPM) package (ROADMAP P2.1).
+claiming physical-hardware validation are: physical-card confirmation on a real
+open captive network, including rendering and complete teardown (#45). Package
+builds are implemented; Fedora RPM install/runtime smoke coverage does not
+replace that network test.
 
 ---
 
