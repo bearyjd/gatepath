@@ -1,4 +1,4 @@
-<!-- Generated: 2026-07-05 | Files scanned: audit_log_schema.json + writers | Token estimate: ~350 | Updated: 2026-09-19 for schema v2 -->
+<!-- Updated: 2026-10-04 | Sources: shared audit schema, writers and session/console models -->
 
 # Data Codemap — Audit Log Schema
 
@@ -33,15 +33,25 @@ tls_cert_errors_bypassed: int    (optional field; android: cert errors proceeded
 ## Writers / readers
 | Side | Writer | Notes |
 |------|--------|-------|
-| Desktop | `desktop/gatepath/audit_log.py` | Redacts ssid/gateway_ip/portal_domain per `docs/TROUBLESHOOTING.md` |
+| Desktop | `desktop/gatepath/audit_log.py` | Stores raw network identifiers locally; support-bundle collection redacts ssid/gateway_ip/portal_domain per `docs/TROUBLESHOOTING.md` |
 | Desktop (root) | `desktop/gatepath-netns-helper/src/audit_log.rs` | Separate privileged-side JSONL, `/var/lib/gatepath/helper-audit.jsonl` in production (via systemd `StateDirectory`) |
 | Android | `android/.../audit/AuditLog.kt`, `AuditEntry.kt` | |
 
 Both platforms' test suites load `audit_log_schema.json` directly and assert
-their writer's output conforms — this is the only enforced cross-language
-contract outside the D-Bus `RefusalReason` enum (see backend.md).
+their writer's output conforms. D-Bus method/signal signatures, refusal reasons,
+and diagnosis causes also have parity guards (see backend.md).
+
+## Android session and diagnostic state
+- `session/SessionIncidentState.kt`: records confinement/incident ID only for
+  accepted re-entry. Timeout, dismissal, successful sign-in, network close and
+  debug-force transitions reset attribution; rejected re-entry preserves it.
+- `diag/ConsoleCaptureEntry.kt`, `ConsoleCaptureBuffer.kt`, `ConsoleCaptureFile.kt`:
+  bounded console records in app-private `webview-console.jsonl`; JSON decoding
+  tolerates unknown future fields. `share/DiagnosticsSharer.kt` redacts the
+  support bundle before user-initiated sharing.
 
 ## Other structured config (not "data" per se, but schema-like)
 - `distribution/fdroid/com.ventouxlabs.gatepath.yml` — F-Droid metadata
 - `distribution/flathub/com.ventouxlabs.Gatepath.yml` — Flathub manifest
-- D-Bus/PolicyKit policy files under `desktop/gatepath-netns-helper/packaging/`
+- D-Bus/PolicyKit source files under `desktop/gatepath-netns-helper/data/`;
+  `packaging/` contains the RPM/sysext build/install recipes.

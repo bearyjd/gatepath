@@ -18,8 +18,10 @@ App ids (post-rebrand, see the `identity-rename` history): Android/F-Droid
 
 1. ~~**Add a `LICENSE` file.**~~ **Done** — the canonical GPL-3.0 text ships at
    the repo root as `LICENSE` (the declared license is `GPL-3.0-or-later`).
-2. **Cut release tags.** F-Droid builds from tag `v1.0.0`; Flathub pins a tag +
-   full commit sha. No release tag exists yet.
+2. **Refresh release pins.** The F-Droid draft still targets `v1.0.0` /
+   versionCode 1, while current Android metadata is `1.1.0`. The Flathub draft
+   uses a placeholder commit. Select an actual release tag, align versions with
+   that tag's source, and pin its full commit before submission.
 
 ## F-Droid
 
@@ -42,16 +44,19 @@ App ids (post-rebrand, see the `identity-rename` history): Android/F-Droid
 2. The manifest mirrors the CI-built dev manifest
    (`desktop/com.ventouxlabs.Gatepath.yml`); the only change is a pinned
    `type: git` tag+commit source instead of the local `dir` path.
-3. **Open architectural question — the privileged helper.** Isolation is done by
+3. **Host isolation dependency.** Isolation is done by
    a root **system** D-Bus service (`com.ventouxlabs.Gatepath.NetNsHelper`) that
-   cannot live inside a Flatpak sandbox. From Flatpak the app only functions if
-   the helper is installed on the host (sysext/RPM) and the manifest grants
+   cannot live inside a Flatpak sandbox. Confined sign-in requires
+   the helper and portal runtime installed on the host and the manifest grants
    `--system-talk-name=com.ventouxlabs.Gatepath.NetNsHelper` (commented in the
-   draft). Until that host-dependency story is packaged/documented, a Flathub
-   build is effectively GUI-only. Resolve before submitting.
+   draft, enabled in the development/CI manifest). The complete native RPM
+   provides the app/runner/helper and required GUI stack; the sysext needs the
+   host app/runtime separately. Without the helper the app supports unconfined
+   fallback sign-in with a VPN warning, rather than namespace isolation.
+   Resolve the draft's grant and document this behavior before submission.
 
 ## Status
 
-Both are **drafts with `TODO`s** (release tag, commit sha, helper talk-name —
+Both are **drafts with `TODO`s** (release/version pins, commit sha, helper talk-name —
 LICENSE and the fastlane path are resolved). Treat them as a starting point to
 validate with `fdroid build` / `flatpak-builder`, not as submit-ready.
