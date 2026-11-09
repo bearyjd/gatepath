@@ -35,7 +35,7 @@ class BindWatchdogTest {
     private fun fixture(): Fixture {
         val owner = TestOwner()
         val fires = IntArray(1)
-        owner.registry.addObserver(BindWatchdog { fires[0]++ })
+        owner.registry.addObserver(BindWatchdog(onAppBackgrounded = { fires[0]++ }))
         return Fixture(owner, fires)
     }
 
@@ -72,5 +72,19 @@ class BindWatchdogTest {
             f.owner.registry.handleLifecycleEvent(Lifecycle.Event.ON_STOP)
         }
         assertEquals(3, f.fireCount)
+    }
+
+    @Test
+    fun `start fires the foreground callback, stop fires only the background one`() {
+        val owner = TestOwner()
+        val log = mutableListOf<String>()
+        owner.registry.addObserver(BindWatchdog(onAppBackgrounded = { log += "bg" }, onAppForegrounded = { log += "fg" }))
+        owner.registry.handleLifecycleEvent(Lifecycle.Event.ON_CREATE)
+        owner.registry.handleLifecycleEvent(Lifecycle.Event.ON_START)
+        owner.registry.handleLifecycleEvent(Lifecycle.Event.ON_RESUME)
+        owner.registry.handleLifecycleEvent(Lifecycle.Event.ON_PAUSE)
+        owner.registry.handleLifecycleEvent(Lifecycle.Event.ON_STOP)
+        owner.registry.handleLifecycleEvent(Lifecycle.Event.ON_START)
+        assertEquals(listOf("fg", "bg", "fg"), log)
     }
 }

@@ -86,7 +86,8 @@ import javax.inject.Inject
  * gesture, swiping the task away), which makes Android re-check the network:
  * signed in, it validates; still captive, the sign-in notification comes back.
  * A fold, unfold or rotation does not rebuild this screen (the manifest's
- * `configChanges`), so the lease, the classification and the page all stay.
+ * `configChanges`), so the lease, the classification and the page all stay. Backgrounding the
+ * app suspends the bind but keeps the lease, and foregrounding re-applies it.
  * A configuration change it does not handle in place (a language or font-size
  * switch) still rebuilds it; that rebuild answers nothing and leaves it to the
  * rebuilt screen.

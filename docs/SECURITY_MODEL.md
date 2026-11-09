@@ -421,10 +421,14 @@ save/bind/restore:
      `MainActivity`'s WebView holds a lease of its own, because releases are tracked per
      lease rather than by comparing the process-wide slot's current value.
 
-  `GatepathApplication` is not an owner — it holds no lease of its own. Its
-  whole-app-background watchdog and `onTerminate` both call `releaseAll()`, which is a
-  leak defense of last resort: it clears every owner's lease and binds null immediately,
-  even with a borrow (below) in flight, because it cannot wait for one to finish.
+  `GatepathApplication` is not an owner — it holds no lease of its own. On whole-app
+  background it calls `suspendBinding()`: bind null immediately (even with a borrow, below,
+  in flight, because it cannot wait for one) while keeping the owner stack, so the leases of
+  a WebView that outlives the background stay valid. On foreground it calls
+  `resumeBinding()`, which re-applies the top lease's network (and, if the bind is now
+  refused, clears the stack and leaves the slot null). Without that, the live sign-in page
+  kept loading over the default route after the user came back (issue #189). `onTerminate`
+  calls `releaseAll()`, the last-resort variant that clears every lease and binds null.
 - **Borrowers** pin the slot for the duration of a block and restore it to the *current*
   top of the owner stack afterward — never to a value saved before the block ran, which is
   what let a stale restore happen under the old per-caller design.
