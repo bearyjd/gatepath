@@ -48,7 +48,10 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
 
-        maybeApplyDebugIntent(intent)
+        // Only for a fresh launch: a recreated activity (savedInstanceState set)
+        // gets the same intent again, and re-applying it would force the debug
+        // portal session a second time.
+        if (savedInstanceState == null) maybeApplyDebugIntent(intent)
 
         // The monitor runs from the ViewModel's init, so a classification can
         // land before this Activity exists. The setter replays the current

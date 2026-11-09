@@ -271,6 +271,7 @@ TEST_SOURCES=(
     "$SRC_TEST/com/ventouxlabs/gatepath/ProcessBindingTest.kt"
     "$SRC_TEST/com/ventouxlabs/gatepath/ConfinementStateTest.kt"
     "$SRC_TEST/com/ventouxlabs/gatepath/CaptivePortalReplyTest.kt"
+    "$SRC_TEST/com/ventouxlabs/gatepath/MainActivityManifestTest.kt"
     "$SRC_TEST/com/ventouxlabs/gatepath/diag/LogRedactionTest.kt"
     "$SRC_TEST/com/ventouxlabs/gatepath/diag/RedactionPatternsTest.kt"
     "$SRC_TEST/com/ventouxlabs/gatepath/diag/SignInTimelineTest.kt"
