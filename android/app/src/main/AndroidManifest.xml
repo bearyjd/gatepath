@@ -34,8 +34,14 @@
         android:theme="@style/Theme.Gatepath"
         android:networkSecurityConfig="@xml/network_security_config">
 
+        <!-- configChanges: a rotation or fold resizes the in-app sign-in screen
+             in place. A rebuild disposed the WebView, whose onDispose wipes the
+             process-wide cookies and storage, and then reloaded the portal from
+             its first page with no session. MainActivityManifestTest guards the
+             list. -->
         <activity
             android:name=".MainActivity"
+            android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|density|keyboardHidden"
             android:exported="true"
             android:theme="@style/Theme.Gatepath"
             android:windowSoftInputMode="adjustResize">
