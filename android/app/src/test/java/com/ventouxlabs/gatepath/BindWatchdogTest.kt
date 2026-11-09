@@ -73,4 +73,18 @@ class BindWatchdogTest {
         }
         assertEquals(3, f.fireCount)
     }
+
+    @Test
+    fun `start fires the foreground callback, stop fires only the background one`() {
+        val owner = TestOwner()
+        val log = mutableListOf<String>()
+        owner.registry.addObserver(BindWatchdog(onAppBackgrounded = { log += "bg" }, onAppForegrounded = { log += "fg" }))
+        owner.registry.handleLifecycleEvent(Lifecycle.Event.ON_CREATE)
+        owner.registry.handleLifecycleEvent(Lifecycle.Event.ON_START)
+        owner.registry.handleLifecycleEvent(Lifecycle.Event.ON_RESUME)
+        owner.registry.handleLifecycleEvent(Lifecycle.Event.ON_PAUSE)
+        owner.registry.handleLifecycleEvent(Lifecycle.Event.ON_STOP)
+        owner.registry.handleLifecycleEvent(Lifecycle.Event.ON_START)
+        assertEquals(listOf("fg", "bg", "fg"), log)
+    }
 }

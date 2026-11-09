@@ -19,7 +19,18 @@ import androidx.lifecycle.LifecycleOwner
  */
 internal class BindWatchdog(
     private val onAppBackgrounded: () -> Unit,
+    private val onAppForegrounded: () -> Unit = {},
 ) : DefaultLifecycleObserver {
+
+    /**
+     * Fires when the app returns to the foreground (and on first launch,
+     * where the callback must be a no-op). Without it, whatever
+     * [onAppBackgrounded] tore down is never put back for the WebView that
+     * outlived the background — see issue #189.
+     */
+    override fun onStart(owner: LifecycleOwner) {
+        onAppForegrounded()
+    }
 
     override fun onStop(owner: LifecycleOwner) {
         onAppBackgrounded()

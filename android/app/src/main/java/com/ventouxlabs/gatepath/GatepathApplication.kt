@@ -23,18 +23,27 @@ class GatepathApplication : Application() {
     override fun onCreate() {
         super.onCreate()
         AuditLog.init(filesDir)
-        // Watchdog: release every owner's lease (and force-bind null) when the
+        // Watchdog: force-bind null (keeping the owners' leases) when the
         // WHOLE app goes to background. ProcessLifecycleOwner debounces across
         // per-Activity pause/resume transitions (rotation, single-task switch,
         // intent-launched activity), so routine in-app navigation does NOT
         // trigger a clear. See SECURITY_MODEL.md "Caveat — bindProcessToNetwork
         // is process-wide" for the leak class this defends against, and
-        // ProcessBinding's KDoc for why releaseAll() is safe to call even with
+        // ProcessBinding's KDoc for why suspendBinding() is safe to call even with
         // a borrow (the monitor's probe) in flight.
         ProcessLifecycleOwner.get().lifecycle.addObserver(
-            BindWatchdog {
-                clearProcessNetworkBinding("ProcessLifecycleOwner.onStop (app backgrounded)")
-            }
+            BindWatchdog(
+                onAppBackgrounded = {
+                    runCatching { processBinding.suspendBinding() }
+                        .onSuccess { Log.d(TAG, "Process binding suspended (app backgrounded)") }
+                        .onFailure { Log.w(TAG, "Failed to suspend process binding: ${it.message}") }
+                },
+                onAppForegrounded = {
+                    runCatching { processBinding.resumeBinding() }
+                        .onSuccess { if (!it) Log.w(TAG, "Resume: bind refused, owners dropped (fails closed)") }
+                        .onFailure { Log.w(TAG, "Failed to resume process binding: ${it.message}") }
+                },
+            )
         )
     }
 

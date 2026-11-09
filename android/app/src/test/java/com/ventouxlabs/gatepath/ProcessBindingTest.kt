@@ -317,4 +317,111 @@ class ProcessBindingTest {
         binding.release(leaseB)
         assertNull(binding.current())
     }
+
+    @Test
+    fun `suspendBinding binds null but keeps the owner stack, resumeBinding rebinds the top`() {
+        val binder = FakeBinder()
+        val binding = ProcessBinding(binder)
+        val netA = Net(1)
+        val netB = Net(2)
+        binding.acquire(netA)
+        val leaseB = requireNotNull(binding.acquire(netB))
+
+        binding.suspendBinding()
+        assertNull(binding.current())
+
+        assertEquals(true, binding.resumeBinding())
+        assertEquals(netB, binding.current())
+
+        // The lease taken before the background is still honoured.
+        binding.release(leaseB)
+        assertEquals(netA, binding.current())
+    }
+
+    @Test
+    fun `release and acquire while suspended do not bind until resume`() {
+        val binder = FakeBinder()
+        val binding = ProcessBinding(binder)
+        val netA = Net(1)
+        val netB = Net(2)
+        val leaseA = requireNotNull(binding.acquire(netA))
+        binding.acquire(netB)
+
+        binding.suspendBinding()
+        binding.release(leaseA)
+        assertNull(binding.current())
+        val netC = Net(3)
+        requireNotNull(binding.acquire(netC))
+        assertNull(binding.current())
+
+        binding.resumeBinding()
+        assertEquals(netC, binding.current())
+    }
+
+    @Test
+    fun `resumeBinding without a prior suspend is a no-op`() {
+        val binder = FakeBinder()
+        val binding = ProcessBinding(binder)
+        binding.acquire(Net(1))
+        val callsBefore = binder.calls.size
+
+        assertEquals(true, binding.resumeBinding())
+        assertEquals(callsBefore, binder.calls.size)
+    }
+
+    @Test
+    fun `resumeBinding with an empty stack leaves the slot null`() {
+        val binder = FakeBinder()
+        val binding = ProcessBinding(binder)
+        binding.suspendBinding()
+        assertEquals(true, binding.resumeBinding())
+        assertNull(binding.current())
+    }
+
+    @Test
+    fun `resumeBinding fails closed when the bind is refused`() {
+        val binder = FakeBinder()
+        val binding = ProcessBinding(binder)
+        val net = Net(1)
+        val lease = requireNotNull(binding.acquire(net))
+        binding.suspendBinding()
+        binder.refuse(net)
+
+        assertEquals(false, binding.resumeBinding())
+        assertNull(binding.current())
+        // Stack was cleared: releasing the stale lease must not rebind anything.
+        binding.release(lease)
+        assertNull(binding.current())
+    }
+
+    @Test
+    fun `releaseAll after suspend ends the suspension`() {
+        val binder = FakeBinder()
+        val binding = ProcessBinding(binder)
+        binding.suspendBinding()
+        binding.releaseAll()
+        val net = Net(1)
+        requireNotNull(binding.acquire(net))
+        assertEquals(net, binding.current())
+    }
+
+    @Test
+    fun `resumeBinding during a borrow defers to the borrow's end`() = runTest {
+        val binder = FakeBinder()
+        val binding = ProcessBinding(binder)
+        val owner = Net(1)
+        val probe = Net(9)
+        binding.acquire(owner)
+        binding.suspendBinding()
+
+        val job = launch {
+            binding.borrow(probe) {
+                binding.resumeBinding()
+                assertEquals(probe, binding.current())
+                delay(10)
+            }
+        }
+        job.join()
+        assertEquals(owner, binding.current())
+    }
 }

@@ -89,6 +89,13 @@ class ProcessBinding<N : Any>(private val binder: NetworkBinder<N>) {
     private var borrowing = false
 
     /**
+     * True between [suspendBinding] and [resumeBinding]: the app is in the
+     * background, the slot is bound to null, and the owner stack is kept so
+     * the owners' leases stay valid for when the app returns.
+     */
+    private var suspended = false
+
+    /**
      * Binds [network] and pushes a new [Lease] onto the owner stack. Returns
      * null and leaves the stack untouched when the binder refuses the bind
      * (e.g. `EPERM` under a secure VPN), so a refused bind never claims the
@@ -97,7 +104,9 @@ class ProcessBinding<N : Any>(private val binder: NetworkBinder<N>) {
      */
     fun acquire(network: N): Lease<N>? {
         synchronized(lock) {
-            if (borrowing) {
+            if (borrowing || suspended) {
+                // Deferred: the bind is applied when the borrow ends or the
+                // app resumes. While suspended the slot must stay null.
                 val lease = Lease(network)
                 stack.add(lease)
                 return lease
@@ -136,7 +145,49 @@ class ProcessBinding<N : Any>(private val binder: NetworkBinder<N>) {
     fun releaseAll() {
         synchronized(lock) {
             stack.clear()
+            suspended = false
             binder.bind(null)
+        }
+    }
+
+    /**
+     * Whole-app-background leak defense that, unlike [releaseAll], keeps the
+     * owner stack. Binds null immediately (also during a [borrow], for the
+     * same reason as [releaseAll]) and holds the slot at null until
+     * [resumeBinding]. The owners' [Lease]s stay valid: a WebView screen that
+     * is still composed when the user returns (power button, an SMS app, the
+     * VPN app) keeps its lease, and [resumeBinding] puts the bind back under
+     * it. Emptying the stack instead left those leases non-null but unbound,
+     * so the live page loaded over the default route (issue #189).
+     */
+    fun suspendBinding() {
+        synchronized(lock) {
+            suspended = true
+            binder.bind(null)
+        }
+    }
+
+    /**
+     * Counterpart of [suspendBinding], called when the app is foregrounded.
+     * Re-applies the bind for the top of the owner stack. Does nothing when
+     * not suspended (first launch, or [releaseAll] ran), and defers to the
+     * end of a [borrow] when one is in flight.
+     *
+     * Fails closed: if the binder refuses the top owner's network (e.g.
+     * `EPERM` under a secure VPN) the stack is cleared and the slot stays
+     * null, so nothing claims a binding that does not exist. Returns false in
+     * that case, true otherwise.
+     */
+    fun resumeBinding(): Boolean {
+        synchronized(lock) {
+            if (!suspended) return true
+            suspended = false
+            if (borrowing) return true
+            val top = stack.lastOrNull()?.network ?: return true
+            if (binder.bind(top)) return true
+            stack.clear()
+            binder.bind(null)
+            return false
         }
     }
 
@@ -198,6 +249,6 @@ class ProcessBinding<N : Any>(private val binder: NetworkBinder<N>) {
 
     /** Must be called while holding [lock]. */
     private fun applyTop() {
-        binder.bind(stack.lastOrNull()?.network)
+        binder.bind(if (suspended) null else stack.lastOrNull()?.network)
     }
 }
