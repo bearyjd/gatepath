@@ -35,7 +35,7 @@ class BindWatchdogTest {
     private fun fixture(): Fixture {
         val owner = TestOwner()
         val fires = IntArray(1)
-        owner.registry.addObserver(BindWatchdog { fires[0]++ })
+        owner.registry.addObserver(BindWatchdog(onAppBackgrounded = { fires[0]++ }))
         return Fixture(owner, fires)
     }
 
