@@ -431,6 +431,17 @@ impl<
             if active.is_none() {
                 return TeardownCaptiveResponse::NotActive;
             }
+            // Only the session owner may tear it down (same rule as
+            // `launch_portal_inner`); checked before any state is touched.
+            match self
+                .active_sender
+                .lock()
+                .expect("active_sender mutex poisoned")
+                .as_deref()
+            {
+                Some(owner) if owner == sender => {}
+                Some(_) | None => return TeardownCaptiveResponse::SenderMismatch,
+            }
             // Drop the watch guard BEFORE destroy so the auto-teardown callback
             // can't race in. Cancel the backstop timer too (5b.8).
             *self.active_guard.lock().expect("guard mutex poisoned") = None;
@@ -769,6 +780,9 @@ impl<
             TeardownCaptiveResponse::NotActive => AuditDecision::Refused {
                 reason: "not_active".into(),
             },
+            TeardownCaptiveResponse::SenderMismatch => AuditDecision::Refused {
+                reason: "sender_mismatch".into(),
+            },
             TeardownCaptiveResponse::KernelError => AuditDecision::Refused {
                 reason: "kernel_error".into(),
             },
@@ -1106,6 +1120,26 @@ mod tests {
         assert_eq!(audit.entries().len(), 2);
         assert_eq!(audit.entries()[1].action, AuditAction::TeardownCaptive);
         assert_eq!(audit.entries()[1].decision, AuditDecision::Success);
+    }
+
+    #[test]
+    fn teardown_from_non_owner_is_refused_and_keeps_session() {
+        let Fixture { svc, audit, .. } = svc_with_audit(
+            FakeNetnsOps::new(),
+            FakeAuthorizer::allow_all(),
+            allow_captive(),
+            permissive_throttle(),
+        );
+        svc.setup_captive(&req("wlan0"), ":1.42");
+        let resp = svc.teardown_captive(":1.99");
+        assert_eq!(resp, TeardownCaptiveResponse::SenderMismatch);
+        assert!(svc.is_active(), "non-owner must not tear down the session");
+        assert_eq!(
+            audit.entries()[1].decision,
+            AuditDecision::Refused {
+                reason: "sender_mismatch".into()
+            }
+        );
     }
 
     #[test]

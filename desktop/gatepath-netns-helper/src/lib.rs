@@ -217,5 +217,7 @@ pub enum LaunchPortalResponse {
 pub enum TeardownCaptiveResponse {
     Success,
     NotActive,
+    /// Caller is not the session owner (Phase 5b.7 parity with `LaunchPortal`).
+    SenderMismatch,
     KernelError,
 }
