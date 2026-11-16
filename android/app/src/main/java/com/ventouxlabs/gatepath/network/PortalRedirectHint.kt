@@ -80,6 +80,14 @@ object PortalRedirectHint {
             ?: fromHtml(html, baseUrl)?.let { Hint(it, PortalProbeCapture.RedirectSignal.META_REFRESH) }
             ?: fromScriptedLocation(html, baseUrl)?.let { Hint(it, PortalProbeCapture.RedirectSignal.SCRIPTED_LOCATION) }
 
+    /**
+     * Validate a 3xx `Location` header the same way as the 200-response hints:
+     * http(s) with a host only, relative targets resolved against [baseUrl].
+     * Returns `null` when the value is unsafe or unparseable.
+     */
+    fun fromLocationHeader(location: String?, baseUrl: String): String? =
+        sanitize(location, baseUrl)
+
     data class Hint(val url: String, val signal: PortalProbeCapture.RedirectSignal)
 
     /** Parse a `Refresh: 0; url=...` directive value. */
