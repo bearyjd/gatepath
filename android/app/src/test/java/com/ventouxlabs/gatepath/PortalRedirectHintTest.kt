@@ -4,6 +4,7 @@ import com.ventouxlabs.gatepath.network.PortalRedirectHint
 import com.ventouxlabs.gatepath.network.PortalProbeCapture
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
@@ -245,5 +246,17 @@ class PortalRedirectHintTest {
         val padding = " ".repeat(PortalRedirectHint.MAX_HTML_SCAN_CHARS + 100)
         val html = "$padding<meta http-equiv='refresh' content='0;url=http://late.example.com/'>"
         assertNull(PortalRedirectHint.resolve(null, html, base))
+    }
+
+    @Test
+    fun `unterminated meta tags are scanned in linear time`() {
+        // "<meta " repeated with no closing '>' made the old `<meta\s[^>]*>`
+        // regex rescan to end-of-input from every start: quadratic, ~1s for a
+        // 64 KiB body. A linear scan takes a few ms.
+        val html = "<meta ".repeat(PortalRedirectHint.MAX_HTML_SCAN_CHARS / 6)
+        val startNanos = System.nanoTime()
+        assertNull(PortalRedirectHint.resolve(null, html, base))
+        val elapsedMs = (System.nanoTime() - startNanos) / 1_000_000
+        assertTrue("scan took ${elapsedMs}ms", elapsedMs < 250)
     }
 }
