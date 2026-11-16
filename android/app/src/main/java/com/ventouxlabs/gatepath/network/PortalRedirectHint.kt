@@ -44,8 +44,6 @@ object PortalRedirectHint {
         RegexOption.IGNORE_CASE,
     )
 
-    private val META_TAG = Regex("""<meta\s[^>]*>""", RegexOption.IGNORE_CASE)
-
     /**
      * `top.location.href = "..."` and friends — the third redirect form seen in
      * the field, used by gateways that emit neither a Refresh header nor a
@@ -101,13 +99,37 @@ object PortalRedirectHint {
     private fun fromHtml(html: String?, baseUrl: String): String? {
         if (html.isNullOrEmpty()) return null
         val scannable = html.take(MAX_HTML_SCAN_CHARS)
-        for (tag in META_TAG.findAll(scannable)) {
-            val httpEquiv = attribute(tag.value, "http-equiv") ?: continue
+        for (tag in metaTags(scannable)) {
+            val httpEquiv = attribute(tag, "http-equiv") ?: continue
             if (!httpEquiv.trim().equals("refresh", ignoreCase = true)) continue
-            val content = attribute(tag.value, "content") ?: continue
+            val content = attribute(tag, "content") ?: continue
             fromRefreshDirective(content, baseUrl)?.let { return it }
         }
         return null
+    }
+
+    /**
+     * Lazily yields each `<meta ...>` tag in [html]. Linear by construction: a
+     * regex like `<meta\s[^>]*>` rescans to end-of-input from every `<meta `
+     * when no `>` follows, which is quadratic on a hostile body. Here a missing
+     * `>` ends the scan, since no later start can find one either.
+     */
+    private fun metaTags(html: String): Sequence<String> = sequence {
+        var from = 0
+        while (true) {
+            val start = html.indexOf("<meta", from, ignoreCase = true)
+            if (start < 0) return@sequence
+            val afterName = start + "<meta".length
+            if (afterName >= html.length) return@sequence
+            if (!html[afterName].isWhitespace()) {
+                from = afterName
+                continue
+            }
+            val end = html.indexOf('>', afterName)
+            if (end < 0) return@sequence
+            yield(html.substring(start, end + 1))
+            from = end + 1
+        }
     }
 
     /**
