@@ -22,12 +22,16 @@ on:
       - 'tests/e2e-android/driver/**'
       - 'tests/e2e-android/scenario/**'
       - 'tests/e2e-docker/driver/**'
+      - 'tests/workflows/**'
+      - '.github/workflows/release.yml'
       - '.github/workflows/e2e-driver-tests.yml'
   pull_request:
     paths:
       - 'tests/e2e-android/driver/**'
       - 'tests/e2e-android/scenario/**'
       - 'tests/e2e-docker/driver/**'
+      - 'tests/workflows/**'
+      - '.github/workflows/release.yml'
       - '.github/workflows/e2e-driver-tests.yml'
 
 jobs:
@@ -63,4 +67,7 @@ jobs:
       # two runs of identical app behaviour). Guarded here for the same reason.
       - name: Android e2e scenario tests
         working-directory: tests/e2e-android/scenario
+        run: python -m pytest . -v
+      - name: Release workflow pin guards
+        working-directory: tests/workflows
         run: python -m pytest . -v
