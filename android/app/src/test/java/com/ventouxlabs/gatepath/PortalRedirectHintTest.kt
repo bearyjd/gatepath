@@ -259,4 +259,24 @@ class PortalRedirectHintTest {
         val elapsedMs = (System.nanoTime() - startNanos) / 1_000_000
         assertTrue("scan took ${elapsedMs}ms", elapsedMs < 250)
     }
+
+    // ── Location header (3xx) ───────────────────────────────────────────────
+
+    @Test
+    fun `location header with http or https target is accepted`() {
+        assertEquals("http://10.0.0.1/portal", PortalRedirectHint.fromLocationHeader("http://10.0.0.1/portal", base))
+        assertEquals("https://portal.example.com/x", PortalRedirectHint.fromLocationHeader("https://portal.example.com/x", base))
+    }
+
+    @Test
+    fun `relative location header resolves against the probe url`() {
+        assertEquals("http://connectivitycheck.gstatic.com/portal", PortalRedirectHint.fromLocationHeader("/portal", base))
+    }
+
+    @Test
+    fun `location header with a non-http scheme is rejected`() {
+        for (bad in listOf("javascript:alert(1)", "data:text/html,hi", "file:///etc/passwd", "intent://x#Intent;end", "ftp://h/x", "http:///nohost", "")) {
+            assertNull("should reject '$bad'", PortalRedirectHint.fromLocationHeader(bad, base))
+        }
+    }
 }
