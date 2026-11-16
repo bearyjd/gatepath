@@ -128,9 +128,10 @@ class PortalProbe {
                     }
                     code in 300..399 -> {
                         val location = conn.getHeaderField("Location")
-                        if (location != null) {
+                        val safeLocation = PortalRedirectHint.fromLocationHeader(location, testUrl)
+                        if (safeLocation != null) {
                             ProbeResult.Portal(
-                                locationUrl = location,
+                                locationUrl = safeLocation,
                                 capture = PortalProbeCapture.of(
                                     httpStatus = code,
                                     rawContentType = conn.contentType,
@@ -138,7 +139,7 @@ class PortalProbe {
                                 ),
                             )
                         } else {
-                            ProbeResult.Error("Redirect with no Location header (code=$code)")
+                            ProbeResult.Error("Redirect with no usable http(s) Location header (code=$code)")
                         }
                     }
                     else -> ProbeResult.Error("Unexpected HTTP status: $code")
