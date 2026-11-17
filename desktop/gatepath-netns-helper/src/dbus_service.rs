@@ -204,6 +204,9 @@ impl<
             TeardownCaptiveResponse::SenderMismatch => Err(HelperError::SenderMismatch(
                 "caller is not the session owner".into(),
             )),
+            TeardownCaptiveResponse::Unauthorised => {
+                Err(HelperError::Unauthorised("PolicyKit denied".into()))
+            }
             TeardownCaptiveResponse::KernelError => {
                 Err(HelperError::KernelError("teardown failed".into()))
             }

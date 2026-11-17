@@ -411,7 +411,12 @@ impl<
     fn teardown_captive_inner(&self, sender: &str) -> TeardownCaptiveResponse {
         if let Err(err) = self.auth.check(ACTION_TEARDOWN_CAPTIVE, sender) {
             tracing::error!(error = %err, "teardown auth check failed");
-            return TeardownCaptiveResponse::KernelError;
+            // Same policy as setup: a denial is reported as such; only a
+            // backend error stays opaque as `KernelError`.
+            return match err {
+                AuthError::Denied { .. } => TeardownCaptiveResponse::Unauthorised,
+                AuthError::Error(_) => TeardownCaptiveResponse::KernelError,
+            };
         }
 
         // Phase 1 (under the `active` lock): confirm a session is active,
@@ -783,6 +788,9 @@ impl<
             TeardownCaptiveResponse::SenderMismatch => AuditDecision::Refused {
                 reason: "sender_mismatch".into(),
             },
+            TeardownCaptiveResponse::Unauthorised => AuditDecision::Refused {
+                reason: RefusalReason::Unauthorised.as_str().into(),
+            },
             TeardownCaptiveResponse::KernelError => AuditDecision::Refused {
                 reason: "kernel_error".into(),
             },
@@ -1152,6 +1160,42 @@ mod tests {
         );
         let resp = svc.teardown_captive(":1.42");
         assert_eq!(resp, TeardownCaptiveResponse::NotActive);
+    }
+
+    #[test]
+    fn teardown_with_auth_denied_is_reported_and_audited_as_unauthorised() {
+        let Fixture { svc, audit, .. } = svc_with_audit(
+            FakeNetnsOps::new(),
+            FakeAuthorizer::deny_all(),
+            allow_captive(),
+            permissive_throttle(),
+        );
+        let resp = svc.teardown_captive(":1.42");
+        assert_eq!(resp, TeardownCaptiveResponse::Unauthorised);
+        assert_eq!(
+            audit.entries()[0].decision,
+            AuditDecision::Refused {
+                reason: "unauthorised".into()
+            }
+        );
+    }
+
+    #[test]
+    fn teardown_with_auth_backend_error_returns_kernel_error() {
+        let Fixture { svc, audit, .. } = svc_with_audit(
+            FakeNetnsOps::new(),
+            FakeAuthorizer::errored("polkit unreachable"),
+            allow_captive(),
+            permissive_throttle(),
+        );
+        let resp = svc.teardown_captive(":1.42");
+        assert_eq!(resp, TeardownCaptiveResponse::KernelError);
+        assert_eq!(
+            audit.entries()[0].decision,
+            AuditDecision::Refused {
+                reason: "kernel_error".into()
+            }
+        );
     }
 
     #[test]
