@@ -35,3 +35,28 @@ def test_no_secrets_in_steps_running_third_party_actions():
         if m and not m.group(1).startswith("./") and "secrets." in step:
             leaks.append(m.group(1))
     assert not leaks, f"secrets exposed to third-party action steps: {leaks}"
+
+
+WORKFLOWS = sorted((RELEASE.parent).glob("*.yml"))
+IMAGE_RE = re.compile(r"^\s*image:\s*(\S+)", re.M)
+DIGEST_RE = re.compile(r"@sha256:[0-9a-f]{64}$")
+
+
+def test_all_workflows_pin_actions_to_commit_sha():
+    unpinned = [
+        f"{wf.name}: {ref}"
+        for wf in WORKFLOWS
+        for ref in USES_RE.findall(wf.read_text())
+        if not ref.startswith("./") and not SHA_RE.match(ref)
+    ]
+    assert not unpinned, f"actions not pinned to a 40-char commit SHA: {unpinned}"
+
+
+def test_workflow_container_images_pinned_by_digest():
+    unpinned = [
+        f"{wf.name}: {img}"
+        for wf in WORKFLOWS
+        for img in IMAGE_RE.findall(wf.read_text())
+        if not DIGEST_RE.search(img)
+    ]
+    assert not unpinned, f"container images not pinned by @sha256 digest: {unpinned}"

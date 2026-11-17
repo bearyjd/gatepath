@@ -35,12 +35,12 @@ jobs:
     name: D-Bus contract parity (helper ⇄ client)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Validate the contract JSON itself parses
         run: python -c "import json; json.load(open('docs/netns_helper_dbus_contract.json'))"
 
-      - uses: actions/setup-python@v7
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
         with:
           python-version: '3.12'
       - name: Install pytest
@@ -48,7 +48,7 @@ jobs:
       - name: Python client conforms to the contract
         run: python -m pytest desktop/tests/test_dbus_contract.py -v
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
       - name: Rust helper interface conforms to the contract
         working-directory: desktop/gatepath-netns-helper
         run: cargo test dbus_interface_matches_shared_contract
