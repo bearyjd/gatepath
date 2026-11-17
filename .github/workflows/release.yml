@@ -198,7 +198,7 @@ jobs:
     # (cosign/gh aren't present in the flatpak-builder image). Mirrors
     # desktop.yml's flatpak job.
     container:
-      image: ghcr.io/flathub-infra/flatpak-github-actions:gnome-49
+      image: ghcr.io/flathub-infra/flatpak-github-actions:gnome-49@sha256:8a05aca51163a81259cc011302cc5121779c89b8b16f2819cc3fd06817d136e7
       options: --privileged
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7

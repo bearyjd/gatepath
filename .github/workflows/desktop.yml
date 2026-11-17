@@ -18,8 +18,8 @@ jobs:
     name: pytest desktop + mockportal
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
         with:
           python-version: '3.12'
       - name: Install system deps for PyGObject + dbus-daemon
@@ -66,8 +66,8 @@ jobs:
     # constructed by a test: a bad kwarg or a GTK3-ism in a widget constructor
     # would pass every check and fail only in front of a user.
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
         with:
           python-version: '3.12'
       - name: Install GTK4 + libadwaita runtime and a virtual display
@@ -116,7 +116,7 @@ jobs:
     name: grep — no requests/httpx/aiohttp
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: No forbidden HTTP libs in gatepath/
         run: |
           if grep -rE '\b(import requests|from requests|import httpx|from httpx|import aiohttp|from aiohttp)\b' desktop/gatepath/; then
@@ -154,8 +154,8 @@ jobs:
       run:
         working-directory: desktop/gatepath-netns-helper
     steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
         with:
           components: clippy, rustfmt
       - name: cargo fmt --check
@@ -172,8 +172,8 @@ jobs:
       run:
         working-directory: desktop/gatepath-netns-helper
     steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
       - name: Install cargo-audit
         run: cargo install cargo-audit --locked
       - name: cargo audit
@@ -195,11 +195,11 @@ jobs:
     # flatpak-builder, and the GNOME 47 SDK pre-installed. --privileged is
     # required for bubblewrap (the sandbox flatpak-builder uses).
     container:
-      image: ghcr.io/flathub-infra/flatpak-github-actions:gnome-49
+      image: ghcr.io/flathub-infra/flatpak-github-actions:gnome-49@sha256:8a05aca51163a81259cc011302cc5121779c89b8b16f2819cc3fd06817d136e7
       options: --privileged
     steps:
-      - uses: actions/checkout@v7
-      - uses: flatpak/flatpak-github-actions/flatpak-builder@v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: flatpak/flatpak-github-actions/flatpak-builder@79327416609af08178ad73b352877e51450790b3 # v6
         with:
           bundle: gatepath.flatpak
           manifest-path: desktop/com.ventouxlabs.Gatepath.yml
@@ -215,9 +215,9 @@ jobs:
     # (A real `systemd-sysext merge` smoke-test needs a privileged host; see
     # docs/DESKTOP_NETNS_DEPLOYMENT.md.)
     steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         with:
           workspaces: desktop/gatepath-netns-helper
       - name: Install squashfs-tools
@@ -227,7 +227,7 @@ jobs:
       - name: Validate sysext layout
         run: desktop/gatepath-netns-helper/packaging/validate-sysext.sh desktop/gatepath-netns-helper/dist/gatepath-netns-helper.raw
       - name: Upload sysext artifact
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: gatepath-netns-helper-sysext
           path: desktop/gatepath-netns-helper/dist/gatepath-netns-helper.raw
@@ -241,11 +241,11 @@ jobs:
     # Building it in CI keeps the .spec's independent file list from drifting out
     # of sync with the crate / build-sysext.sh, and structurally checks the layout.
     runs-on: ubuntu-latest
-    container: fedora:latest
+    container: fedora:45@sha256:a7d72ba2745b100a3351087472e5ee7b2450af7cf331e7673007e3817612839c
     steps:
       - name: Install build deps
         run: dnf install -y --setopt=install_weak_deps=False rpm-build systemd-rpm-macros cargo rust tar gzip git findutils python3-devel python3-pip python3-setuptools python3-wheel pyproject-rpm-macros
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Mark workspace a safe git dir (container uid mismatch)
         run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
       - name: Build RPM
@@ -307,7 +307,7 @@ jobs:
             test "$status" -eq 1
           fi
       - name: Upload RPM artifact
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: gatepath-netns-helper-rpm
           path: ${{ github.workspace }}/rpmbuild/RPMS/*/gatepath-netns-helper-*.rpm

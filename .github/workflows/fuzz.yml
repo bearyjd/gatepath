@@ -47,17 +47,17 @@ jobs:
           - validate_display
           - validate_xauthority
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       # Pin a known-good nightly rather than @nightly (always-latest): cargo-fuzz's
       # sanitizer-coverage build has repeatedly tripped over rustc ICEs on the very
       # latest nightly (e.g. 2026-07-25 ICE'd compiling tokio under -Zsanitizer).
       # This pin is a proven-good toolchain; bump it deliberately when you want a
       # newer compiler (and re-run the workflow to confirm the new one builds).
-      - uses: dtolnay/rust-toolchain@master
+      - uses: dtolnay/rust-toolchain@df2a88e9fe4098bad09cb42c3dec7187f15861fc # master
         with:
           toolchain: nightly-2026-07-22
           components: rust-src
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         with:
           workspaces: desktop/gatepath-netns-helper/fuzz
       - name: Install cargo-fuzz
@@ -67,7 +67,7 @@ jobs:
       # rolls per run (always saves a fresh entry); restore-keys falls back to the
       # newest prior corpus for this target.
       - name: Restore corpus
-        uses: actions/cache@v6
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: desktop/gatepath-netns-helper/fuzz/corpus/${{ matrix.target }}
           key: fuzz-corpus-${{ matrix.target }}-${{ github.run_id }}
@@ -87,7 +87,7 @@ jobs:
       # the scheduled-run notification); upload the reproducer for triage.
       - name: Upload crash reproducer
         if: failure()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: fuzz-crash-${{ matrix.target }}
           path: desktop/gatepath-netns-helper/fuzz/artifacts/${{ matrix.target }}/
