@@ -83,7 +83,7 @@ rather than a blank page.
 **Audit recording.** Both platforms record each bypass in
 `tls_cert_errors_bypassed`. Android counts it in-process. On desktop the portal
 WebView runs in a subprocess spawned by the netns helper, so its counters travel
-back through a PID-keyed file under `XDG_RUNTIME_DIR` (`portal_observations`),
+back through a fixed-path file under `XDG_RUNTIME_DIR` (`portal_observations`),
 which the app folds into the session immediately before writing the audit entry.
 That directory is `0700` and user-owned, and the helper derives it from the
 authenticated caller UID rather than accepting it from the client; if it is

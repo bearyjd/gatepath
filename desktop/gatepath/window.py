@@ -22,7 +22,11 @@ from gatepath.diag.report import Cause
 from gatepath.diagnosis_runner import run_diagnostics_async
 from gatepath.portal_monitor import CaptiveInterfaceLookup
 from gatepath.portal_load_error import PortalLoadError
-from gatepath.portal_observations import collect_observations
+from gatepath.portal_observations import (
+    collect_observations,
+    discard_observations,
+    observations_path,
+)
 from gatepath.portal_session import (
     CloseReason,
     PortalPhase,
@@ -370,6 +374,9 @@ try:
             # graphical-session identifiers. This is the one place that reads the
             # display env; the helper validates them and derives the rest from
             # the authenticated caller UID.
+            # A file left by a crashed earlier session must not be read as this
+            # one's counts; the observation path is shared, not PID-keyed.
+            discard_observations(observations_path(os.environ.get("XDG_RUNTIME_DIR")))
             result = self._isolation.engage(
                 portal_url,
                 interface,
@@ -394,9 +401,6 @@ try:
             logger.info(
                 "helper engaged: pid=%d netns=%s", result.pid, result.netns_path
             )
-            # Remember the PID so we can collect what the WebView observed
-            # once it exits — the counts live in that process (#123).
-            self._portal_pid = result.pid
             self._controller.set_active(to_confined(active_session))
             self.set_visible(False)
             threading.Thread(
@@ -435,25 +439,18 @@ try:
             is survivable — the counters stay 0, exactly as they were before
             this channel existed — so it never blocks the close path.
             """
-            pid = getattr(self, "_portal_pid", None)
-            if pid is None:
-                return
-            observations = collect_observations(
-                os.environ.get("XDG_RUNTIME_DIR"), pid
-            )
+            observations = collect_observations(os.environ.get("XDG_RUNTIME_DIR"))
             if observations is None:
-                logger.info("no portal observations for pid=%s; counters stay 0", pid)
+                logger.info("no portal observations; counters stay 0")
             else:
                 logger.info(
-                    "portal observations pid=%s: off-domain nav=%d, trackers=%d, "
+                    "portal observations: off-domain nav=%d, trackers=%d, "
                     "tls bypasses=%d",
-                    pid,
                     observations.off_domain_navigations,
                     observations.tracker_resources,
                     observations.tls_cert_errors_bypassed,
                 )
                 self._controller.apply_observations(observations)
-            self._portal_pid = None
 
         def _open_portal_in_process(self, portal_url: str) -> None:
             """Render the portal in this process and show it.

@@ -28,14 +28,12 @@ from gatepath.portal_observations import (
 
 
 class TestObservationsPath:
-    def test_path_is_keyed_by_pid_under_the_runtime_dir(self) -> None:
-        p = observations_path("/run/user/1000", 4321)
-        assert p == Path("/run/user/1000/gatepath/portal-observations-4321.json")
-
-    def test_pid_keying_keeps_concurrent_sessions_apart(self) -> None:
-        assert observations_path("/run/user/1000", 1) != observations_path(
-            "/run/user/1000", 2
-        )
+    def test_path_does_not_depend_on_any_pid(self) -> None:
+        # The helper reports systemd-run's PID, but the runner is a different
+        # process, so a PID-keyed name never matched. Both sides must derive the
+        # same path from XDG_RUNTIME_DIR alone.
+        p = observations_path("/run/user/1000")
+        assert p == Path("/run/user/1000/gatepath/portal-observations.json")
 
     @pytest.mark.parametrize("runtime_dir", [None, "", "   "])
     def test_missing_runtime_dir_declines_rather_than_guessing(self, runtime_dir) -> None:
@@ -45,16 +43,12 @@ class TestObservationsPath:
         the file and feed the audit log arbitrary counts. A missing file is
         already handled; a forgeable one would corrupt a security log.
         """
-        assert observations_path(runtime_dir, 1234) is None
+        assert observations_path(runtime_dir) is None
 
     def test_relative_runtime_dir_is_rejected(self) -> None:
         # Resolving against the process cwd would put a security artifact
         # somewhere unpredictable.
-        assert observations_path("run/user/1000", 1234) is None
-
-    @pytest.mark.parametrize("pid", [0, -1])
-    def test_nonsense_pid_is_rejected(self, pid: int) -> None:
-        assert observations_path("/run/user/1000", pid) is None
+        assert observations_path("run/user/1000") is None
 
 
 class TestRoundTrip:
@@ -147,22 +141,20 @@ class TestCollectObservations:
     """The consume-once seam window.py uses."""
 
     def test_collect_returns_counts_and_removes_the_file(self, tmp_path: Path) -> None:
-        pid = 4242
-        path = observations_path(str(tmp_path), pid)
+        path = observations_path(str(tmp_path))
         assert path is not None
         write_observations(path, PortalObservations(tls_cert_errors_bypassed=1))
 
-        got = collect_observations(str(tmp_path), pid)
+        got = collect_observations(str(tmp_path))
         assert got == PortalObservations(tls_cert_errors_bypassed=1)
         assert not path.exists(), "the file must not survive to be read twice"
 
     def test_second_collect_yields_nothing(self, tmp_path: Path) -> None:
         """PIDs are reused; a leftover file would leak one session's counts
         into another session's audit entry."""
-        pid = 4242
-        write_observations(observations_path(str(tmp_path), pid), PortalObservations(tracker_resources=7))
-        assert collect_observations(str(tmp_path), pid) is not None
-        assert collect_observations(str(tmp_path), pid) is None
+        write_observations(observations_path(str(tmp_path)), PortalObservations(tracker_resources=7))
+        assert collect_observations(str(tmp_path)) is not None
+        assert collect_observations(str(tmp_path)) is None
 
     def test_collect_without_a_runtime_dir_is_none(self) -> None:
-        assert collect_observations(None, 1234) is None
+        assert collect_observations(None) is None
