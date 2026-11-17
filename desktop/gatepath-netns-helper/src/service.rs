@@ -411,7 +411,12 @@ impl<
     fn teardown_captive_inner(&self, sender: &str) -> TeardownCaptiveResponse {
         if let Err(err) = self.auth.check(ACTION_TEARDOWN_CAPTIVE, sender) {
             tracing::error!(error = %err, "teardown auth check failed");
-            return TeardownCaptiveResponse::KernelError;
+            // Same policy as setup: a denial is reported as such; only a
+            // backend error stays opaque as `KernelError`.
+            return match err {
+                AuthError::Denied { .. } => TeardownCaptiveResponse::Unauthorised,
+                AuthError::Error(_) => TeardownCaptiveResponse::KernelError,
+            };
         }
 
         // Phase 1 (under the `active` lock): confirm a session is active,
@@ -430,6 +435,17 @@ impl<
             let active = self.active.lock().expect("active mutex poisoned");
             if active.is_none() {
                 return TeardownCaptiveResponse::NotActive;
+            }
+            // Only the session owner may tear it down (same rule as
+            // `launch_portal_inner`); checked before any state is touched.
+            match self
+                .active_sender
+                .lock()
+                .expect("active_sender mutex poisoned")
+                .as_deref()
+            {
+                Some(owner) if owner == sender => {}
+                Some(_) | None => return TeardownCaptiveResponse::SenderMismatch,
             }
             // Drop the watch guard BEFORE destroy so the auto-teardown callback
             // can't race in. Cancel the backstop timer too (5b.8).
@@ -768,6 +784,12 @@ impl<
             TeardownCaptiveResponse::Success => AuditDecision::Success,
             TeardownCaptiveResponse::NotActive => AuditDecision::Refused {
                 reason: "not_active".into(),
+            },
+            TeardownCaptiveResponse::SenderMismatch => AuditDecision::Refused {
+                reason: "sender_mismatch".into(),
+            },
+            TeardownCaptiveResponse::Unauthorised => AuditDecision::Refused {
+                reason: RefusalReason::Unauthorised.as_str().into(),
             },
             TeardownCaptiveResponse::KernelError => AuditDecision::Refused {
                 reason: "kernel_error".into(),
@@ -1109,6 +1131,26 @@ mod tests {
     }
 
     #[test]
+    fn teardown_from_non_owner_is_refused_and_keeps_session() {
+        let Fixture { svc, audit, .. } = svc_with_audit(
+            FakeNetnsOps::new(),
+            FakeAuthorizer::allow_all(),
+            allow_captive(),
+            permissive_throttle(),
+        );
+        svc.setup_captive(&req("wlan0"), ":1.42");
+        let resp = svc.teardown_captive(":1.99");
+        assert_eq!(resp, TeardownCaptiveResponse::SenderMismatch);
+        assert!(svc.is_active(), "non-owner must not tear down the session");
+        assert_eq!(
+            audit.entries()[1].decision,
+            AuditDecision::Refused {
+                reason: "sender_mismatch".into()
+            }
+        );
+    }
+
+    #[test]
     fn teardown_when_idle_returns_not_active() {
         let Fixture { svc, .. } = svc_with_audit(
             FakeNetnsOps::new(),
@@ -1118,6 +1160,42 @@ mod tests {
         );
         let resp = svc.teardown_captive(":1.42");
         assert_eq!(resp, TeardownCaptiveResponse::NotActive);
+    }
+
+    #[test]
+    fn teardown_with_auth_denied_is_reported_and_audited_as_unauthorised() {
+        let Fixture { svc, audit, .. } = svc_with_audit(
+            FakeNetnsOps::new(),
+            FakeAuthorizer::deny_all(),
+            allow_captive(),
+            permissive_throttle(),
+        );
+        let resp = svc.teardown_captive(":1.42");
+        assert_eq!(resp, TeardownCaptiveResponse::Unauthorised);
+        assert_eq!(
+            audit.entries()[0].decision,
+            AuditDecision::Refused {
+                reason: "unauthorised".into()
+            }
+        );
+    }
+
+    #[test]
+    fn teardown_with_auth_backend_error_returns_kernel_error() {
+        let Fixture { svc, audit, .. } = svc_with_audit(
+            FakeNetnsOps::new(),
+            FakeAuthorizer::errored("polkit unreachable"),
+            allow_captive(),
+            permissive_throttle(),
+        );
+        let resp = svc.teardown_captive(":1.42");
+        assert_eq!(resp, TeardownCaptiveResponse::KernelError);
+        assert_eq!(
+            audit.entries()[0].decision,
+            AuditDecision::Refused {
+                reason: "kernel_error".into()
+            }
+        );
     }
 
     #[test]
