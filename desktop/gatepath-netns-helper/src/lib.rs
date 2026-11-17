@@ -219,5 +219,7 @@ pub enum TeardownCaptiveResponse {
     NotActive,
     /// Caller is not the session owner (Phase 5b.7 parity with `LaunchPortal`).
     SenderMismatch,
+    /// `PolicyKit` denied authorisation for the calling user.
+    Unauthorised,
     KernelError,
 }
