@@ -241,7 +241,7 @@ jobs:
     # Building it in CI keeps the .spec's independent file list from drifting out
     # of sync with the crate / build-sysext.sh, and structurally checks the layout.
     runs-on: ubuntu-latest
-    container: fedora:latest
+    container: fedora:45@sha256:a7d72ba2745b100a3351087472e5ee7b2450af7cf331e7673007e3817612839c
     steps:
       - name: Install build deps
         run: dnf install -y --setopt=install_weak_deps=False rpm-build systemd-rpm-macros cargo rust tar gzip git findutils python3-devel python3-pip python3-setuptools python3-wheel pyproject-rpm-macros
