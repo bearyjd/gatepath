@@ -6,7 +6,7 @@ certificate-error bypasses — used to reach one log line at exit and die there,
 so every one of those fields was written to the audit log as 0 no matter what
 happened. See issue #123.
 
-This is the channel. The runner writes a small JSON file keyed by its own PID;
+This is the channel. The runner writes a small JSON file at a fixed per-user path;
 the app reads it when the subprocess exits, applies the counts to the session,
 and then writes the audit entry.
 
@@ -39,7 +39,7 @@ from typing import Optional
 logger = logging.getLogger(__name__)
 
 _DIR_NAME = "gatepath"
-_FILE_PREFIX = "portal-observations-"
+_FILE_NAME = "portal-observations.json"
 
 #: Refuse absurd values rather than writing them into an audit entry. A counter
 #: this large means a bug or a tampered file, not a real session.
@@ -55,11 +55,14 @@ class PortalObservations:
     tls_cert_errors_bypassed: int = 0
 
 
-def observations_path(runtime_dir: Optional[str], pid: int) -> Optional[Path]:
-    """Where the runner with `pid` writes its counts, or None if unavailable.
+def observations_path(runtime_dir: Optional[str]) -> Optional[Path]:
+    """Where the runner writes its counts, or None if unavailable.
 
-    Keyed by PID so a stale file from an earlier session can never be read as
-    this one's, and so two concurrent sessions cannot overwrite each other.
+    Deliberately not keyed by PID: the helper reports the PID of the
+    `systemd-run` controller, not the WebView runner's own, so the two sides
+    never agreed on a PID-keyed name. Only one portal session runs per user at a
+    time; staleness is handled by `discard_observations` before launch and
+    consume-once in `collect_observations`.
     """
     if not runtime_dir or not runtime_dir.strip():
         return None
@@ -68,9 +71,7 @@ def observations_path(runtime_dir: Optional[str], pid: int) -> Optional[Path]:
         # A relative XDG_RUNTIME_DIR is malformed; resolving it against the
         # process cwd would put a security artifact somewhere unpredictable.
         return None
-    if pid <= 0:
-        return None
-    return base / _DIR_NAME / f"{_FILE_PREFIX}{pid}.json"
+    return base / _DIR_NAME / _FILE_NAME
 
 
 def _clamp(value: object) -> int:
@@ -155,19 +156,17 @@ def discard_observations(path: Optional[Path]) -> None:
         logger.warning("could not remove portal observations at %s: %s", path, exc)
 
 
-def collect_observations(
-    runtime_dir: Optional[str], pid: int
-) -> Optional[PortalObservations]:
+def collect_observations(runtime_dir: Optional[str]) -> Optional[PortalObservations]:
     """Read the runner's counts and remove the file, in one step.
 
-    The consume-once shape is deliberate: the file is keyed by PID, and PIDs
-    are reused. Leaving it behind would let a later session with the same PID
-    read a previous session's counts into its audit entry.
+    The consume-once shape is deliberate: the path is shared by every session,
+    so leaving the file behind would let a later session read a previous
+    session's counts into its audit entry.
 
     Extracted from `window.py` so the logic is testable without GTK — the same
     split `isolation_should_engage` uses.
     """
-    path = observations_path(runtime_dir, pid)
+    path = observations_path(runtime_dir)
     observations = read_observations(path)
     discard_observations(path)
     return observations

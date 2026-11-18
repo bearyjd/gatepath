@@ -202,7 +202,7 @@ def run_window(portal_url: str) -> int:
     # Hand the counts to the app so they reach the audit log — without this
     # they die with this process and every counter is written as 0 (#123).
     write_observations(
-        observations_path(os.environ.get("XDG_RUNTIME_DIR"), os.getpid()),
+        observations_path(os.environ.get("XDG_RUNTIME_DIR")),
         PortalObservations(
             off_domain_navigations=blocked_count["nav"],
             tracker_resources=blocked_count["resource"],
