@@ -15,6 +15,7 @@ from __future__ import annotations
 import dataclasses
 import logging
 import urllib.error
+import urllib.parse
 import urllib.request
 from typing import Optional
 
@@ -49,6 +50,38 @@ class ProbeResult:
     message: Optional[str] = None
 
 
+def resolve_portal_url(location: str, base_url: str) -> Optional[str]:
+    """Resolve a redirect *location* against *base_url*; None if not http(s) with a host.
+
+    The Location header is attacker-controlled on a hostile network and is later
+    loaded in a WebView, so only absolute http/https URLs with a host pass.
+    """
+    candidate = (location or "").strip()
+    if not candidate:
+        return None
+    try:
+        own = urllib.parse.urlsplit(candidate)
+        if own.scheme and not own.hostname:
+            return None  # e.g. "http://" would otherwise inherit the base host
+        resolved = urllib.parse.urljoin(base_url, candidate)
+        parts = urllib.parse.urlsplit(resolved)
+        host = parts.hostname
+    except ValueError:
+        return None
+    if parts.scheme.lower() not in ("http", "https") or not host:
+        return None
+    return resolved
+
+
+def _portal_result(location: str, base_url: str) -> ProbeResult:
+    safe = resolve_portal_url(location, base_url)
+    if safe is None:
+        logger.warning("Rejected unsafe portal redirect Location from %s", base_url)
+        return ProbeResult(status="error", message="Unsafe or invalid portal redirect Location")
+    logger.debug("Portal redirect detected: %s -> %s", base_url, safe)
+    return ProbeResult(status="portal", portal_url=safe)
+
+
 def probe(
     url: str = CONNECTIVITY_CHECK_URL,
     timeout: int = 5,
@@ -72,8 +105,7 @@ def probe(
         if status_code in (301, 302, 303, 307, 308):
             location = redirect_handler.redirect_location or exc.headers.get("Location")
             if location:
-                logger.debug("Portal redirect detected: %s -> %s", url, location)
-                return ProbeResult(status="portal", portal_url=location)
+                return _portal_result(location, url)
         logger.warning("Probe HTTP error %s for %s", status_code, url)
         return ProbeResult(
             status="error",
@@ -88,12 +120,7 @@ def probe(
 
     # Check if the redirect handler caught a 302 without raising HTTPError.
     if redirect_handler.redirect_location is not None:
-        logger.debug(
-            "Portal redirect (no-raise) detected: %s -> %s",
-            url,
-            redirect_handler.redirect_location,
-        )
-        return ProbeResult(status="portal", portal_url=redirect_handler.redirect_location)
+        return _portal_result(redirect_handler.redirect_location, url)
 
     if status_code == 204:
         logger.debug("Probe validated (204) for %s", url)

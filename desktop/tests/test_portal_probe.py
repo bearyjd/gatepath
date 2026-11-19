@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import io
 import json
+import urllib.error
 import urllib.request
+from email.message import Message
 
 import pytest
 
-from gatepath.portal_probe import ProbeResult, probe
+from gatepath.portal_probe import ProbeResult, probe, resolve_portal_url
 
 
 class TestProbeWithMockPortal:
@@ -62,3 +65,71 @@ class TestProbeResultImmutability:
         r = ProbeResult(status="validated")
         with pytest.raises((AttributeError, TypeError)):
             r.status = "portal"  # type: ignore[misc]
+
+
+PROBE_URL = "http://connectivity-check.ubuntu.com/"
+
+
+class TestResolvePortalUrl:
+    @pytest.mark.parametrize(
+        "location",
+        [
+            "file:///etc/hostname",
+            "javascript:alert(1)",
+            "intent://x#Intent;scheme=http;end",
+            "data:text/html,<script>1</script>",
+            "",
+            "   ",
+            "http://",
+            "https:///path",
+        ],
+    )
+    def test_rejects_unsafe_or_hostless(self, location: str) -> None:
+        assert resolve_portal_url(location, PROBE_URL) is None
+
+    def test_relative_path_resolves_against_probe_url(self) -> None:
+        assert resolve_portal_url("/login", PROBE_URL) == "http://connectivity-check.ubuntu.com/login"
+
+    def test_absolute_https_and_http_pass(self) -> None:
+        assert resolve_portal_url("https://portal.example/a?b=1", PROBE_URL) == "https://portal.example/a?b=1"
+        assert resolve_portal_url("http://10.0.0.1/login", PROBE_URL) == "http://10.0.0.1/login"
+
+    def test_surrounding_whitespace_stripped(self) -> None:
+        assert resolve_portal_url("  https://portal.example/x \r\n", PROBE_URL) == "https://portal.example/x"
+
+    def test_uppercase_scheme_accepted(self) -> None:
+        assert resolve_portal_url("HTTPS://portal.example/", PROBE_URL) is not None
+
+
+class _FakeOpener:
+    def __init__(self, exc: Exception) -> None:
+        self._exc = exc
+
+    def open(self, url: str, timeout: int = 5):  # noqa: ANN201
+        raise self._exc
+
+
+def _http_error(location: str) -> urllib.error.HTTPError:
+    headers = Message()
+    headers["Location"] = location
+    return urllib.error.HTTPError(PROBE_URL, 302, "Found", headers, io.BytesIO(b""))
+
+
+class TestProbeRejectsBadLocation:
+    @pytest.mark.parametrize("location", ["file:///etc/hostname", "javascript:alert(1)", "intent://x"])
+    def test_bad_location_is_error_not_portal(self, monkeypatch: pytest.MonkeyPatch, location: str) -> None:
+        monkeypatch.setattr(
+            urllib.request, "build_opener", lambda *a, **k: _FakeOpener(_http_error(location))
+        )
+        result = probe(url=PROBE_URL)
+        assert result.status == "error"
+        assert result.portal_url is None
+        assert result.message
+
+    def test_relative_location_resolved(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(
+            urllib.request, "build_opener", lambda *a, **k: _FakeOpener(_http_error("/login"))
+        )
+        result = probe(url=PROBE_URL)
+        assert result.status == "portal"
+        assert result.portal_url == "http://connectivity-check.ubuntu.com/login"
