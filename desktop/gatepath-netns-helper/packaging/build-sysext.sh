@@ -41,8 +41,8 @@ command -v mksquashfs >/dev/null 2>&1 || {
   exit 1
 }
 
-echo "==> building helper (release)"
-cargo build --release --manifest-path "$CRATE_DIR/Cargo.toml"
+echo "==> building helper (release, --locked: honour committed Cargo.lock)"
+cargo build --release --locked --manifest-path "$CRATE_DIR/Cargo.toml"
 BIN="$CRATE_DIR/target/release/gatepath-netns-helper"
 [ -x "$BIN" ] || { echo "error: helper binary not found at $BIN" >&2; exit 1; }
 

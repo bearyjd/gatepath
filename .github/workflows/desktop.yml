@@ -220,6 +220,8 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         with:
           workspaces: desktop/gatepath-netns-helper
+      - name: Check packaging builds use --locked
+        run: desktop/gatepath-netns-helper/packaging/check-build-locked.sh
       - name: Install squashfs-tools
         run: sudo apt-get update && sudo apt-get install -y squashfs-tools
       - name: Build sysext image
