@@ -91,25 +91,35 @@ ARCH_CORE_COMMON="$JAR_DIR/core-common-2.2.0.jar"
 download_jar() {
     local url="$1"
     local dest="$2"
+    local expected="$3"
     if [[ ! -f "$dest" ]]; then
         echo "Downloading $(basename "$dest")..."
         curl -fsSL "$url" -o "$dest"
+    fi
+    local actual
+    actual="$(sha256sum "$dest" | cut -d' ' -f1)"
+    if [[ "$actual" != "$expected" ]]; then
+        echo "ERROR: sha256 mismatch for $(basename "$dest")" >&2
+        echo "  expected: $expected" >&2
+        echo "  actual:   $actual" >&2
+        echo "  Delete the file and re-run if the cache is stale or corrupt." >&2
+        exit 1
     fi
 }
 
 MAVEN="https://repo1.maven.org/maven2"
 # androidx artifacts are not on Maven Central; pull them from Google's mirror.
 GOOGLE_MAVEN="https://dl.google.com/dl/android/maven2"
-download_jar "$MAVEN/org/jetbrains/kotlin/kotlin-stdlib/2.0.21/kotlin-stdlib-2.0.21.jar" "$KOTLIN_STDLIB"
-download_jar "$MAVEN/org/jetbrains/kotlinx/kotlinx-coroutines-core-jvm/1.9.0/kotlinx-coroutines-core-jvm-1.9.0.jar" "$KOTLINX_COROUTINES"
-download_jar "$MAVEN/org/jetbrains/kotlinx/kotlinx-serialization-json-jvm/1.7.3/kotlinx-serialization-json-jvm-1.7.3.jar" "$KOTLINX_SERIALIZATION"
-download_jar "$MAVEN/org/jetbrains/kotlinx/kotlinx-serialization-core-jvm/1.7.3/kotlinx-serialization-core-jvm-1.7.3.jar" "$KOTLINX_SERIALIZATION_CORE"
-download_jar "$MAVEN/junit/junit/4.13.2/junit-4.13.2.jar" "$JUNIT_JAR"
-download_jar "$MAVEN/org/hamcrest/hamcrest-core/1.3/hamcrest-core-1.3.jar" "$HAMCREST_JAR"
-download_jar "$MAVEN/org/jetbrains/kotlinx/kotlinx-coroutines-test-jvm/1.9.0/kotlinx-coroutines-test-jvm-1.9.0.jar" "$COROUTINES_TEST"
-download_jar "$GOOGLE_MAVEN/androidx/lifecycle/lifecycle-common-jvm/2.8.7/lifecycle-common-jvm-2.8.7.jar" "$LIFECYCLE_COMMON"
-download_jar "$GOOGLE_MAVEN/androidx/lifecycle/lifecycle-runtime-desktop/2.8.7/lifecycle-runtime-desktop-2.8.7.jar" "$LIFECYCLE_RUNTIME"
-download_jar "$GOOGLE_MAVEN/androidx/arch/core/core-common/2.2.0/core-common-2.2.0.jar" "$ARCH_CORE_COMMON"
+download_jar "$MAVEN/org/jetbrains/kotlin/kotlin-stdlib/2.0.21/kotlin-stdlib-2.0.21.jar" "$KOTLIN_STDLIB" "f31cc53f105a7e48c093683bbd5437561d1233920513774b470805641bedbc09"
+download_jar "$MAVEN/org/jetbrains/kotlinx/kotlinx-coroutines-core-jvm/1.9.0/kotlinx-coroutines-core-jvm-1.9.0.jar" "$KOTLINX_COROUTINES" "ad89c2892235e670f222d819cb3d81188143cb19a05b59df9889ae4269f5c70a"
+download_jar "$MAVEN/org/jetbrains/kotlinx/kotlinx-serialization-json-jvm/1.7.3/kotlinx-serialization-json-jvm-1.7.3.jar" "$KOTLINX_SERIALIZATION" "b1e9138499ed8d20375edda3f2b1c95f3103a258eff6af9edc5ea07100f2b29c"
+download_jar "$MAVEN/org/jetbrains/kotlinx/kotlinx-serialization-core-jvm/1.7.3/kotlinx-serialization-core-jvm-1.7.3.jar" "$KOTLINX_SERIALIZATION_CORE" "f0adde45864144475385cf4aa7e0b7feb27f61fcf9472665ed98cc971b06b1eb"
+download_jar "$MAVEN/junit/junit/4.13.2/junit-4.13.2.jar" "$JUNIT_JAR" "8e495b634469d64fb8acfa3495a065cbacc8a0fff55ce1e31007be4c16dc57d3"
+download_jar "$MAVEN/org/hamcrest/hamcrest-core/1.3/hamcrest-core-1.3.jar" "$HAMCREST_JAR" "66fdef91e9739348df7a096aa384a5685f4e875584cce89386a7a47251c4d8e9"
+download_jar "$MAVEN/org/jetbrains/kotlinx/kotlinx-coroutines-test-jvm/1.9.0/kotlinx-coroutines-test-jvm-1.9.0.jar" "$COROUTINES_TEST" "68b87fa90db3dab1e794ff6078364087c07f87e5e4a4d0c8d3272a222ee8fe7e"
+download_jar "$GOOGLE_MAVEN/androidx/lifecycle/lifecycle-common-jvm/2.8.7/lifecycle-common-jvm-2.8.7.jar" "$LIFECYCLE_COMMON" "61c873a7327c946ec033c310bb98f3f92eeabcede0e1a5200ab8a1896483c7bf"
+download_jar "$GOOGLE_MAVEN/androidx/lifecycle/lifecycle-runtime-desktop/2.8.7/lifecycle-runtime-desktop-2.8.7.jar" "$LIFECYCLE_RUNTIME" "10bfe53bb2752f967751a5102cdb785eeea54e1d4df6bde88fb0f50b0a49156c"
+download_jar "$GOOGLE_MAVEN/androidx/arch/core/core-common/2.2.0/core-common-2.2.0.jar" "$ARCH_CORE_COMMON" "65308a06b1c00ee186cb9e19321383f043b993813f1522c47f4a3e3303bdba41"
 
 # ── Compile ────────────────────────────────────────────────────────────────────
 
@@ -317,7 +327,8 @@ kotlinc \
 JUNIT_LAUNCHER="$JAR_DIR/junit-platform-console-standalone-1.10.2.jar"
 download_jar \
     "$MAVEN/org/junit/platform/junit-platform-console-standalone/1.10.2/junit-platform-console-standalone-1.10.2.jar" \
-    "$JUNIT_LAUNCHER"
+    "$JUNIT_LAUNCHER" \
+    "a1de557821293ce903c213c694165fff532cf92081bac4238b9e05b35f04f43f"
 
 # The standalone JAR bundles junit-vintage-engine, so JUnit 4 @Test methods are
 # discovered by the Platform launcher.

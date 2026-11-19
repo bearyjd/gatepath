@@ -36,6 +36,7 @@ jobs:
         run: |
           curl -fsSL -o /tmp/kotlinc.zip \
             https://github.com/JetBrains/kotlin/releases/download/v2.0.21/kotlin-compiler-2.0.21.zip
+          echo "0352c0a45bd22f80f6b26e485cd04da8047baa5de54865281fb9f89a4a7bcf2a  /tmp/kotlinc.zip" | sha256sum -c -
           unzip -q /tmp/kotlinc.zip -d /opt
           echo "/opt/kotlinc/bin" >> "$GITHUB_PATH"
       - name: Install pytest
