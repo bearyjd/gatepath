@@ -219,6 +219,34 @@ is not a nicety — it is what makes the trade defensible.
 
 ---
 
+## Prior art: why not just captive-firefox or captive-browser?
+
+Two Linux tools cover similar ground:
+[captive-firefox](https://github.com/guyru/captive-firefox) (guyru) and
+[captive-browser](https://github.com/FiloSottile/captive-browser) (FiloSottile).
+Both launch a browser in a throwaway profile and point its DNS at the Wi-Fi
+network's DHCP resolver. Captive-browser makes the same core argument as this
+document: the OS portal window is an attack surface, so use a dedicated,
+stateless browser instead. Their own materials describe DNS redirection only;
+neither mentions interface binding or the VPN.
+
+What Gatepath adds:
+
+- **Netns / interface binding on native installs.** Portal traffic is bound to
+  the Wi-Fi interface inside a network namespace, so the VPN stays up and
+  nothing else leaves through the portal path.
+- **An audit log** of each sign-in.
+
+In the Flatpak build, interface binding is "No" (see the README capability
+table), so the gap to these tools is smaller there: mostly the throwaway session
+and the audit log.
+
+Other notes: `captive-netns-helper`, the one project found that targets VPN
+routing, looks stale (last commit 2022-04-19). The maintenance status of
+captive-browser was not verified.
+
+---
+
 ## 6. Honest cons / when you do *not* need this
 
 - **It does not harden the browser.** Rendering a hostile portal in WebKit is a
