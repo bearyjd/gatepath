@@ -122,9 +122,12 @@ BOTH sides against the artifact: Python checks its `ERROR_PREFIX` const, and
 `dbus_error_prefix_matches_contract` (Rust) source-parses the
 `#[zbus(prefix = …)]` literal from `dbus_service.rs` and asserts it (+ the
 trailing `.`) equals the contract — so a lone edit of the Rust prefix now fails
-in CI. **Still open:** the `#[ignore]`d `tests/dbus_integration.rs` live-wire
-round-trip checks (real bus/polkit) remain manual — they verify runtime
-behaviour, not static drift, and genuinely need a bus.
+in CI. The `#[ignore]`d `tests/dbus_integration.rs` live-wire
+round-trip checks (real bus/polkit/NM, incl. `active_ap_state`'s open/secured
+read) now run via `--ignored` in the manual-dispatch `desktop-hwsim.yml`
+(self-hosted; unverified until its next dispatch). **Still open:** a
+non-privileged python-dbusmock AP Flags/WpaFlags/RsnFlags test, so the flag
+read is wire-covered without the self-hosted runner.
 
 ### P1.2 — Property/fuzz the privileged boundary validators
 **Status:** **DONE — `proptest` (2026-06-30) + `cargo-fuzz` (2026-07-23).** In-CI
