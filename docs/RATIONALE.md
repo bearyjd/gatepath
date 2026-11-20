@@ -219,6 +219,22 @@ is not a nicety — it is what makes the trade defensible.
 
 ---
 
+### Prior art: captive-browser
+
+The closest existing tool is [FiloSottile/captive-browser](https://github.com/FiloSottile/captive-browser)
+(see the author's [2017 post](https://blog.filippo.io/captive-browser/)). It
+launches a dedicated Chrome with `--incognito` and a fixed-DNS SOCKS5 resolver,
+so only DNS is routed around the system's normal resolver; routing and VPN state
+are left as they are.
+
+Gatepath's difference is **not** "a dedicated, isolated browser" -- captive-browser
+already does that. It is that the portal session runs in a network namespace
+created by a privileged helper, so the host's routing table and VPN stay intact
+rather than being bypassed at the DNS layer only. Its maintenance status is
+unverified here; this comparison does not rely on it.
+
+---
+
 ## 6. Honest cons / when you do *not* need this
 
 - **It does not harden the browser.** Rendering a hostile portal in WebKit is a
