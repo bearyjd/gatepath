@@ -14,9 +14,11 @@
 //! live-wire check for the EXTERNAL PolicyKit/NetworkManager signatures and
 //! `launch_portal`'s runtime round-trip, which genuinely need a real bus.
 //!
-//! All tests are `#[ignore]`'d so they don't run in CI (Github-hosted
-//! runners have no system bus + no polkitd). Run manually on a real
-//! Linux box with PolicyKit and NetworkManager active:
+//! All tests are `#[ignore]`'d so they don't run on GitHub-hosted runners (no
+//! system bus + no polkitd). They DO run in the manual-dispatch
+//! `desktop-hwsim.yml` workflow (self-hosted, real system bus) via
+//! `--ignored`. Run manually on a real Linux box with PolicyKit and
+//! NetworkManager active:
 //!
 //! ```bash
 //! cd desktop/gatepath-netns-helper
@@ -147,5 +149,30 @@ fn nm_captive_check_connects_and_lists_devices() {
         Err(gatepath_netns_helper::network_manager::NMError::InterfaceNotFound(_)) => {}
         Ok(_) => panic!("non-existent interface should not be captive"),
         Err(other) => panic!("unexpected error from real NM: {other:?}"),
+    }
+}
+
+#[test]
+#[ignore = "requires system bus + NetworkManager; run manually with --ignored"]
+fn nm_active_ap_state_reads_flags_over_the_wire() {
+    // Wire coverage for the open/secured read: active_ap_state marshals the AP's
+    // Ssid/Flags/WpaFlags/RsnFlags. Unit tests use FakeCaptiveCheck, so a drifted
+    // property type would only surface here. Set GATEPATH_LIVE_WIFI_IFACE to a
+    // Wi-Fi interface that is associated (then the call must succeed); unset, we
+    // only require that a missing/unassociated device is a typed refusal.
+    use gatepath_netns_helper::network_manager::NMError;
+
+    let nm = NMCaptiveCheck::connect().expect("connect to NetworkManager");
+    match std::env::var("GATEPATH_LIVE_WIFI_IFACE") {
+        Ok(iface) => {
+            let ap = nm
+                .active_ap_state(&iface)
+                .expect("associated interface must yield an AP state");
+            assert!(!ap.ssid.is_empty(), "active AP reported an empty SSID");
+        }
+        Err(_) => match nm.active_ap_state("wlan-this-does-not-exist-99") {
+            Err(NMError::InterfaceNotFound(_) | NMError::NotAssociated(_)) => {}
+            other => panic!("unexpected result from real NM: {other:?}"),
+        },
     }
 }
