@@ -53,7 +53,7 @@ jobs:
       # latest nightly (e.g. 2026-07-25 ICE'd compiling tokio under -Zsanitizer).
       # This pin is a proven-good toolchain; bump it deliberately when you want a
       # newer compiler (and re-run the workflow to confirm the new one builds).
-      - uses: dtolnay/rust-toolchain@df2a88e9fe4098bad09cb42c3dec7187f15861fc # master
+      - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # master
         with:
           toolchain: nightly-2026-07-22
           components: rust-src
